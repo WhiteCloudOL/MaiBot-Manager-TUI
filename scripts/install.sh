@@ -142,7 +142,7 @@ choose_github_proxy() {
 
     local tmpdir
     tmpdir="$(mktemp -d -t maibot-spd.XXXXXX)"
-    info "并行测速 GitHub 镜像 (HEAD 请求, 最长 6s)..."
+    info "并行测速 GitHub 镜像 (Range GET 前 64KB, 最长 6s)..."
 
     local candidates=("direct" "${GITHUB_MIRRORS[@]}")
     local pids=() idx=0
@@ -150,12 +150,23 @@ choose_github_proxy() {
         local url
         url="$(convert_github_url "$test_url" "$m")"
         (
-            local t
-            t="$(curl -sL -o /dev/null --max-time 6 -w '%{time_total}' -I "$url" 2>/dev/null || true)"
-            if [ -z "$t" ] || awk -v a="$t" 'BEGIN{exit !(a<=0)}'; then
+            # 真实 ranged GET 才能识别「HEAD 秒回但 GET 失败」的反代
+            local resp code t
+            resp="$(curl -sL --max-time 6 \
+                -o /dev/null \
+                --range 0-65535 \
+                -w '%{http_code} %{time_total}' \
+                "$url" 2>/dev/null || true)"
+            code="${resp%% *}"
+            t="${resp##* }"
+            if [ -z "$t" ] || [ -z "$code" ]; then
+                t=999
+            elif [ "$code" != "200" ] && [ "$code" != "206" ]; then
+                t=999
+            elif awk -v a="$t" 'BEGIN{exit !(a<=0)}'; then
                 t=999
             fi
-            printf '%s %s\n' "$t" "$m" > "${tmpdir}/r${idx}"
+            printf '%s %s %s\n' "$t" "$code" "$m" > "${tmpdir}/r${idx}"
         ) &
         pids+=("$!")
         idx=$((idx+1))
@@ -167,16 +178,17 @@ choose_github_proxy() {
     local best_time="999" best_mirror=""
     for f in "$tmpdir"/r*; do
         [ -f "$f" ] || continue
-        local line t m
+        local line t code m
         line="$(cat "$f")"
-        t="${line%% *}"
-        m="${line#* }"
+        t="$(printf '%s' "$line" | awk '{print $1}')"
+        code="$(printf '%s' "$line" | awk '{print $2}')"
+        m="$(printf '%s' "$line" | awk '{print $3}')"
         local label
         if [ "$m" = "direct" ]; then label="直连 github.com"; else label="$m"; fi
         if awk -v a="$t" 'BEGIN{exit !(a>=999)}'; then
-            printf '  %s%-30s%s  %s\n' "$DIM" "$label" "$RESET" "失败" >&2
+            printf '  %s%-30s%s  失败 (http=%s)\n' "$DIM" "$label" "$RESET" "${code:-?}" >&2
         else
-            printf '  %s%-30s%s  %.3fs\n' "$DIM" "$label" "$RESET" "$t" >&2
+            printf '  %s%-30s%s  %.3fs (http=%s)\n' "$DIM" "$label" "$RESET" "$t" "$code" >&2
         fi
         if awk -v a="$t" -v b="$best_time" 'BEGIN{exit !(a<b)}'; then
             best_time="$t"
