@@ -2,6 +2,7 @@
 
 面向 Linux 服务器的 MaiBot 一站式部署与运维终端面板。使用 Rust 编写，是具有MaiBot安装、更新、服务管理、协议端管理、配置查看与插件管理能力的单文件程序。  
 
+> 食用文档： https://docs.meowyun.cn/qqbot/maibot/install.html  
 > 声明：本项目使用`Claude Code`/`Codex` 进行开发  
 
 ## 功能概览  
