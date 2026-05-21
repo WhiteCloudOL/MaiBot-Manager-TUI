@@ -110,6 +110,24 @@ output/maibot-manager-x86_64
 output/maibot-manager-arm64
 ```
 
+## 一键安装（推荐）
+
+在 Linux 服务器执行下述命令，会自动识别架构、并行测速 GitHub 镜像、下载最新 release 到 `~/.local/bin/maibot` 并写入 `bash` / `zsh` / `fish` 的 PATH：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/main/scripts/install.sh | bash
+```
+
+可选环境变量：
+
+```text
+MAIBOT_INSTALL_DIR  安装目录，默认 ~/.local/bin
+MAIBOT_FORCE_PROXY  跳过测速，强制使用的镜像（或 direct）
+MAIBOT_VERSION      指定版本 tag（如 v0.1.2），默认 latest
+```
+
+安装完成后重启终端或 `source` 对应的 rc 文件，即可在任意位置执行 `maibot`。
+
 ## 使用
 
 把对应架构的文件上传到 Linux 服务器后执行：

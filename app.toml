@@ -2,7 +2,7 @@
 # 修改后重新执行 build-release.sh / build-release.ps1，新值会被烘焙进二进制。
 
 # 程序版本号（同时会同步到 Cargo.toml 的 [package].version 时由人工保持一致）
-version = "0.1.1"
+version = "0.1.2"
 
 # 标题栏副标题，留空则使用默认 "Rust · MaiBot管理面板"
 build_label = "Rust · MaiBot管理面板"
