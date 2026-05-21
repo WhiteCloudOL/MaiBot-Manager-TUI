@@ -512,15 +512,9 @@ impl App {
                 .ok_or_else(|| anyhow!("无法定位 HOME 目录"))?
                 .join("maimai")
         };
-        let mut bot_protocols = Vec::new();
-        if install_path.join("NapCat").exists() {
-            bot_protocols.push(BotProtocol::NapCat);
-        }
+        let mut bot_protocols = vec![BotProtocol::NapCat];
         if install_path.join("LLBot").exists() || !current.mai_llbot_path.is_empty() {
             bot_protocols.push(BotProtocol::LuckyLilliaBot);
-        }
-        if bot_protocols.is_empty() {
-            bot_protocols.push(BotProtocol::NapCat);
         }
 
         Ok(InstallPlan {
