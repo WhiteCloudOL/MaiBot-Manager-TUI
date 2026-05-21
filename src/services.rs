@@ -1,9 +1,39 @@
 use crate::{app::App, utils::*};
 use anyhow::Result;
+use dialoguer::console::style;
 use dialoguer::{Confirm, Input, Select};
 use std::{fs, path::PathBuf};
 
 impl App {
+    /// 进入 screen 控制台前的醒目退出提示。
+    /// 很多新手不知道 screen 的分离热键，看到 MaiBot 日志后下意识按 Ctrl+C，
+    /// 会直接把进程杀掉。这里强制等待用户回车，确认看到提示再继续。
+    fn warn_before_screen_attach(&self, session: &str) -> Result<()> {
+        let bar = "═".repeat(60);
+        println!();
+        println!("{}", style(&bar).yellow().bold());
+        println!(
+            "  {} {}",
+            style("⚠").yellow().bold(),
+            style(format!("即将进入 screen 会话：{session}")).yellow().bold()
+        );
+        println!("{}", style(&bar).yellow().bold());
+        println!(
+            "  退出请按 {}（分离会话，{}）",
+            style("Ctrl + A  然后按 D").green().bold(),
+            style("进程会继续在后台运行").green()
+        );
+        println!(
+            "  {}",
+            style("⚠  千万不要按 Ctrl + C — 那会直接终止当前进程！")
+                .red()
+                .bold()
+        );
+        println!("{}", style(&bar).yellow().bold());
+        self.pause("按回车进入控制台...")?;
+        Ok(())
+    }
+
     pub(crate) fn manage_bot_protocol_menu(&self) -> Result<()> {
         self.require_config()?;
         loop {
@@ -59,11 +89,15 @@ impl App {
                     };
                     self.run_shell(&screen_launch_cmd("maibot", &body))?;
                     if run_mode == 1 {
+                        self.warn_before_screen_attach("maibot")?;
                         self.run_shell("screen -r maibot")?;
                     }
                 }
                 1 => self.run_shell(&screen_quit_cmd("maibot"))?,
-                2 => self.run_shell("screen -r maibot")?,
+                2 => {
+                    self.warn_before_screen_attach("maibot")?;
+                    self.run_shell("screen -r maibot")?;
+                }
                 _ => break,
             }
             self.pause("操作已执行，按回车继续")?;
@@ -176,7 +210,10 @@ impl App {
                 0 => self.run_shell(&start_llbot())?,
                 1 => self.run_shell(&screen_quit_cmd("llbot"))?,
                 2 => self.run_shell(&start_llbot())?,
-                3 => self.run_shell("screen -r llbot")?,
+                3 => {
+                    self.warn_before_screen_attach("llbot")?;
+                    self.run_shell("screen -r llbot")?;
+                }
                 4 => {
                     let password: String = Input::with_theme(&self.theme)
                         .with_prompt("新的 WebUI 密码")

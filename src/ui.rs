@@ -24,14 +24,17 @@ impl App {
         let title = format!("MaiBot Manager TUI  v{}", APP_VERSION);
         let subtitle = APP_BUILD_LABEL;
         let credit = "作者：清蒸云鸭 · LICENSE：AGPL-3.0";
+        let docs = "文档站: https://docs.meowyun.cn/index.html";
         let title_pad = (PANEL_WIDTH.saturating_sub(display_width(&title))) / 2;
         let sub_pad = (PANEL_WIDTH.saturating_sub(display_width(subtitle))) / 2;
         let credit_pad = (PANEL_WIDTH.saturating_sub(display_width(credit))) / 2;
+        let docs_pad = (PANEL_WIDTH.saturating_sub(display_width(docs))) / 2;
         wln!("{}{}", " ".repeat(title_pad), style(&title).cyan().bold());
         if !subtitle.is_empty() {
             wln!("{}{}", " ".repeat(sub_pad), style(subtitle).blue().dim());
         }
         wln!("{}{}", " ".repeat(credit_pad), style(credit).dim());
+        wln!("{}{}", " ".repeat(docs_pad), style(docs).cyan().dim());
         wln!("{}", style(&rule).blue());
 
         if let Some(plan) = plan {
