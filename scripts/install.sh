@@ -131,83 +131,62 @@ convert_github_url() {
     fi
 }
 
-# 并行测速。每个候选镜像启一个子 shell，把 "time mirror" 写入临时文件。
 choose_github_proxy() {
-    local test_url="$1"
+    # 参数保留是为了调用点兼容；手动选择不再需要 test_url
+    : "${1:-}"
     if [ -n "${MAIBOT_FORCE_PROXY:-}" ]; then
         info "使用强制指定镜像: ${MAIBOT_FORCE_PROXY}"
         printf '%s' "${MAIBOT_FORCE_PROXY}"
         return
     fi
 
-    local tmpdir
-    tmpdir="$(mktemp -d -t maibot-spd.XXXXXX)"
-    info "并行测速 GitHub 镜像 (Range GET 前 64KB, 最长 6s)..."
-
     local candidates=("direct" "${GITHUB_MIRRORS[@]}")
-    local pids=() idx=0
-    for m in "${candidates[@]}"; do
-        local url
-        url="$(convert_github_url "$test_url" "$m")"
-        (
-            # 真实 ranged GET 才能识别「HEAD 秒回但 GET 失败」的反代
-            local resp code t
-            resp="$(curl -sL --max-time 6 \
-                -o /dev/null \
-                --range 0-65535 \
-                -w '%{http_code} %{time_total}' \
-                "$url" 2>/dev/null || true)"
-            code="${resp%% *}"
-            t="${resp##* }"
-            if [ -z "$t" ] || [ -z "$code" ]; then
-                t=999
-            elif [ "$code" != "200" ] && [ "$code" != "206" ]; then
-                t=999
-            elif awk -v a="$t" 'BEGIN{exit !(a<=0)}'; then
-                t=999
-            fi
-            printf '%s %s %s\n' "$t" "$code" "$m" > "${tmpdir}/r${idx}"
-        ) &
-        pids+=("$!")
-        idx=$((idx+1))
-    done
-    for pid in "${pids[@]}"; do
-        wait "$pid" 2>/dev/null || true
-    done
+    local total=${#candidates[@]}
 
-    local best_time="999" best_mirror=""
-    for f in "$tmpdir"/r*; do
-        [ -f "$f" ] || continue
-        local line t code m
-        line="$(cat "$f")"
-        t="$(printf '%s' "$line" | awk '{print $1}')"
-        code="$(printf '%s' "$line" | awk '{print $2}')"
-        m="$(printf '%s' "$line" | awk '{print $3}')"
-        local label
-        if [ "$m" = "direct" ]; then label="直连 github.com"; else label="$m"; fi
-        if awk -v a="$t" 'BEGIN{exit !(a>=999)}'; then
-            printf '  %s%-30s%s  失败 (http=%s)\n' "$DIM" "$label" "$RESET" "${code:-?}" >&2
-        else
-            printf '  %s%-30s%s  %.3fs (http=%s)\n' "$DIM" "$label" "$RESET" "$t" "$code" >&2
-        fi
-        if awk -v a="$t" -v b="$best_time" 'BEGIN{exit !(a<b)}'; then
-            best_time="$t"
-            best_mirror="$m"
-        fi
-    done
-    rm -rf "$tmpdir"
-
-    if [ -z "$best_mirror" ] || awk -v a="$best_time" 'BEGIN{exit !(a>=999)}'; then
-        warn "所有候选均不可达，回退直连"
+    # curl ... | bash 时 stdin 已被占用，必须从 /dev/tty 读
+    if [ ! -r /dev/tty ]; then
+        warn "无可用 TTY，无法手动选择镜像，回退直连 github.com"
+        warn "如需走镜像，请重跑并设置 MAIBOT_FORCE_PROXY=https://gh-proxy.org"
         printf 'direct'
         return
     fi
-    if [ "$best_mirror" = "direct" ]; then
-        ok "选择: 直连 github.com (${best_time}s)"
+
+    info "请选择 GitHub 镜像源 (回车默认 1):"
+    local i=1
+    for m in "${candidates[@]}"; do
+        local label
+        if [ "$m" = "direct" ]; then
+            label="直连 github.com"
+        else
+            label="$m"
+        fi
+        printf '  %s%2d)%s %s\n' "$CYAN" "$i" "$RESET" "$label" >&2
+        i=$((i+1))
+    done
+    printf '  %s(下次想跳过这步，可设置环境变量 MAIBOT_FORCE_PROXY)%s\n' "$DIM" "$RESET" >&2
+
+    local pick=""
+    while :; do
+        printf '%s请输入序号 [1-%d, 回车=1]:%s ' "$BOLD" "$total" "$RESET" >&2
+        if ! IFS= read -r pick < /dev/tty; then
+            warn "读取输入失败，回退直连"
+            printf 'direct'
+            return
+        fi
+        [ -z "$pick" ] && pick=1
+        if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "$total" ]; then
+            break
+        fi
+        warn "输入无效，请输入 1 到 ${total} 之间的整数"
+    done
+
+    local choice="${candidates[$((pick-1))]}"
+    if [ "$choice" = "direct" ]; then
+        ok "选择: 直连 github.com"
     else
-        ok "选择: ${best_mirror} (${best_time}s)"
+        ok "选择: $choice"
     fi
-    printf '%s' "$best_mirror"
+    printf '%s' "$choice"
 }
 
 download() {
@@ -246,22 +225,18 @@ setup_path() {
     local sh_line='export PATH="'"${install_dir}"':$PATH"'
     local touched=0
 
-    # bash
     if [ -f "$HOME/.bashrc" ] || command -v bash >/dev/null 2>&1; then
         add_line_idempotent "$HOME/.bashrc" "$sh_line"
         touched=1
     fi
-    # macOS / 登录 shell 兼容
     if [ -f "$HOME/.bash_profile" ]; then
         add_line_idempotent "$HOME/.bash_profile" "$sh_line"
         touched=1
     fi
-    # zsh
     if [ -f "$HOME/.zshrc" ] || command -v zsh >/dev/null 2>&1; then
         add_line_idempotent "$HOME/.zshrc" "$sh_line"
         touched=1
     fi
-    # fish 用自己的语法
     if command -v fish >/dev/null 2>&1 || [ -d "$HOME/.config/fish" ]; then
         local fish_conf="$HOME/.config/fish/config.fish"
         local fish_line='set -gx PATH '"${install_dir}"' $PATH'
@@ -275,7 +250,7 @@ setup_path() {
 }
 
 main() {
-    require_cmd curl uname awk grep sed mkdir mv chmod mktemp
+    require_cmd curl uname grep sed mkdir mv chmod mktemp
 
     if [ "$(uname -s)" != "Linux" ]; then
         err "仅支持 Linux（当前: $(uname -s)）。Windows 请在 WSL 中运行。"
@@ -327,7 +302,6 @@ main() {
         fi
     fi
 
-    # 简单完整性检查：ELF 头
     if ! head -c 4 "$tmpfile" | grep -q $'\x7fELF'; then
         err "下载文件不是有效的 Linux 可执行文件（可能是 HTML 错误页）"
         head -c 200 "$tmpfile" >&2 || true
