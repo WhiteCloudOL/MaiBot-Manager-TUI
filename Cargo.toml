@@ -1,0 +1,26 @@
+[package]
+name = "maibot-manager-tui"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1.0"
+crossterm = "0.29"
+ctrlc = "3.5"
+dialoguer = "0.12"
+dirs = "6.0"
+regex = "1.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.27"
+toml_edit = "0.23"
+
+[build-dependencies]
+toml_edit = "0.23"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

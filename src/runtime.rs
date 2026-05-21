@@ -1,0 +1,96 @@
+use crate::{app::App, model::AppConfig, utils::shell_escape};
+use anyhow::{anyhow, Context, Result, bail};
+use std::{collections::BTreeMap, fs, io::Write, process::{Command, Stdio}};
+use tempfile::NamedTempFile;
+
+impl App {
+    pub(crate) fn get_public_ip(&self) -> Result<String> {
+        let output = Command::new("bash")
+            .arg("-lc")
+            .arg("curl -s4 --max-time 5 --connect-timeout 3 ifconfig.me")
+            .output()?;
+        let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if ip.is_empty() {
+            bail!("公网 IP 查询失败（curl 超时或无结果）");
+        }
+        Ok(ip)
+    }
+
+    pub(crate) fn load_config(&self) -> Result<AppConfig> {
+        let content = fs::read_to_string(&self.config_path)
+            .with_context(|| format!("未找到配置文件: {}", self.config_path.display()))?;
+        let mut map = BTreeMap::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=') {
+                let v = v.trim();
+                let stripped = if (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
+                    || (v.starts_with('\'') && v.ends_with('\'') && v.len() >= 2)
+                {
+                    &v[1..v.len() - 1]
+                } else {
+                    v
+                };
+                map.insert(k.trim().to_string(), stripped.to_string());
+            }
+        }
+        Ok(AppConfig {
+            user_install_path: map.get("USER_INSTALL_PATH").cloned().unwrap_or_default(),
+            mai_path: map
+                .get("MAI_PATH")
+                .cloned()
+                .or_else(|| map.get("USER_INSTALL_PATH").cloned())
+                .unwrap_or_default(),
+            mai_python_env: map
+                .get("MAI_PYTHON_ENV")
+                .cloned()
+                .unwrap_or_else(|| "system".into()),
+            mai_llbot_path: map.get("MAI_LLBOT_PATH").cloned().unwrap_or_default(),
+        })
+    }
+
+    pub(crate) fn save_config(&self, cfg: &AppConfig) -> Result<()> {
+        let content = format!(
+            "USER_INSTALL_PATH=\"{}\"\nMAI_PATH=\"{}\"\nMAI_PYTHON_ENV=\"{}\"\nMAI_LLBOT_PATH=\"{}\"\n",
+            cfg.user_install_path, cfg.mai_path, cfg.mai_python_env, cfg.mai_llbot_path
+        );
+        fs::write(&self.config_path, content)?;
+        Ok(())
+    }
+
+    pub(crate) fn require_config(&self) -> Result<AppConfig> {
+        self.load_config()
+            .map_err(|_| anyhow!("未找到安装配置，请先执行安装 / 更新"))
+    }
+
+    pub(crate) fn run_shell(&self, command: &str) -> Result<()> {
+        use dialoguer::console::style;
+        println!("\n{} {}\n", style("▶").cyan().bold(), style(command).dim());
+        let status = Command::new("bash")
+            .arg("-lc")
+            .arg(command)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .with_context(|| format!("执行命令失败: {command}"))?;
+        if !status.success() {
+            bail!("命令执行失败: {command}");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn run_embedded_original_script(&self) -> Result<()> {
+        let mut temp = NamedTempFile::new()?;
+        temp.write_all(include_str!("../maibot.sh").as_bytes())?;
+        let path = temp.path().to_path_buf();
+        self.run_shell(&format!(
+            "chmod +x '{}' && bash '{}'",
+            shell_escape(&path),
+            shell_escape(&path)
+        ))
+    }
+}
