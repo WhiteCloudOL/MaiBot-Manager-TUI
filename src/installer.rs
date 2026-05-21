@@ -894,13 +894,16 @@ impl App {
                 .get(3..)
                 .map(|s| s.trim() == "uv.lock")
                 .unwrap_or(false);
+        println!("{}", style(&bar).red().bold());
         if only_uv_lock {
             println!(
-                "  {}",
-                style("（仅 uv.lock 被改动，默认建议丢弃以同步上游锁文件）").green()
+                "  {} {}",
+                style("✔ 推荐：").green().bold(),
+                style("仅 uv.lock 被改动，默认建议「丢弃」以同步上游锁文件")
+                    .green()
+                    .bold()
             );
         }
-        println!("{}", style(&bar).red().bold());
 
         let items: Vec<String> = vec![
             "临时保存（git stash，含未跟踪文件，可后续恢复）".to_string(),
