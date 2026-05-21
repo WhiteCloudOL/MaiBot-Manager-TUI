@@ -4,18 +4,12 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use std::{
-    io::{self, Write},
-    sync::Arc,
-};
+use std::io::{self, Write};
 
 pub fn install_terminal_cleanup_handler() -> Result<()> {
-    let cleanup = Arc::new(|| {
+    ctrlc::set_handler(|| {
         restore_terminal_state();
-    });
-    let handler = Arc::clone(&cleanup);
-    ctrlc::set_handler(move || {
-        handler();
+        eprintln!("\n操作已被用户中断 (Ctrl+C)");
         std::process::exit(130);
     })
     .context("注册 Ctrl+C 清理处理失败")?;

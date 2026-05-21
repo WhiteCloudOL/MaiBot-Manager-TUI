@@ -37,8 +37,6 @@ This is a single-binary TUI that orchestrates `bash` to install/manage MaiBot on
 
 **GitHub speedtest.** `installer.rs::run_github_speedtest` fans out one thread per mirror, each running `curl -sL -o /dev/null -w '%{time_total}'`. If every mirror fails, the function recurses with a retry/direct/cancel prompt — it never returns a silent fallback.
 
-**Embedded legacy script.** `runtime.rs::run_embedded_original_script` does `include_str!("../maibot.sh")` into a tempfile and execs it — that's why the script is in the repo root.
-
 **UI alignment.** CJK characters occupy 2 terminal columns, ASCII 1. Don't use `{key:>10}` style formatting — it counts chars, not columns, and produces ragged tables. Use `utils::{display_width, pad_left}` and the helpers in `ui.rs` (`print_kv`, `print_status_dot`, `print_section`, `print_line`).
 
 **Shell-string safety.** All paths interpolated into command strings go through `utils::shell_escape` / `shell_escape_raw` (single-quote escape). When extending shell commands, keep this contract — direct `format!("'{}'", path.display())` will break on apostrophes.

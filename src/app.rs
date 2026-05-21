@@ -25,14 +25,13 @@ impl App {
             self.print_header(None);
             self.print_runtime_status();
             self.print_home_banner();
-            let items = vec![
+            let items = [
                 "安装 / 更新 MaiBot",
                 "管理 MaiBot 核心",
                 "管理 Bot 协议端服务",
                 "配置与访问",
                 "LPMM 知识库",
                 "插件管理",
-                "原始脚本兼容模式",
                 "退出",
             ];
             let choice = Select::with_theme(&self.theme)
@@ -47,7 +46,6 @@ impl App {
                 3 => self.manage_config_access_menu()?,
                 4 => self.manage_lpmm_menu()?,
                 5 => self.manage_plugins_menu()?,
-                6 => self.run_embedded_original_script()?,
                 _ => break,
             }
         }

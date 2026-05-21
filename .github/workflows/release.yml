@@ -1,0 +1,155 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "CLAUDE.md"
+      - ".gitignore"
+      - "LICENSE"
+      - "build-release.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.output_name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            output_name: maibot-manager-x86_64
+            cross_pkg: ""
+          - target: aarch64-unknown-linux-gnu
+            output_name: maibot-manager-arm64
+            cross_pkg: gcc-aarch64-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross compiler
+        if: matrix.cross_pkg != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.cross_pkg }}
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact
+        run: |
+          cp target/${{ matrix.target }}/release/maibot-manager-tui ${{ matrix.output_name }}
+          chmod +x ${{ matrix.output_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output_name }}
+          path: ${{ matrix.output_name }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(grep -E '^version[[:space:]]*=' app.toml | head -n1 | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "Failed to read version from app.toml" >&2
+            exit 1
+          fi
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Sanity check artifact names
+        run: |
+          ls -la dist
+          test -f dist/maibot-manager-x86_64
+          test -f dist/maibot-manager-arm64
+
+      - name: Decide release tag and title
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHORT_SHA="${{ steps.version.outputs.short_sha }}"
+          STABLE_TAG="v${VERSION}"
+          if gh release view "${STABLE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            TAG="v${VERSION}-beta.${SHORT_SHA}"
+            TITLE="MaiBot Manager TUI v${VERSION} (beta ${SHORT_SHA})"
+            PRERELEASE="true"
+          else
+            TAG="${STABLE_TAG}"
+            TITLE="MaiBot Manager TUI v${VERSION}"
+            PRERELEASE="false"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          TITLE="${{ steps.meta.outputs.title }}"
+          NOTES="Automated build from commit ${{ github.sha }}.
+
+          - \`maibot-manager-x86_64\`: Linux x86_64
+          - \`maibot-manager-arm64\`: Linux aarch64"
+
+          ASSETS=(dist/maibot-manager-x86_64 dist/maibot-manager-arm64)
+
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${ASSETS[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
+          else
+            EXTRA=()
+            if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
+              EXTRA+=(--prerelease)
+            fi
+            gh release create "${TAG}" \
+              --title "${TITLE}" \
+              --notes "${NOTES}" \
+              --target "${{ github.sha }}" \
+              "${EXTRA[@]}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              "${ASSETS[@]}"
+          fi

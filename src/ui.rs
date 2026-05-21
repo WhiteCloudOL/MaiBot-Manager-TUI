@@ -109,15 +109,6 @@ impl App {
         );
     }
 
-    pub(crate) fn print_status_line(&self, key: &str, running: bool) {
-        let marker = if running {
-            style("● 运行中").green().bold()
-        } else {
-            style("○ 未运行").red()
-        };
-        wln!("  {} {}", style(pad_left(key, KEY_WIDTH)).blue(), marker);
-    }
-
     pub(crate) fn print_status_dot(&self, key: &str, label: &str, ok: bool) {
         let dot = if ok {
             style("●").green()

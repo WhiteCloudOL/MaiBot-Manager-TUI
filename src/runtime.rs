@@ -1,7 +1,8 @@
-use crate::{app::App, model::AppConfig, utils::shell_escape};
+use crate::app::App;
+use crate::model::AppConfig;
+use crate::terminal::restore_terminal_state;
 use anyhow::{anyhow, Context, Result, bail};
-use std::{collections::BTreeMap, fs, io::Write, process::{Command, Stdio}};
-use tempfile::NamedTempFile;
+use std::{collections::BTreeMap, fs, os::unix::process::ExitStatusExt, process::{Command, Stdio}};
 
 impl App {
     pub(crate) fn get_public_ip(&self) -> Result<String> {
@@ -77,20 +78,15 @@ impl App {
             .stderr(Stdio::inherit())
             .status()
             .with_context(|| format!("执行命令失败: {command}"))?;
+        if matches!(status.signal(), Some(2) | Some(15)) {
+            restore_terminal_state();
+            eprintln!("\n操作已被用户中断 (Ctrl+C)");
+            std::process::exit(130);
+        }
         if !status.success() {
             bail!("命令执行失败: {command}");
         }
         Ok(())
     }
 
-    pub(crate) fn run_embedded_original_script(&self) -> Result<()> {
-        let mut temp = NamedTempFile::new()?;
-        temp.write_all(include_str!("../maibot.sh").as_bytes())?;
-        let path = temp.path().to_path_buf();
-        self.run_shell(&format!(
-            "chmod +x '{}' && bash '{}'",
-            shell_escape(&path),
-            shell_escape(&path)
-        ))
-    }
 }

@@ -34,7 +34,8 @@ impl App {
             self.print_header(None);
             self.print_section("MaiBot 核心", "管理主程序启动、停止与控制台进入");
             self.print_kv("目录", &maibot_dir.display().to_string());
-            self.print_status_line("运行状态", screen_exists("maibot")?);
+            let running = screen_exists("maibot")?;
+            self.print_status_dot("运行状态", if running { "运行中" } else { "未运行" }, running);
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("MaiBot 核心管理")
                 .items(["启动 MaiBot", "停止 MaiBot", "进入 Screen 控制台", "返回"])
@@ -47,25 +48,21 @@ impl App {
                         .items(["正常后台启动", "启动并进入控制台（首次运行建议）"])
                         .default(0)
                         .interact()?;
-                    let cmd = if py_env == "uv" {
-                        format!(
-                            "screen -S maibot -X quit >/dev/null 2>&1 || true; cd '{}' && screen -dmS maibot bash -lc \"cd '{}' && uv run bot.py; exec bash\"",
-                            shell_escape(&maibot_dir),
-                            shell_escape(&maibot_dir)
-                        )
+                    let body = if py_env == "uv" {
+                        format!("cd '{}' && uv run bot.py", shell_escape(&maibot_dir))
                     } else {
                         format!(
-                            "screen -S maibot -X quit >/dev/null 2>&1 || true; cd '{}' && screen -dmS maibot bash -lc \". '{}' && python3 bot.py; exec bash\"",
+                            "cd '{}' && . '{}' && python3 bot.py",
                             shell_escape(&maibot_dir),
                             shell_escape(&venv_activate)
                         )
                     };
-                    self.run_shell(&cmd)?;
+                    self.run_shell(&screen_launch_cmd("maibot", &body))?;
                     if run_mode == 1 {
                         self.run_shell("screen -r maibot")?;
                     }
                 }
-                1 => self.run_shell("screen -S maibot -X quit")?,
+                1 => self.run_shell(&screen_quit_cmd("maibot"))?,
                 2 => self.run_shell("screen -r maibot")?,
                 _ => break,
             }
@@ -153,7 +150,8 @@ impl App {
             self.print_header(None);
             self.print_section("LuckyLilliaBot", "管理 CLI 协议端、密码和控制台");
             self.print_kv("目录", &llbot_dir.display().to_string());
-            self.print_status_line("运行状态", screen_exists("llbot")?);
+            let running = screen_exists("llbot")?;
+            self.print_status_dot("运行状态", if running { "运行中" } else { "未运行" }, running);
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("LuckyLilliaBot 管理")
                 .items([
@@ -167,18 +165,17 @@ impl App {
                 ])
                 .default(0)
                 .interact()?;
-            match choice {
-                0 => self.run_shell(&format!(
-                    "screen -S llbot -X quit >/dev/null 2>&1 || true; cd '{}' && screen -dmS llbot bash -lc 'chmod +x ./start.sh ./llbot 2>/dev/null || true; ./start.sh; exec bash'",
+            let start_llbot = || {
+                let body = format!(
+                    "cd '{}' && chmod +x ./start.sh ./llbot 2>/dev/null || true; ./start.sh",
                     shell_escape(&llbot_dir)
-                ))?,
-                1 => self.run_shell("screen -S llbot -X quit")?,
-                2 => {
-                    self.run_shell(&format!(
-                        "screen -S llbot -X quit >/dev/null 2>&1 || true; cd '{}' && screen -dmS llbot bash -lc 'chmod +x ./start.sh ./llbot 2>/dev/null || true; ./start.sh; exec bash'",
-                        shell_escape(&llbot_dir)
-                    ))?;
-                }
+                );
+                screen_launch_cmd("llbot", &body)
+            };
+            match choice {
+                0 => self.run_shell(&start_llbot())?,
+                1 => self.run_shell(&screen_quit_cmd("llbot"))?,
+                2 => self.run_shell(&start_llbot())?,
                 3 => self.run_shell("screen -r llbot")?,
                 4 => {
                     let password: String = Input::with_theme(&self.theme)
@@ -195,7 +192,7 @@ impl App {
                         .default(false)
                         .interact()?
                     {
-                        let _ = self.run_shell("screen -S llbot -X quit");
+                        let _ = self.run_shell(&screen_quit_cmd("llbot"));
                         fs::remove_dir_all(&llbot_dir).ok();
                     }
                 }

@@ -17,7 +17,6 @@
 - **配置访问**：集中查看 MaiBot、NapCat、LLBot WebUI 地址与密钥；初始化访问配置带二次确认。
 - **LPMM 管理**：知识库目录初始化、前台 / 后台执行提取与导入任务。
 - **插件管理**：安装、卸载插件并按需补装依赖。
-- **原始脚本兼容模式**：内置 `maibot.sh`，必要时可回退原脚本流程。
 
 ## 目录结构
 
@@ -31,12 +30,11 @@
 │   ├── access.rs     # WebUI 访问汇总与 Adapter 黑白名单
 │   ├── lpmm.rs       # LPMM 目录、提取、导入流程
 │   ├── plugins.rs    # 插件安装、卸载、依赖
-│   ├── runtime.rs    # 配置 IO、命令执行、原脚本兼容入口
+│   ├── runtime.rs    # 配置 IO、命令执行
 │   ├── ui.rs         # 页眉、列宽对齐、提示与 prompt/raw mode 切换
 │   ├── model.rs      # 配置模型、安装计划、枚举与常量
 │   ├── terminal.rs   # 终端 raw mode、光标恢复、Ctrl+C 清理
 │   └── utils.rs      # 路径、shell、列宽对齐、插件工具
-├── maibot.sh         # 原始脚本，构建时嵌入兼容模式
 ├── build-release.sh  # Linux / WSL 构建脚本
 ├── build-release.ps1 # Windows 调用 WSL 构建脚本
 └── output/           # 构建产物，默认被 .gitignore 忽略

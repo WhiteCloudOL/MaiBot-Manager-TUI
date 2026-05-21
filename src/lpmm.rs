@@ -47,7 +47,7 @@ impl App {
                     &info_script,
                     "mai-lpmm-info",
                 )?,
-                3 => self.run_shell("screen -S mai-lpmm-info -X quit")?,
+                3 => self.run_shell(&screen_quit_cmd("mai-lpmm-info"))?,
                 4 => self.run_python_script(&maibot_dir, &venv_activate, &py_env, &import_script)?,
                 5 => self.run_python_script_screen(
                     &maibot_dir,
@@ -56,7 +56,7 @@ impl App {
                     &import_script,
                     "mai-lpmm-import",
                 )?,
-                6 => self.run_shell("screen -S mai-lpmm-import -X quit")?,
+                6 => self.run_shell(&screen_quit_cmd("mai-lpmm-import"))?,
                 _ => break,
             }
             self.pause("操作已执行，按回车继续")?;
@@ -97,20 +97,19 @@ impl App {
         script: &Path,
         screen_name: &str,
     ) -> Result<()> {
-        let command = if py_env == "uv" {
+        let body = if py_env == "uv" {
             format!(
-                "screen -S {screen_name} -X quit >/dev/null 2>&1 || true; cd '{}' && screen -dmS {screen_name} bash -lc \"cd '{}' && uv run '{}'; exec bash\"",
-                shell_escape(maibot_dir),
+                "cd '{}' && uv run '{}'",
                 shell_escape(maibot_dir),
                 shell_escape(script.strip_prefix(maibot_dir).unwrap_or(script))
             )
         } else {
             format!(
-                "screen -S {screen_name} -X quit >/dev/null 2>&1 || true; screen -dmS {screen_name} bash -lc \". '{}' && python '{}'; exec bash\"",
+                ". '{}' && python '{}'",
                 shell_escape(venv_activate),
                 shell_escape(script)
             )
         };
-        self.run_shell(&command)
+        self.run_shell(&screen_launch_cmd(screen_name, &body))
     }
 }

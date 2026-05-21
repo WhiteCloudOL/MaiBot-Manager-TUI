@@ -43,15 +43,15 @@ impl App {
             self.print_planner_view(plan, &entries, selected, expanded);
 
             if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
                 {
-                    drop(_guard);
                     restore_terminal_state();
+                    eprintln!("\n安装已被用户中断 (Ctrl+C)");
                     std::process::exit(130);
+                }
+                if key.kind != KeyEventKind::Press {
+                    continue;
                 }
                 match key.code {
                     KeyCode::Up => {
