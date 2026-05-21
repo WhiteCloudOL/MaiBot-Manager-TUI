@@ -886,6 +886,20 @@ impl App {
                 style(format!("... 另有 {} 条未显示", lines.len() - show_count)).dim()
             );
         }
+
+        // uv.lock 是 uv 自动生成的依赖锁文件，本地修改通常只是版本号刷新，
+        // 直接丢弃同步上游是安全的合理默认。其他场景仍默认 "取消" 保护用户改动。
+        let only_uv_lock = lines.len() == 1
+            && lines[0]
+                .get(3..)
+                .map(|s| s.trim() == "uv.lock")
+                .unwrap_or(false);
+        if only_uv_lock {
+            println!(
+                "  {}",
+                style("（仅 uv.lock 被改动，默认建议丢弃以同步上游锁文件）").green()
+            );
+        }
         println!("{}", style(&bar).red().bold());
 
         let items: Vec<String> = vec![
@@ -897,10 +911,11 @@ impl App {
             "取消本次更新".to_string(),
         ];
         self.drain_pending_input();
+        let default_idx = if only_uv_lock { 1 } else { 2 };
         let choice = Select::with_theme(&self.theme)
             .with_prompt("如何处理这些本地改动？")
             .items(&items)
-            .default(2)
+            .default(default_idx)
             .interact()
             .with_context(|| "读取选择失败")?;
 
@@ -938,12 +953,12 @@ impl App {
                 self.drain_pending_input();
                 let confirmed = Confirm::with_theme(&self.theme)
                     .with_prompt(
-                        style("我已了解风险，确认丢弃")
+                        style("我已了解风险，确认丢弃？按 y 确认 / n 取消")
                             .red()
                             .bold()
                             .to_string(),
                     )
-                    .default(false)
+                    .default(true)
                     .interact()
                     .with_context(|| "读取确认失败")?;
                 if !confirmed {
