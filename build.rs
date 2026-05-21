@@ -39,7 +39,9 @@ fn main() {
                 .collect()
         })
         .unwrap_or_default();
-    let mirrors_joined = mirrors.join("\n");
+    // Cargo 的 cargo:rustc-env 指令按行解析，值中带换行只会留住第一行。
+    // 用管道符当分隔（URL 不会出现 '|'），运行时再按 '|' 切回字符串列表。
+    let mirrors_joined = mirrors.join("|");
 
     println!("cargo:rustc-env=APP_VERSION={}", version);
     println!("cargo:rustc-env=APP_BUILD_LABEL={}", build_label);

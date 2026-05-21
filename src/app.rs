@@ -1,12 +1,13 @@
 use anyhow::{anyhow, Result};
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::Select;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::theme::AppTheme;
 use crate::utils::screen_exists;
 
 pub(crate) struct App {
-    pub(crate) theme: ColorfulTheme,
+    pub(crate) theme: AppTheme,
     pub(crate) config_path: PathBuf,
 }
 
@@ -14,7 +15,7 @@ impl App {
     pub(crate) fn new() -> Result<Self> {
         let home = dirs::home_dir().ok_or_else(|| anyhow!("无法定位 HOME 目录"))?;
         Ok(Self {
-            theme: ColorfulTheme::default(),
+            theme: AppTheme::new(),
             config_path: home.join(".maibot_config"),
         })
     }

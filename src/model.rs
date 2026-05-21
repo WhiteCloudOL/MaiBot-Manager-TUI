@@ -13,7 +13,7 @@ pub fn github_mirrors() -> &'static [&'static str] {
     CACHE
         .get_or_init(|| {
             GITHUB_MIRRORS_RAW
-                .lines()
+                .split('|')
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .collect()

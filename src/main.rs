@@ -6,6 +6,7 @@ mod plugins;
 mod runtime;
 mod services;
 mod terminal;
+mod theme;
 mod ui;
 mod utils;
 

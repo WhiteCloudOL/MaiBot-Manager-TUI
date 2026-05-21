@@ -1,6 +1,8 @@
 use crate::app::App;
 use anyhow::{anyhow, bail, Result};
-use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use dialoguer::{Confirm, Input, Select};
+
+use crate::theme::AppTheme;
 use dialoguer::console::style;
 use regex::Regex;
 use serde_json::Value;
@@ -225,7 +227,7 @@ fn modify_numeric_array(
     doc: &mut DocumentMut,
     key: &str,
     add: bool,
-    theme: &ColorfulTheme,
+    theme: &AppTheme,
 ) -> Result<()> {
     let input: String = Input::with_theme(theme)
         .with_prompt(if add { "输入号码" } else { "输入要移除的号码" })
