@@ -121,45 +121,57 @@ find_asset_url() {
         | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 }
 
-# 把 https://github.com/.../foo 转成 {proxy}/https://github.com/.../foo
+# 把 https://github.com/.../foo 转成 {proxy}/https://github.com/.../foo，
+# 或在选择 meowyun 时改写为清蒸云鸭国内下载站的 URL。
 convert_github_url() {
     local url="$1" proxy="$2"
-    if [ "$proxy" = "direct" ] || [ -z "$proxy" ]; then
-        printf '%s' "$url"
-    else
-        printf '%s/%s' "${proxy%/}" "$url"
-    fi
+    case "$proxy" in
+        ""|direct)
+            printf '%s' "$url"
+            ;;
+        meowyun)
+            local base
+            base="$(basename "$url")"
+            printf 'https://dl.meowyun.cn/bot/mmtui/%s' "$base"
+            ;;
+        *)
+            printf '%s/%s' "${proxy%/}" "$url"
+            ;;
+    esac
 }
 
 choose_github_proxy() {
     # 参数保留是为了调用点兼容；手动选择不再需要 test_url
     : "${1:-}"
     if [ -n "${MAIBOT_FORCE_PROXY:-}" ]; then
-        info "使用强制指定镜像: ${MAIBOT_FORCE_PROXY}"
+        info "使用强制指定下载方式: ${MAIBOT_FORCE_PROXY}"
         printf '%s' "${MAIBOT_FORCE_PROXY}"
         return
     fi
 
-    local candidates=("direct" "${GITHUB_MIRRORS[@]}")
+    # meowyun 是清蒸云鸭国内下载站的哨兵值，convert_github_url 里会改写成
+    # https://dl.meowyun.cn/bot/mmtui/<asset>。该站点只放最新版二进制，
+    # 因此 MAIBOT_VERSION 指定的非 latest 版本不会生效（会在选中时提示）。
+    local candidates=("direct" "meowyun" "${GITHUB_MIRRORS[@]}")
     local total=${#candidates[@]}
 
     # curl ... | bash 时 stdin 已被占用，必须从 /dev/tty 读
     if [ ! -r /dev/tty ]; then
-        warn "无可用 TTY，无法手动选择镜像，回退直连 github.com"
-        warn "如需走镜像，请重跑并设置 MAIBOT_FORCE_PROXY=https://gh-proxy.org"
+        warn "无可用 TTY，无法手动选择下载方式，回退直连 github.com"
+        warn "如需走镜像，请重跑并设置 MAIBOT_FORCE_PROXY=https://gh-proxy.org 或 meowyun"
         printf 'direct'
         return
     fi
 
-    info "请选择 GitHub 镜像源 (回车默认 1):"
+    info "请选择二进制文件下载方式 (回车默认 1):"
     local i=1
     for m in "${candidates[@]}"; do
         local label
-        if [ "$m" = "direct" ]; then
-            label="直连 github.com"
-        else
-            label="$m"
-        fi
+        case "$m" in
+            direct)  label="直连 github.com" ;;
+            meowyun) label="清蒸云鸭国内下载站" ;;
+            *)       label="GitHub 镜像: $m" ;;
+        esac
         printf '  %s%2d)%s %s\n' "$CYAN" "$i" "$RESET" "$label" >&2
         i=$((i+1))
     done
@@ -181,11 +193,20 @@ choose_github_proxy() {
     done
 
     local choice="${candidates[$((pick-1))]}"
-    if [ "$choice" = "direct" ]; then
-        ok "选择: 直连 github.com"
-    else
-        ok "选择: $choice"
-    fi
+    case "$choice" in
+        direct)
+            ok "选择: 直连 github.com"
+            ;;
+        meowyun)
+            ok "选择: 清蒸云鸭国内下载站"
+            if [ -n "${MAIBOT_VERSION:-}" ]; then
+                warn "该下载站只提供最新版本，MAIBOT_VERSION=${MAIBOT_VERSION} 将被忽略"
+            fi
+            ;;
+        *)
+            ok "选择: $choice"
+            ;;
+    esac
     printf '%s' "$choice"
 }
 
