@@ -36,11 +36,11 @@ else
     RED='' GREEN='' YELLOW='' CYAN='' BOLD='' DIM='' RESET=''
 fi
 
-info()  { printf '%s==>%s %s\n' "$CYAN"   "$RESET" "$*"; }
-ok()    { printf '%s ✓ %s %s\n' "$GREEN"  "$RESET" "$*"; }
+info()  { printf '%s==>%s %s\n' "$CYAN"   "$RESET" "$*" >&2; }
+ok()    { printf '%s ✓ %s %s\n' "$GREEN"  "$RESET" "$*" >&2; }
 warn()  { printf '%s !  %s %s\n' "$YELLOW" "$RESET" "$*" >&2; }
 err()   { printf '%s ✗ %s %s\n' "$RED"    "$RESET" "$*" >&2; }
-dim()   { printf '%s%s%s\n' "$DIM" "$*" "$RESET"; }
+dim()   { printf '%s%s%s\n' "$DIM" "$*" "$RESET" >&2; }
 
 require_cmd() {
     local missing=()

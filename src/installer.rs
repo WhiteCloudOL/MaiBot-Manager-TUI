@@ -1,8 +1,8 @@
 use crate::{app::App, model::*, terminal::{TerminalUiGuard, restore_terminal_state}, utils::*};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use dialoguer::console::style;
-use dialoguer::{Input, Select};
+use dialoguer::{Confirm, Input, Select};
 use serde_json::Value;
 use std::{fs, path::{Path, PathBuf}, process::Command, thread};
 
@@ -165,7 +165,6 @@ impl App {
             PlanField::BotProtocols => vec![
                 "仅 NapCatQQ".into(),
                 "仅 LuckyLilliaBot".into(),
-                "NapCatQQ + LuckyLilliaBot".into(),
                 "暂不安装附加协议端".into(),
             ],
             PlanField::DockerMirror => vec![
@@ -273,10 +272,6 @@ impl App {
             PlanField::BotProtocols => match choice_idx {
                 0 => plan.bot_protocols == vec![BotProtocol::NapCat],
                 1 => plan.bot_protocols == vec![BotProtocol::LuckyLilliaBot],
-                2 => {
-                    plan.bot_protocols.contains(&BotProtocol::NapCat)
-                        && plan.bot_protocols.contains(&BotProtocol::LuckyLilliaBot)
-                }
                 _ => plan.bot_protocols.is_empty(),
             },
             PlanField::DockerMirror => {
@@ -472,7 +467,6 @@ impl App {
                 plan.bot_protocols = match choice_idx {
                     0 => vec![BotProtocol::NapCat],
                     1 => vec![BotProtocol::LuckyLilliaBot],
-                    2 => vec![BotProtocol::NapCat, BotProtocol::LuckyLilliaBot],
                     _ => Vec::new(),
                 };
                 if !plan.bot_protocols.contains(&BotProtocol::NapCat) {
@@ -783,9 +777,10 @@ impl App {
             if mode == InstallMode::Clean {
                 fs::remove_dir_all(target)?;
             } else {
+                self.ensure_clean_worktree(target)?;
                 let branch = branch.unwrap_or("main");
                 let cmd = format!(
-                    "cd '{}' && git fetch --depth 1 '{}' '{}' && git checkout -B '{}' FETCH_HEAD && git reset --hard FETCH_HEAD",
+                    "cd '{}' && git fetch --depth 1 '{}' '{}' && git checkout -fB '{}' FETCH_HEAD && git reset --hard FETCH_HEAD",
                     shell_escape(target),
                     url,
                     branch,
@@ -807,6 +802,120 @@ impl App {
             shell_escape(target)
         );
         self.run_shell(&cmd)
+    }
+
+    /// 如果目标仓库工作区有本地修改或未跟踪文件，列出后请用户选择处理方式：
+    /// 1) git stash 临时保存；2) 丢弃；3) 取消更新。
+    /// 丢弃前还会再确认一次，避免误操作。
+    fn ensure_clean_worktree(&self, target: &Path) -> Result<()> {
+        let output = Command::new("bash")
+            .arg("-lc")
+            .arg(format!(
+                "cd '{}' && git status --porcelain",
+                shell_escape(target)
+            ))
+            .output()
+            .with_context(|| format!("git status 执行失败: {}", target.display()))?;
+        let porcelain = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<&str> = porcelain
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        if lines.is_empty() {
+            return Ok(());
+        }
+
+        let bar = "═".repeat(58);
+        println!();
+        println!("{}", style(&bar).red().bold());
+        println!("  {}", style("⚠  检测到本地修改 / 未跟踪文件").red().bold());
+        println!("{}", style(&bar).red().bold());
+        println!("  {} {}", style("仓库:").yellow(), target.display());
+        println!();
+        let show_count = 20usize.min(lines.len());
+        for line in &lines[..show_count] {
+            println!("    {}", style(line).red());
+        }
+        if lines.len() > show_count {
+            println!(
+                "    {}",
+                style(format!("... 另有 {} 条未显示", lines.len() - show_count)).dim()
+            );
+        }
+        println!("{}", style(&bar).red().bold());
+
+        let items: Vec<String> = vec![
+            "临时保存（git stash，含未跟踪文件，可后续恢复）".to_string(),
+            style("丢弃本地改动并强制同步（不可恢复！）")
+                .red()
+                .bold()
+                .to_string(),
+            "取消本次更新".to_string(),
+        ];
+        let choice = Select::with_theme(&self.theme)
+            .with_prompt("如何处理这些本地改动？")
+            .items(&items)
+            .default(2)
+            .interact()
+            .with_context(|| "读取选择失败")?;
+
+        match choice {
+            0 => {
+                self.run_shell(&format!(
+                    "cd '{}' && git stash push -u -m \"maibot-mgr-tui-$(date +%Y%m%d-%H%M%S)\"",
+                    shell_escape(target)
+                ))?;
+                println!(
+                    "  {}",
+                    style("已保存到 git stash。日后恢复请执行: git stash list / git stash pop").dim()
+                );
+            }
+            1 => {
+                println!();
+                println!("{}", style(&bar).red().bold());
+                println!(
+                    "  {}",
+                    style("⚠  即将执行: git reset --hard HEAD && git clean -fd")
+                        .red()
+                        .bold()
+                );
+                println!(
+                    "  {}",
+                    style("以上列出的修改和未跟踪文件会被永久删除，无法恢复！")
+                        .red()
+                        .bold()
+                );
+                println!(
+                    "  {}",
+                    style("（.gitignore 内的文件如 venv、data、知识库等不受影响）").dim()
+                );
+                println!("{}", style(&bar).red().bold());
+                let confirmed = Confirm::with_theme(&self.theme)
+                    .with_prompt(
+                        style("我已了解风险，确认丢弃")
+                            .red()
+                            .bold()
+                            .to_string(),
+                    )
+                    .default(false)
+                    .interact()
+                    .with_context(|| "读取确认失败")?;
+                if !confirmed {
+                    bail!("已取消：未确认丢弃本地修改");
+                }
+                self.run_shell(&format!(
+                    "cd '{}' && git reset --hard HEAD && git clean -fd",
+                    shell_escape(target)
+                ))?;
+            }
+            _ => {
+                bail!(
+                    "已取消：{} 存在未保存的本地修改",
+                    target.display()
+                );
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn setup_python_env(&self, plan: &InstallPlan) -> Result<()> {
