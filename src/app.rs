@@ -30,7 +30,6 @@ impl App {
                 "管理 MaiBot 核心",
                 "管理 Bot 协议端服务",
                 "配置与访问",
-                "LPMM 知识库",
                 "插件管理",
                 "退出",
             ];
@@ -44,8 +43,7 @@ impl App {
                 1 => self.manage_maibot_menu()?,
                 2 => self.manage_bot_protocol_menu()?,
                 3 => self.manage_config_access_menu()?,
-                4 => self.manage_lpmm_menu()?,
-                5 => self.manage_plugins_menu()?,
+                4 => self.manage_plugins_menu()?,
                 _ => break,
             }
         }

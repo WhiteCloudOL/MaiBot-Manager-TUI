@@ -1,10 +1,46 @@
 use crate::{app::App, model::*, terminal::{TerminalUiGuard, restore_terminal_state}, utils::*};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use dialoguer::console::style;
 use dialoguer::{Confirm, Input, Select};
 use serde_json::Value;
-use std::{fs, path::{Path, PathBuf}, process::Command, thread};
+use std::{fmt, fs, path::{Path, PathBuf}, process::Command, thread, time::Duration};
+
+/// 用户主动取消的标记错误。沿用 anyhow 链向上传播，由 install_update_flow
+/// 捕获后转成温和提示返回主菜单，不弹红色 Error。
+#[derive(Debug)]
+pub(crate) struct UserCanceled(pub String);
+
+impl fmt::Display for UserCanceled {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UserCanceled {}
+
+impl App {
+    /// 在 destructive 提示出现之前清空 tty 输入缓冲。
+    /// 用户上一次多按的 Enter 不应被下一个 prompt 立刻吃掉默认项。
+    pub(crate) fn drain_pending_input(&self) {
+        thread::sleep(Duration::from_millis(120));
+        if crossterm::terminal::enable_raw_mode().is_err() {
+            return;
+        }
+        while let Ok(true) = crossterm::event::poll(Duration::from_millis(0)) {
+            if crossterm::event::read().is_err() {
+                break;
+            }
+        }
+        // 兜底再扫一轮，捕获稍慢一拍才到达的回车
+        while let Ok(true) = crossterm::event::poll(Duration::from_millis(20)) {
+            if crossterm::event::read().is_err() {
+                break;
+            }
+        }
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
 
 impl App {
     pub(crate) fn install_update_flow(&mut self) -> Result<()> {
@@ -12,7 +48,15 @@ impl App {
         let mut plan = self.build_default_install_plan(&current)?;
         let should_install = self.install_planner(&current, &mut plan)?;
         if should_install {
-            self.run_install(&plan)?;
+            match self.run_install(&plan) {
+                Ok(()) => {}
+                Err(e) if e.downcast_ref::<UserCanceled>().is_some() => {
+                    println!();
+                    println!("  {} {}", style("✕").yellow(), style(e.to_string()).yellow());
+                    println!("  {}", style("（已返回主菜单，未执行任何破坏性操作）").dim());
+                }
+                Err(e) => return Err(e),
+            }
         }
         self.pause("安装流程结束，按回车返回主菜单")?;
         Ok(())
@@ -852,6 +896,7 @@ impl App {
                 .to_string(),
             "取消本次更新".to_string(),
         ];
+        self.drain_pending_input();
         let choice = Select::with_theme(&self.theme)
             .with_prompt("如何处理这些本地改动？")
             .items(&items)
@@ -890,6 +935,7 @@ impl App {
                     style("（.gitignore 内的文件如 venv、data、知识库等不受影响）").dim()
                 );
                 println!("{}", style(&bar).red().bold());
+                self.drain_pending_input();
                 let confirmed = Confirm::with_theme(&self.theme)
                     .with_prompt(
                         style("我已了解风险，确认丢弃")
@@ -901,7 +947,9 @@ impl App {
                     .interact()
                     .with_context(|| "读取确认失败")?;
                 if !confirmed {
-                    bail!("已取消：未确认丢弃本地修改");
+                    return Err(anyhow!(UserCanceled(
+                        "已取消：未确认丢弃本地修改".to_string()
+                    )));
                 }
                 self.run_shell(&format!(
                     "cd '{}' && git reset --hard HEAD && git clean -fd",
@@ -909,10 +957,10 @@ impl App {
                 ))?;
             }
             _ => {
-                bail!(
+                return Err(anyhow!(UserCanceled(format!(
                     "已取消：{} 存在未保存的本地修改",
                     target.display()
-                );
+                ))));
             }
         }
         Ok(())
@@ -1013,10 +1061,80 @@ impl App {
 "#;
             fs::write(&compose_path, compose)?;
         }
+        self.handle_napcat_container_conflict(&napcat_dir)?;
         self.run_shell(&format!(
             "cd '{}' && docker compose up -d",
             shell_escape(&napcat_dir)
         ))
+    }
+
+    /// `docker compose up -d` 在同名容器（非本 compose 项目托管）存在时会冲突。
+    /// 这里先用 `docker ps -aq --filter name=^napcat$` 探测，命中就询问用户
+    /// 是否 `docker rm -f` 后重建；选否则按用户取消处理。
+    fn handle_napcat_container_conflict(&self, napcat_dir: &Path) -> Result<()> {
+        let output = Command::new("bash")
+            .arg("-lc")
+            .arg("docker ps -aq --filter name=^napcat$ 2>/dev/null || true")
+            .output()
+            .with_context(|| "查询 napcat 容器状态失败")?;
+        let id_blob = String::from_utf8_lossy(&output.stdout);
+        let ids: Vec<&str> = id_blob
+            .split_whitespace()
+            .filter(|s| !s.is_empty())
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        let status_out = Command::new("bash")
+            .arg("-lc")
+            .arg("docker ps -a --filter name=^napcat$ --format '{{.ID}}  {{.Status}}  {{.Image}}'")
+            .output()
+            .ok();
+        let status = status_out
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+
+        println!();
+        println!(
+            "  {}",
+            style("⚠  检测到已存在同名 docker 容器: napcat")
+                .yellow()
+                .bold()
+        );
+        if !status.is_empty() {
+            for line in status.lines() {
+                println!("    {}", style(line).dim());
+            }
+        }
+        println!(
+            "    {}",
+            style(format!(
+                "compose 目录: {}",
+                napcat_dir.display()
+            ))
+            .dim()
+        );
+        println!(
+            "    {}",
+            style("继续部署需先删除旧容器（镜像与挂载卷不会被动）").dim()
+        );
+
+        self.drain_pending_input();
+        let confirmed = Confirm::with_theme(&self.theme)
+            .with_prompt("删除旧容器并重新部署？")
+            .default(true)
+            .interact()
+            .with_context(|| "读取确认失败")?;
+
+        if !confirmed {
+            return Err(anyhow!(UserCanceled(
+                "已取消：保留旧 napcat 容器，未重新部署".to_string()
+            )));
+        }
+
+        self.run_shell("docker rm -f napcat")?;
+        Ok(())
     }
 
     pub(crate) fn install_llbot(&self, plan: &InstallPlan) -> Result<()> {

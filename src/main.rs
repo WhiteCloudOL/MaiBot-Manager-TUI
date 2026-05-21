@@ -1,7 +1,6 @@
 mod access;
 mod app;
 mod installer;
-mod lpmm;
 mod model;
 mod plugins;
 mod runtime;

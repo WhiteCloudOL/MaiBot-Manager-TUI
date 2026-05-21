@@ -1,6 +1,6 @@
 # MaiBot Manager TUI
 
-面向 Linux 服务器的 MaiBot 一站式部署与运维终端面板。使用 Rust 编写，是具有MaiBot安装、更新、服务管理、协议端管理、配置查看、LPMM 与插件管理能力的单文件程序。  
+面向 Linux 服务器的 MaiBot 一站式部署与运维终端面板。使用 Rust 编写，是具有MaiBot安装、更新、服务管理、协议端管理、配置查看与插件管理能力的单文件程序。  
 
 > 声明：本项目使用`Claude Code`/`Codex` 进行开发  
 
@@ -15,7 +15,6 @@
 - **LLBot 辅助安装**：安装 LuckyLilliaBot 时自动按 PM 适配预装 LinuxQQ（`apt`/`dnf`/`yum`/`zypper`/`pacman+yay/paru`）。
 - **依赖自检**：进入安装流程时自动检测包管理器，缺失的 `git/curl/screen/unzip/python3` 等基础工具按当前发行版自动补装。
 - **配置访问**：集中查看 MaiBot、NapCat、LLBot WebUI 地址与密钥；初始化访问配置带二次确认。
-- **LPMM 管理**：知识库目录初始化、前台 / 后台执行提取与导入任务。
 - **插件管理**：安装、卸载插件并按需补装依赖。
 
 ## 目录结构
@@ -28,7 +27,6 @@
 │   ├── installer.rs  # 安装计划、向导、部署执行、测速
 │   ├── services.rs   # MaiBot / NapCat / LLBot 服务管理
 │   ├── access.rs     # WebUI 访问汇总与 Adapter 黑白名单
-│   ├── lpmm.rs       # LPMM 目录、提取、导入流程
 │   ├── plugins.rs    # 插件安装、卸载、依赖
 │   ├── runtime.rs    # 配置 IO、命令执行
 │   ├── ui.rs         # 页眉、列宽对齐、提示与 prompt/raw mode 切换
