@@ -38,6 +38,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Add rust-lld to PATH
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: echo "$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin" >> "$GITHUB_PATH"
+
       - name: Cache cargo registry & target
         uses: actions/cache@v4
         with:

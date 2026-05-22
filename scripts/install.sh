@@ -341,7 +341,8 @@ main() {
     echo
     printf '%s%s%s\n' "$BOLD" "安装完成 ($tag)" "$RESET"
     printf '  二进制路径: %s\n' "$dst"
-    printf '  调用方式:   %s\n' "$BINARY_NAME"
+    printf '  直接启动:   %s\n' "$BINARY_NAME"
+    printf '  以后进入 MaiBot 直接输入: %s\n' "$BINARY_NAME"
     echo
     if ! command -v "$BINARY_NAME" >/dev/null 2>&1; then
         warn "当前 shell 仍未识别 maibot 命令。"
