@@ -25,12 +25,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
             output_name: maibot-manager-x86_64
-            cross_pkg: ""
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             output_name: maibot-manager-arm64
-            cross_pkg: gcc-aarch64-linux-gnu
 
     steps:
       - uses: actions/checkout@v4
@@ -39,12 +37,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install cross compiler
-        if: matrix.cross_pkg != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.cross_pkg }}
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -58,7 +50,7 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Prepare artifact
         run: |

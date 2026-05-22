@@ -57,20 +57,19 @@
 构建环境：
 
 - Rust toolchain
-- target：`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`
-- ARM64 交叉编译器：`gcc-aarch64-linux-gnu`
+- target：`x86_64-unknown-linux-musl`、`aarch64-unknown-linux-musl`
 
 WSL Ubuntu 安装示例：
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential gcc-aarch64-linux-gnu pkg-config curl
+sudo apt-get install -y build-essential pkg-config curl
 curl https://sh.rustup.rs -sSf | sh -s -- -y
 source ~/.cargo/env
-rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 ```
 
-仓库中的 `.cargo/config.toml` 已为 `aarch64-unknown-linux-gnu` 配置交叉链接器。
+发布脚本默认使用 musl 静态目标，产物不依赖目标服务器的 GLIBC 版本。
 
 ## 自定义配置
 

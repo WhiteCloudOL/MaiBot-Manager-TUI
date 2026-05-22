@@ -8,10 +8,11 @@ set -euo pipefail
 source ~/.cargo/env
 cd '$wslProjectRoot'
 mkdir -p output
-cargo build --release --target x86_64-unknown-linux-gnu
-cargo build --release --target aarch64-unknown-linux-gnu
-cp target/x86_64-unknown-linux-gnu/release/maibot-manager-tui output/maibot-manager-x86_64
-cp target/aarch64-unknown-linux-gnu/release/maibot-manager-tui output/maibot-manager-arm64
+rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+cargo build --release --locked --target x86_64-unknown-linux-musl
+cargo build --release --locked --target aarch64-unknown-linux-musl
+cp target/x86_64-unknown-linux-musl/release/maibot-manager-tui output/maibot-manager-x86_64
+cp target/aarch64-unknown-linux-musl/release/maibot-manager-tui output/maibot-manager-arm64
 echo 'Build complete:'
 ls -lh output
 "@
