@@ -41,7 +41,7 @@ impl App {
             self.print_header(None);
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("Bot 协议端服务")
-                .items(["管理 NapCatQQ", "管理 LuckyLilliaBot", "返回"])
+                .items(&["管理 NapCatQQ", "管理 LuckyLilliaBot", "返回"])
                 .default(0)
                 .interact()?;
             match choice {
@@ -68,14 +68,14 @@ impl App {
             self.print_status_dot("运行状态", if running { "运行中" } else { "未运行" }, running);
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("MaiBot 核心管理")
-                .items(["启动 MaiBot", "停止 MaiBot", "进入 Screen 控制台", "返回"])
+                .items(&["启动 MaiBot", "停止 MaiBot", "进入 Screen 控制台", "返回"])
                 .default(0)
                 .interact()?;
             match choice {
                 0 => {
                     let run_mode = Select::with_theme(&self.theme)
                         .with_prompt("启动方式")
-                        .items(["正常后台启动", "启动并进入控制台（首次运行建议）"])
+                        .items(&["正常后台启动", "启动并进入控制台（首次运行建议）"])
                         .default(0)
                         .interact()?;
                     let body = if py_env == "uv" {
@@ -115,7 +115,7 @@ impl App {
             self.print_kv("目录", &napcat_dir.display().to_string());
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("NapCat 管理")
-                .items([
+                .items(&[
                     "启动 NapCat",
                     "停止 NapCat",
                     "重启 NapCat",
@@ -188,7 +188,7 @@ impl App {
             self.print_status_dot("运行状态", if running { "运行中" } else { "未运行" }, running);
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("LuckyLilliaBot 管理")
-                .items([
+                .items(&[
                     "启动 LuckyLilliaBot",
                     "停止 LuckyLilliaBot",
                     "重启 LuckyLilliaBot",

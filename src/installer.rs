@@ -653,7 +653,7 @@ impl App {
                 let choice = self.with_prompt_mode(|| {
                     Select::with_theme(&self.theme)
                         .with_prompt("请选择回退方案")
-                        .items(["重试测速", "使用 GitHub 官方直连", "取消安装"])
+                        .items(&["重试测速", "使用 GitHub 官方直连", "取消安装"])
                         .default(0)
                         .interact()
                         .map_err(Into::into)
