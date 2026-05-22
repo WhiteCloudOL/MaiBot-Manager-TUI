@@ -16,7 +16,7 @@ impl App {
             self.print_header(None);
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("配置与访问")
-                .items(&[
+                .items([
                     "查看 WebUI 访问信息",
                     "初始化 MaiBot 访问配置",
                     "修改 Adapter 黑白名单配置",
@@ -180,7 +180,7 @@ impl App {
             );
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("Adapter 黑白名单管理")
-                .items(&[
+                .items([
                     "切换群聊名单类型",
                     "添加群号到群聊列表",
                     "从群聊列表移除群号",

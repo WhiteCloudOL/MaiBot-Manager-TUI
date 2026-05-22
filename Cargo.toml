@@ -2,22 +2,21 @@
 name = "maibot-manager-tui"
 version = "0.1.11"
 edition = "2024"
-rust-version = "1.85"
 build = "build.rs"
 
 [dependencies]
 anyhow = "1.0"
-crossterm = "0.27"
-ctrlc = "3.4"
+crossterm = "0.29"
+ctrlc = "3.5"
 dialoguer = "0.12"
-dirs = "5.0"
-regex = "1.10"
+dirs = "6.0"
+regex = "1.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml_edit = "0.22"
+toml_edit = "0.23"
 
 [build-dependencies]
-toml_edit = "0.22"
+toml_edit = "0.23"
 
 [profile.release]
 lto = true

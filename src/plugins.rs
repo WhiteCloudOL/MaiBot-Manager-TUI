@@ -25,7 +25,7 @@ impl App {
             }
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("插件管理")
-                .items(&["安装插件", "卸载插件", "安装插件依赖", "返回"])
+                .items(["安装插件", "卸载插件", "安装插件依赖", "返回"])
                 .default(0)
                 .interact()?;
             match choice {
