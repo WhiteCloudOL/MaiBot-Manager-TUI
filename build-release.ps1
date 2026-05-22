@@ -1,20 +1,27 @@
 $ErrorActionPreference = "Stop"
 
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$wslProjectRoot = "/mnt/" + $projectRoot.Substring(0,1).ToLower() + $projectRoot.Substring(2).Replace("\", "/")
+$projectRoot = (Resolve-Path (Split-Path -Parent $MyInvocation.MyCommand.Path)).Path
+$wslDistro = if ($env:MAIBOT_WSL_DISTRO) { $env:MAIBOT_WSL_DISTRO } else { "Ubuntu-24.04" }
 
-$bashScript = @"
-set -euo pipefail
-source ~/.cargo/env
-cd '$wslProjectRoot'
-mkdir -p output
-rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-cargo build --release --locked --target x86_64-unknown-linux-musl
-cargo build --release --locked --target aarch64-unknown-linux-musl
-cp target/x86_64-unknown-linux-musl/release/maibot-manager-tui output/maibot-manager-x86_64
-cp target/aarch64-unknown-linux-musl/release/maibot-manager-tui output/maibot-manager-arm64
-echo 'Build complete:'
-ls -lh output
-"@
+function ConvertTo-BashSingleQuoted([string]$Value) {
+    return "'" + $Value.Replace("'", "'\''") + "'"
+}
 
-wsl -d Ubuntu-24.04 -- bash -lc $bashScript
+if ($projectRoot -match '^([A-Za-z]):\\(.*)$') {
+    $drive = $Matches[1].ToLowerInvariant()
+    $path = $Matches[2].Replace('\', '/')
+    $wslProjectRoot = "/mnt/$drive/$path"
+} else {
+    $escapedWindowsPath = $projectRoot.Replace('\', '\\')
+    $wslProjectRoot = (wsl -d $wslDistro -- wslpath -a $escapedWindowsPath).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($wslProjectRoot)) {
+        throw "Failed to map project path into WSL distro '$wslDistro'."
+    }
+}
+
+$escapedProjectRoot = ConvertTo-BashSingleQuoted $wslProjectRoot
+$bashCommand = "cd $escapedProjectRoot && bash ./build-release.sh"
+
+Write-Host "Using WSL distro: $wslDistro"
+wsl -d $wslDistro -- bash -lc $bashCommand
+exit $LASTEXITCODE
