@@ -1160,11 +1160,17 @@ impl App {
         fs::create_dir_all(&llbot_dir)?;
         let arch = detect_arch()?;
         let asset_name = format!("LLBot-CLI-linux-{arch}.zip");
+        let proxy_prefix = if plan.github_proxy.is_empty() || plan.github_proxy == "https://github.com" {
+            String::new()
+        } else {
+            format!("{}/", plan.github_proxy.trim_end_matches('/'))
+        };
         let script = format!(
             r#"set -e
 api_url="https://api.github.com/repos/LLOneBot/LuckyLilliaBot/releases/latest"
 asset_url=$(curl -fsSL "$api_url" | python3 -c 'import sys,json; data=json.load(sys.stdin); name=sys.argv[1]; print(next((a["browser_download_url"] for a in data.get("assets",[]) if a.get("name")==name),""))' "{asset_name}")
 [ -n "$asset_url" ]
+asset_url="{proxy}$asset_url"
 mkdir -p '{llbot}'
 zip_path='{llbot}/{asset_name}'
 curl -fL --retry 3 --connect-timeout 10 -o "$zip_path" "$asset_url"
@@ -1173,6 +1179,7 @@ unzip -oq "$zip_path" -d '{llbot}'
 chmod +x '{llbot}/start.sh' '{llbot}/llbot' 2>/dev/null || true
 find '{llbot}/bin' -type f -exec chmod +x {{}} \; 2>/dev/null || true
 "#,
+            proxy = proxy_prefix,
             llbot = shell_escape(&llbot_dir)
         );
         self.run_shell(&script)?;
