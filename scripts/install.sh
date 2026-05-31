@@ -175,7 +175,7 @@ choose_github_proxy() {
         printf '  %s%2d)%s %s\n' "$CYAN" "$i" "$RESET" "$label" >&2
         i=$((i+1))
     done
-    printf '  %s(下次想跳过这步，可设置环境变量 MAIBOT_FORCE_PROXY)%s\n' "$DIM" "$RESET" >&2
+    printf '  %s(如需跳过此步，可设置环境变量 MAIBOT_FORCE_PROXY)%s\n' "$DIM" "$RESET" >&2
 
     local pick=""
     while :; do

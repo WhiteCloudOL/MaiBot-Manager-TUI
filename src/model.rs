@@ -27,6 +27,13 @@ pub struct AppConfig {
     pub mai_path: String,
     pub mai_python_env: String,
     pub mai_llbot_path: String,
+    pub mai_install_mode: String,
+    pub mai_venv_mode: String,
+    pub maibot_branch: String,
+    pub pip_display: String,
+    pub pip_index: String,
+    pub pip_host: String,
+    pub bot_protocols: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -35,6 +42,7 @@ pub struct InstallPlan {
     pub install_mode: InstallMode,
     pub python_env: PythonEnv,
     pub venv_mode: VenvMode,
+    pub maibot_branch: String,
     pub github_proxy: String,
     pub pip_display: String,
     pub pip_index: String,
@@ -86,6 +94,7 @@ pub enum PlanField {
     InstallMode,
     PythonEnv,
     VenvMode,
+    MaiBotBranch,
     GithubProxy,
     PipSource,
     BotProtocols,

@@ -40,6 +40,7 @@ impl App {
         if let Some(plan) = plan {
             self.print_section("配置预览", "当前安装计划");
             self.print_kv("目录", &plan.install_path.display().to_string());
+            self.print_kv("分支", &plan.maibot_branch);
             self.print_kv("模式", plan.install_mode.label());
             self.print_kv("Python", plan.python_env.label());
             self.print_kv("环境", plan.venv_mode.label(plan.python_env));

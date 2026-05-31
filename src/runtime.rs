@@ -50,13 +50,43 @@ impl App {
                 .cloned()
                 .unwrap_or_else(|| "system".into()),
             mai_llbot_path: map.get("MAI_LLBOT_PATH").cloned().unwrap_or_default(),
+            mai_install_mode: map.get("MAI_INSTALL_MODE").cloned().unwrap_or_default(),
+            mai_venv_mode: map.get("MAI_VENV_MODE").cloned().unwrap_or_default(),
+            maibot_branch: map
+                .get("MAIBOT_BRANCH")
+                .cloned()
+                .unwrap_or_else(|| "main".into()),
+            pip_display: map.get("PIP_DISPLAY").cloned().unwrap_or_default(),
+            pip_index: map.get("PIP_INDEX").cloned().unwrap_or_default(),
+            pip_host: map.get("PIP_HOST").cloned().unwrap_or_default(),
+            bot_protocols: map.get("BOT_PROTOCOLS").cloned().unwrap_or_default(),
         })
     }
 
     pub(crate) fn save_config(&self, cfg: &AppConfig) -> Result<()> {
         let content = format!(
-            "USER_INSTALL_PATH=\"{}\"\nMAI_PATH=\"{}\"\nMAI_PYTHON_ENV=\"{}\"\nMAI_LLBOT_PATH=\"{}\"\n",
-            cfg.user_install_path, cfg.mai_path, cfg.mai_python_env, cfg.mai_llbot_path
+            "USER_INSTALL_PATH=\"{}\"\n\
+             MAI_PATH=\"{}\"\n\
+             MAI_PYTHON_ENV=\"{}\"\n\
+             MAI_LLBOT_PATH=\"{}\"\n\
+             MAI_INSTALL_MODE=\"{}\"\n\
+             MAI_VENV_MODE=\"{}\"\n\
+             MAIBOT_BRANCH=\"{}\"\n\
+             PIP_DISPLAY=\"{}\"\n\
+             PIP_INDEX=\"{}\"\n\
+             PIP_HOST=\"{}\"\n\
+             BOT_PROTOCOLS=\"{}\"\n",
+            cfg.user_install_path,
+            cfg.mai_path,
+            cfg.mai_python_env,
+            cfg.mai_llbot_path,
+            cfg.mai_install_mode,
+            cfg.mai_venv_mode,
+            cfg.maibot_branch,
+            cfg.pip_display,
+            cfg.pip_index,
+            cfg.pip_host,
+            cfg.bot_protocols,
         );
         fs::write(&self.config_path, content)?;
         Ok(())

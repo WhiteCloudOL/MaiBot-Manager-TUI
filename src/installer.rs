@@ -65,13 +65,9 @@ impl App {
     pub(crate) fn install_planner(&mut self, current: &AppConfig, plan: &mut InstallPlan) -> Result<bool> {
         let _guard = TerminalUiGuard::enter()?;
         let mut target: Option<PlannerEntry> = None;
+        let mut expanded: Option<PlanField> = None;
 
         loop {
-            let expanded = match &target {
-                Some(PlannerEntry::Field(f)) => Some(*f),
-                Some(PlannerEntry::Choice(f, _)) => Some(*f),
-                _ => None,
-            };
             let entries = self.build_planner_entries(plan, expanded);
             let mut selected = if let Some(t) = &target {
                 entries.iter().position(|e| e == t).unwrap_or(0)
@@ -118,9 +114,15 @@ impl App {
                     }
                     KeyCode::Enter => match entries.get(selected).cloned() {
                         Some(PlannerEntry::Field(field)) => {
-                            target = Some(PlannerEntry::Field(field));
                             if field == PlanField::InstallPath {
+                                target = Some(PlannerEntry::Field(field));
                                 self.edit_install_path(plan)?;
+                            } else if expanded == Some(field) {
+                                expanded = None;
+                                target = Some(PlannerEntry::Field(field));
+                            } else {
+                                expanded = Some(field);
+                                target = Some(PlannerEntry::Field(field));
                             }
                         }
                         Some(PlannerEntry::Choice(field, choice_idx)) => {
@@ -131,8 +133,10 @@ impl App {
                             return Ok(true);
                         }
                         Some(PlannerEntry::Action(PlanAction::ResetDefaults)) => {
-                            *plan = self.build_default_install_plan(current)?;
+                            *plan = self.build_recommended_defaults();
+                            self.save_config(&self.plan_to_config(plan))?;
                             target = None;
+                            expanded = None;
                         }
                         Some(PlannerEntry::Action(PlanAction::BackToMenu)) => {
                             return Ok(false);
@@ -153,6 +157,7 @@ impl App {
     ) -> Vec<PlannerEntry> {
         let fields = [
             PlanField::InstallPath,
+            PlanField::MaiBotBranch,
             PlanField::InstallMode,
             PlanField::PythonEnv,
             PlanField::VenvMode,
@@ -180,6 +185,7 @@ impl App {
     pub(crate) fn planner_choices(&self, plan: &InstallPlan, field: PlanField) -> Vec<String> {
         match field {
             PlanField::InstallPath => vec!["按 Enter 输入自定义路径".into()],
+            PlanField::MaiBotBranch => vec!["main（稳定版）".into(), "dev（开发版）".into()],
             PlanField::InstallMode => vec!["正常更新/修复".into(), "全新安装（清空目标目录）".into()],
             PlanField::PythonEnv => vec!["本机 python3".into(), "uv (Python 3.14)".into()],
             PlanField::VenvMode => {
@@ -223,6 +229,7 @@ impl App {
     pub(crate) fn planner_field_label(&self, field: PlanField) -> &'static str {
         match field {
             PlanField::InstallPath => "目录",
+            PlanField::MaiBotBranch => "主程序分支",
             PlanField::InstallMode => "模式",
             PlanField::PythonEnv => "Python",
             PlanField::VenvMode => "环境",
@@ -236,6 +243,7 @@ impl App {
     pub(crate) fn planner_field_value(&self, plan: &InstallPlan, field: PlanField) -> String {
         match field {
             PlanField::InstallPath => plan.install_path.display().to_string(),
+            PlanField::MaiBotBranch => plan.maibot_branch.clone(),
             PlanField::InstallMode => plan.install_mode.label().to_string(),
             PlanField::PythonEnv => plan.python_env.label().to_string(),
             PlanField::VenvMode => plan.venv_mode.label(plan.python_env).to_string(),
@@ -271,6 +279,12 @@ impl App {
     pub(crate) fn planner_choice_active(&self, plan: &InstallPlan, field: PlanField, choice_idx: usize) -> bool {
         match field {
             PlanField::InstallPath => false,
+            PlanField::MaiBotBranch => {
+                matches!(
+                    (choice_idx, plan.maibot_branch.as_str()),
+                    (0, "main") | (1, "dev")
+                )
+            }
             PlanField::InstallMode => {
                 matches!(
                     (choice_idx, plan.install_mode),
@@ -337,7 +351,7 @@ impl App {
         selected: usize,
         expanded: Option<PlanField>,
     ) {
-        self.print_section("安装计划", "↑/↓ 移动 · Enter 展开或应用 · Esc 返回");
+        self.print_section("安装计划", "↑/↓ 移动 · Enter 展开/收起 · Esc 返回");
         let mut printed_actions = false;
         for (idx, entry) in entries.iter().enumerate() {
             let active = idx == selected;
@@ -410,6 +424,9 @@ impl App {
     ) -> Result<()> {
         match field {
             PlanField::InstallPath => self.edit_install_path(plan)?,
+            PlanField::MaiBotBranch => {
+                plan.maibot_branch = if choice_idx == 1 { "dev" } else { "main" }.into();
+            }
             PlanField::InstallMode => {
                 plan.install_mode = if choice_idx == 1 {
                     InstallMode::Clean
@@ -550,25 +567,121 @@ impl App {
                 .ok_or_else(|| anyhow!("无法定位 HOME 目录"))?
                 .join("maimai")
         };
-        let bot_protocols = vec![BotProtocol::NapCat];
+        let bot_protocols = if current.bot_protocols.is_empty() {
+            vec![BotProtocol::NapCat]
+        } else {
+            current
+                .bot_protocols
+                .split(',')
+                .filter_map(|s| match s.trim() {
+                    "napcat" => Some(BotProtocol::NapCat),
+                    "llbot" => Some(BotProtocol::LuckyLilliaBot),
+                    _ => None,
+                })
+                .collect()
+        };
+        let install_mode = if current.mai_install_mode == "clean" {
+            InstallMode::Clean
+        } else {
+            InstallMode::Normal
+        };
+        let python_env = if current.mai_python_env == "uv" {
+            PythonEnv::Uv
+        } else {
+            PythonEnv::System
+        };
+        let venv_mode = if current.mai_venv_mode == "recreate" {
+            VenvMode::Recreate
+        } else {
+            VenvMode::Keep
+        };
+
+        // 如果配置里有自定义 pip 源，恢复之；否则使用系统默认
+        let (pip_display, pip_index, pip_host, uv_index) = if !current.pip_index.is_empty() {
+            (
+                if current.pip_display.is_empty() {
+                    "自定义".into()
+                } else {
+                    current.pip_display.clone()
+                },
+                current.pip_index.clone(),
+                current.pip_host.clone(),
+                current.pip_index.clone(),
+            )
+        } else {
+            ("系统默认".into(), String::new(), String::new(), String::new())
+        };
 
         Ok(InstallPlan {
             install_path,
-            install_mode: InstallMode::Normal,
-            python_env: if current.mai_python_env == "system" {
-                PythonEnv::System
+            install_mode,
+            python_env,
+            venv_mode,
+            maibot_branch: if current.maibot_branch.is_empty() {
+                "main".into()
             } else {
-                PythonEnv::Uv
+                current.maibot_branch.clone()
             },
+            github_proxy: String::new(),
+            pip_display,
+            pip_index,
+            pip_host,
+            uv_index,
+            bot_protocols,
+            docker_mirror: DockerMirror::Keep,
+        })
+    }
+
+    pub(crate) fn build_recommended_defaults(&self) -> InstallPlan {
+        InstallPlan {
+            install_path: dirs::home_dir()
+                .map(|h| h.join("maimai"))
+                .unwrap_or_default(),
+            install_mode: InstallMode::Normal,
+            python_env: PythonEnv::System,
             venv_mode: VenvMode::Keep,
+            maibot_branch: "main".into(),
             github_proxy: String::new(),
             pip_display: "系统默认".into(),
             pip_index: String::new(),
             pip_host: String::new(),
             uv_index: String::new(),
-            bot_protocols,
+            bot_protocols: vec![BotProtocol::NapCat],
             docker_mirror: DockerMirror::Keep,
-        })
+        }
+    }
+
+    pub(crate) fn plan_to_config(&self, plan: &InstallPlan) -> AppConfig {
+        AppConfig {
+            user_install_path: plan.install_path.display().to_string(),
+            mai_path: plan.install_path.display().to_string(),
+            mai_python_env: match plan.python_env {
+                PythonEnv::Uv => "uv".into(),
+                PythonEnv::System => "system".into(),
+            },
+            mai_llbot_path: plan.install_path.join("LLBot").display().to_string(),
+            mai_install_mode: match plan.install_mode {
+                InstallMode::Clean => "clean".into(),
+                InstallMode::Normal => "normal".into(),
+            },
+            mai_venv_mode: match plan.venv_mode {
+                VenvMode::Recreate => "recreate".into(),
+                VenvMode::Keep => "keep".into(),
+            },
+            maibot_branch: plan.maibot_branch.clone(),
+            pip_display: plan.pip_display.clone(),
+            pip_index: plan.pip_index.clone(),
+            pip_host: plan.pip_host.clone(),
+            bot_protocols: plan
+                .bot_protocols
+                .iter()
+                .map(|p| match p {
+                    BotProtocol::NapCat => "napcat",
+                    BotProtocol::LuckyLilliaBot => "llbot",
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        }
     }
 
     pub(crate) fn edit_install_path(&self, plan: &mut InstallPlan) -> Result<()> {
@@ -725,7 +838,7 @@ impl App {
         self.clone_or_update_repo(
             &repo_url(&plan.github_proxy, "MaiM-with-u/MaiBot"),
             &plan.install_path.join("MaiBot"),
-            Some("main"),
+            Some(&plan.maibot_branch),
             plan.install_mode,
         )?;
         self.clone_or_update_repo(
@@ -742,15 +855,7 @@ impl App {
             plan.install_mode,
         )?;
         self.setup_python_env(&plan)?;
-        self.save_config(&AppConfig {
-            user_install_path: plan.install_path.display().to_string(),
-            mai_path: plan.install_path.display().to_string(),
-            mai_python_env: match plan.python_env {
-                PythonEnv::Uv => "uv".into(),
-                PythonEnv::System => "system".into(),
-            },
-            mai_llbot_path: plan.install_path.join("LLBot").display().to_string(),
-        })?;
+        self.save_config(&self.plan_to_config(&plan))?;
         if plan.bot_protocols.contains(&BotProtocol::NapCat) {
             self.install_napcat(&plan)?;
         }

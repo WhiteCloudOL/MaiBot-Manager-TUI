@@ -3,7 +3,7 @@
 面向 Linux 服务器的 MaiBot 一站式部署与运维终端面板。使用 Rust 编写，是具有MaiBot安装、更新、服务管理、协议端管理、配置查看与插件管理能力的单文件程序。  
 
 > 食用文档： https://docs.meowyun.cn/qqbot/maibot/install.html  
-> 声明：本项目使用`Claude Code`/`Codex` 进行开发  
+> 声明：本项目使用`Claude Code`/`Codex` 协助开发  
 
 ## 功能概览  
 
@@ -73,7 +73,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
 ## 自定义配置
 
-仓库根的 `app.toml` 是构建时配置（**不是运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
+仓库根的 `app.toml` 是构建时配置（**非运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
 
 ```toml
 version          = "0.1.1"   # 标题栏显示的版本号
@@ -113,6 +113,10 @@ output/maibot-manager-arm64
 在 Linux 服务器执行下述命令，会自动识别架构、并行测速 GitHub 镜像、下载最新 release 到 `~/.local/bin/maibot` 并写入 `bash` / `zsh` / `fish` 的 PATH：
 
 ```bash
+# 国内安装
+curl -fsSL https://dl.meowyun.cn/bot/mmtui/install.sh | bash
+
+# 海外安装  
 curl -fsSL https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/main/scripts/install.sh | bash
 ```
 
