@@ -53,7 +53,7 @@ impl App {
             mai_python_env: map
                 .get("MAI_PYTHON_ENV")
                 .cloned()
-                .unwrap_or_else(|| "system".into()),
+                .unwrap_or_else(|| "uv".into()),
             mai_llbot_path: map.get("MAI_LLBOT_PATH").cloned().unwrap_or_default(),
             mai_install_mode: map.get("MAI_INSTALL_MODE").cloned().unwrap_or_default(),
             mai_venv_mode: map.get("MAI_VENV_MODE").cloned().unwrap_or_default(),

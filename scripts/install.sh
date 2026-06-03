@@ -7,7 +7,7 @@
 # 可选环境变量:
 #   MAIBOT_INSTALL_DIR   安装目录，默认 $HOME/.local/bin
 #   MAIBOT_FORCE_PROXY   强制使用的镜像（如 https://gh-proxy.org 或 direct）
-#   MAIBOT_VERSION       指定版本 tag（如 v0.2.0），默认拉取 latest
+#   MAIBOT_VERSION       指定版本 tag（如 v0.2.1），默认拉取 latest
 
 set -euo pipefail
 

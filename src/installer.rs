@@ -616,10 +616,10 @@ impl App {
         } else {
             InstallMode::Normal
         };
-        let python_env = if current.mai_python_env == "uv" {
-            PythonEnv::Uv
-        } else {
+        let python_env = if current.mai_python_env == "system" {
             PythonEnv::System
+        } else {
+            PythonEnv::Uv
         };
         let venv_mode = if current.mai_venv_mode == "recreate" {
             VenvMode::Recreate
@@ -674,7 +674,7 @@ impl App {
                 .map(|h| h.join("maimai"))
                 .unwrap_or_default(),
             install_mode: InstallMode::Normal,
-            python_env: PythonEnv::System,
+            python_env: PythonEnv::Uv,
             venv_mode: VenvMode::Keep,
             maibot_branch: "main".into(),
             github_proxy: String::new(),

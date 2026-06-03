@@ -31,6 +31,7 @@ pub(crate) fn print_help() {
   install 和 update 使用同一套安装计划。未指定的选项会优先读取 ~/.maibot_config，
   没有配置时使用推荐默认值。执行过程中仍会保留必要的风险提示和确认，例如清空目录、
   处理 Git 本地改动、删除冲突的 NapCat 容器等。
+  推荐默认值为当前用户 HOME 下的 maimai 目录、uv Python 环境和 NapCatQQ 协议端。
 
 安装选项:
   --path <目录>                  安装目录，默认读取配置或 ~/maimai

@@ -76,7 +76,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 仓库根的 `app.toml` 是构建时配置（**非运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
 
 ```toml
-version          = "0.2.0"   # 标题栏显示的版本号
+version          = "0.2.1"   # 标题栏显示的版本号
 build_label      = "..."     # 标题栏副标题
 github_test_path = "..."     # 测速参考文件
 github_mirrors   = [...]     # 镜像源候选清单
@@ -125,7 +125,7 @@ curl -fsSL https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/mai
 ```text
 MAIBOT_INSTALL_DIR  安装目录，默认 ~/.local/bin
 MAIBOT_FORCE_PROXY  跳过测速，强制使用的镜像（或 direct）
-MAIBOT_VERSION      指定版本 tag（如 v0.1.2），默认 latest
+MAIBOT_VERSION      指定版本 tag（如 v0.2.1），默认 latest
 ```
 
 安装完成后重启终端或 `source` 对应的 rc 文件，即可在任意位置执行 `maibot`。
@@ -214,6 +214,7 @@ maibot install --mode clean --venv recreate --github direct --pip tsinghua
 ```
 
 未指定的安装参数会优先从 `~/.maibot_config` 读取；没有历史配置时使用推荐默认值。`install` 与 `update` 目前使用同一套安装计划，区别主要是语义表达，便于脚本里写得更清楚。
+推荐默认值为安装到当前用户 HOME 下的 `maimai` 目录（等价于 `~/maimai`）、使用 `uv` Python 环境，并安装 NapCatQQ 协议端。
 
 ### MaiBot 核心
 
