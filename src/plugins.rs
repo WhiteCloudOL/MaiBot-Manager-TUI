@@ -1,17 +1,71 @@
 use crate::{app::App, model::InstallMode, utils::*};
 use anyhow::Result;
 use dialoguer::{Input, Select};
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 impl App {
-    pub(crate) fn manage_plugins_menu(&self) -> Result<()> {
+    fn plugin_context(&self) -> Result<(PathBuf, PathBuf, PathBuf, String)> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
         let maibot_dir = root.join("MaiBot");
         let plugins_dir = maibot_dir.join("plugins");
         let venv_activate = root.join("venv/bin/activate");
-        let py_env = cfg.mai_python_env;
         fs::create_dir_all(&plugins_dir)?;
+        Ok((maibot_dir, plugins_dir, venv_activate, cfg.mai_python_env))
+    }
+
+    pub(crate) fn install_plugin_from_input(&self, input: &str) -> Result<()> {
+        let (maibot_dir, plugins_dir, venv_activate, py_env) = self.plugin_context()?;
+        let url = convert_github_url(input, "https://github.com");
+        let plugin_name = url
+            .rsplit('/')
+            .next()
+            .unwrap_or("plugin")
+            .trim_end_matches(".git");
+        let plugin_path = plugins_dir.join(plugin_name);
+        self.clone_or_update_repo(&url, &plugin_path, None, InstallMode::Normal)?;
+        let req = plugin_path.join("requirements.txt");
+        if req.exists() {
+            self.install_requirements(&maibot_dir, &venv_activate, &py_env, &req)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn remove_plugin(&self, name: &str) -> Result<()> {
+        let (_, plugins_dir, _, _) = self.plugin_context()?;
+        fs::remove_dir_all(plugins_dir.join(name))?;
+        Ok(())
+    }
+
+    pub(crate) fn install_plugin_dependencies(&self, name: &str) -> Result<()> {
+        let (maibot_dir, plugins_dir, venv_activate, py_env) = self.plugin_context()?;
+        let req = plugins_dir.join(name).join("requirements.txt");
+        if req.exists() {
+            self.install_requirements(&maibot_dir, &venv_activate, &py_env, &req)?;
+        } else {
+            println!("插件没有 requirements.txt: {name}");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn print_plugins(&self) -> Result<()> {
+        let (_, plugins_dir, _, _) = self.plugin_context()?;
+        let plugins = list_plugins(&plugins_dir)?;
+        if plugins.is_empty() {
+            println!("暂无已安装插件");
+        } else {
+            for plugin in plugins {
+                println!("{plugin}");
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn manage_plugins_menu(&self) -> Result<()> {
+        let (_, plugins_dir, _, _) = self.plugin_context()?;
         loop {
             self.clear();
             self.print_header(None);
@@ -33,18 +87,7 @@ impl App {
                     let input: String = Input::with_theme(&self.theme)
                         .with_prompt("输入 GitHub 插件地址或 username/repo")
                         .interact_text()?;
-                    let url = convert_github_url(&input, "https://github.com");
-                    let plugin_name = url
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or("plugin")
-                        .trim_end_matches(".git");
-                    let plugin_path = plugins_dir.join(plugin_name);
-                    self.clone_or_update_repo(&url, &plugin_path, None, InstallMode::Normal)?;
-                    let req = plugin_path.join("requirements.txt");
-                    if req.exists() {
-                        self.install_requirements(&maibot_dir, &venv_activate, &py_env, &req)?;
-                    }
+                    self.install_plugin_from_input(&input)?;
                 }
                 1 => {
                     let plugins = list_plugins(&plugins_dir)?;
@@ -57,7 +100,7 @@ impl App {
                         .items(&plugins)
                         .default(0)
                         .interact()?;
-                    fs::remove_dir_all(plugins_dir.join(&plugins[idx]))?;
+                    self.remove_plugin(&plugins[idx])?;
                 }
                 2 => {
                     let plugins = list_plugins(&plugins_dir)?;
@@ -70,10 +113,7 @@ impl App {
                         .items(&plugins)
                         .default(0)
                         .interact()?;
-                    let req = plugins_dir.join(&plugins[idx]).join("requirements.txt");
-                    if req.exists() {
-                        self.install_requirements(&maibot_dir, &venv_activate, &py_env, &req)?;
-                    }
+                    self.install_plugin_dependencies(&plugins[idx])?;
                 }
                 _ => break,
             }

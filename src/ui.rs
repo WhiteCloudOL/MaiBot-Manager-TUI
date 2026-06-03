@@ -1,12 +1,16 @@
-use crate::{app::App, model::*, utils::{display_width, pad_left}};
+use crate::{
+    app::App,
+    model::*,
+    utils::{display_width, pad_left},
+};
 use anyhow::{Context, Result};
 use crossterm::{
     cursor::{Hide, Show},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use dialoguer::console::style;
 use dialoguer::Input;
+use dialoguer::console::style;
 use std::io::{self, Write};
 
 const PANEL_WIDTH: usize = 60;
@@ -124,7 +128,12 @@ impl App {
         } else {
             style(label).red().dim()
         };
-        wln!("  {} {} {}", style(pad_left(key, KEY_WIDTH)).blue(), dot, text);
+        wln!(
+            "  {} {} {}",
+            style(pad_left(key, KEY_WIDTH)).blue(),
+            dot,
+            text
+        );
     }
 
     pub(crate) fn print_line(&self) {

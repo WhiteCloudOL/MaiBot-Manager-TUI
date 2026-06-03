@@ -1,19 +1,18 @@
-# MaiBot Manager TUI
+# MaiBot Manager
 
-面向 Linux 服务器的 MaiBot 一站式部署与运维终端面板。使用 Rust 编写，是具有MaiBot安装、更新、服务管理、协议端管理、配置查看与插件管理能力的单文件程序。  
+面向 Linux 服务器的 MaiBot 一站式部署与运维工具。使用 Rust 编写，是具有 MaiBot 安装、更新、服务管理、协议端管理、配置查看与插件管理能力的单文件程序；支持 TUI 面板，也支持直接通过 CLI 命令执行常用操作。
 
 > 食用文档： https://docs.meowyun.cn/qqbot/maibot/install.html  
 > 声明：本项目使用`Claude Code`/`Codex` 协助开发  
 
 ## 功能概览  
 
-- **单文件发布**：构建后输出 `x86_64` 与 `arm64` 两个 Linux 可执行文件。
+- **支持CLI/TUI**：支持使用`maibot`或`maibot tui`进入TUI界面；也支持附加参数执行CLI命令，便于AGENT使用MaiBot管理程序。
 - **主菜单概览**：进入主菜单即可看到 MaiBot、NapCat、LLBot 的运行状态。
 - **安装向导**：单页式安装计划，方向键展开 / 折叠选项，所见即所得。
-- **并行测速**：GitHub 官方线路与镜像源并行测速，自动选择最佳线路；全部失败时提供重试 / 直连 / 取消的回退选择。
+- **Github优选**：GitHub 官方线路与镜像源并行测速，自动选择最佳线路；全部失败时提供重试 / 直连 / 取消的回退选择。
 - **MaiBot 管理**：启动、停止、进入 `screen` 控制台。
-- **协议端管理**：NapCatQQ Docker 管理 + LuckyLilliaBot CLI 管理。
-- **LLBot 辅助安装**：安装 LuckyLilliaBot 时自动按 PM 适配预装 LinuxQQ（`apt`/`dnf`/`yum`/`zypper`/`pacman+yay/paru`）。
+- **LLBot/Napcat安装**：支持安装MaiBot的同时同步安装LLBot与NapcatQQ与常用命令执行。
 - **依赖自检**：进入安装流程时自动检测包管理器，缺失的 `git/curl/screen/unzip/python3` 等基础工具按当前发行版自动补装。
 - **配置访问**：集中查看 MaiBot、NapCat、LLBot WebUI 地址与密钥；初始化访问配置带二次确认。
 - **插件管理**：安装、卸载插件并按需补装依赖。
@@ -25,6 +24,7 @@
 ├── src/
 │   ├── main.rs       # 入口与模块声明
 │   ├── app.rs        # App 状态、主菜单、运行状态汇总
+│   ├── cli/          # CLI 参数解析与命令分发
 │   ├── installer.rs  # 安装计划、向导、部署执行、测速
 │   ├── services.rs   # MaiBot / NapCat / LLBot 服务管理
 │   ├── access.rs     # WebUI 访问汇总与 Adapter 黑白名单
@@ -76,7 +76,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 仓库根的 `app.toml` 是构建时配置（**非运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
 
 ```toml
-version          = "0.1.1"   # 标题栏显示的版本号
+version          = "0.2.0"   # 标题栏显示的版本号
 build_label      = "..."     # 标题栏副标题
 github_test_path = "..."     # 测速参考文件
 github_mirrors   = [...]     # 镜像源候选清单
@@ -130,7 +130,7 @@ MAIBOT_VERSION      指定版本 tag（如 v0.1.2），默认 latest
 
 安装完成后重启终端或 `source` 对应的 rc 文件，即可在任意位置执行 `maibot`。
 
-## 使用
+## 使用 TUI
 
 把对应架构的文件上传到 Linux 服务器后执行：
 
@@ -147,6 +147,218 @@ chmod +x ./maibot-manager-arm64
 ```
 
 主菜单进入「安装 / 更新 MaiBot」后会进入单页安装计划：把光标停在配置项上按 `Enter` 展开选项，再次 `Enter` 应用所选。光标会留在你刚操作的位置，跨字段移动也不会跳。
+
+安装到 PATH 后，也可以直接执行：
+
+```bash
+maibot
+maibot tui
+```
+
+## 使用 CLI
+
+查看帮助：
+
+```bash
+maibot help
+maibot --help
+maibot -h
+```
+
+CLI 适合在 SSH、脚本或 Agent 工作流中直接执行管理动作。除 `exec` 类命令外，CLI 默认执行完即退出；涉及清空目录、暴露 WebUI、删除冲突容器、处理 Git 本地改动等高风险操作时，程序仍会保留二次确认提示。
+
+### 安装 / 更新
+
+```bash
+# 使用当前配置或推荐默认值安装 / 更新
+maibot install
+maibot update
+
+# 指定安装目录、分支、Python 环境与协议端
+maibot install --path ~/maimai --branch main --python uv --protocol napcat
+
+# 全新安装，重建环境，GitHub 直连，使用清华 PyPI
+maibot install --mode clean --venv recreate --github direct --pip tsinghua
+```
+
+安装参数：
+
+```text
+--path <目录>                  安装目录，默认读取配置或 ~/maimai
+--branch <main|dev>            MaiBot 分支
+--mode <normal|clean>          更新/修复或清空目录全新安装
+--python <system|uv>           Python 环境
+--venv <keep|recreate>         保留或重建虚拟环境
+--github <auto|direct|URL>     GitHub 线路
+--pip <system|aliyun|tencent|tsinghua|ustc|official|URL>
+--protocol <napcat|llbot|none> 协议端
+--docker <one-ms|xuanyuan|official|keep>
+```
+
+参数说明：
+
+```text
+--mode normal      保留目标目录，更新或修复现有 MaiBot
+--mode clean       清空目标目录后全新安装，并强制重建虚拟环境
+--python system    使用系统 python3 + venv
+--python uv        使用 uv 创建并同步 Python 环境
+--github auto      并行测速 GitHub 官方线路和镜像源，自动选择最快线路
+--github direct    强制使用 https://github.com 直连
+--github URL       使用自定义 GitHub 代理前缀
+--pip system       使用系统默认 PyPI 配置
+--pip URL          使用自定义 PyPI 镜像，仅写入当前虚拟环境配置
+--protocol napcat  安装/更新 NapCatQQ Docker 协议端
+--protocol llbot   安装/更新 LuckyLilliaBot Linux CLI 协议端
+--protocol none    不安装附加协议端
+--docker keep      不修改 Docker daemon 配置
+```
+
+未指定的安装参数会优先从 `~/.maibot_config` 读取；没有历史配置时使用推荐默认值。`install` 与 `update` 目前使用同一套安装计划，区别主要是语义表达，便于脚本里写得更清楚。
+
+### MaiBot 核心
+
+```bash
+maibot core start
+maibot core start --exec
+maibot core stop
+maibot core restart
+maibot core status
+maibot core logs
+maibot core logs --tail 200
+maibot core logs --follow
+maibot core exec
+```
+
+`core logs` 通过 `screen hardcopy` 读取会话缓冲，不会进入或抢占 screen；`core exec` 会进入 `screen -r maibot`，进入前会保留退出提示。
+
+命令说明：
+
+```text
+start          后台启动 MaiBot，screen 会话名为 maibot
+start --exec   启动后立即进入 screen 控制台，首次运行或排错时推荐
+stop           停止 maibot screen 会话
+restart        重启 MaiBot 核心
+status         输出 running / stopped，适合脚本判断
+logs           查看最近 100 行 screen 缓冲日志
+logs --tail N  指定输出日志行数
+logs --follow  每 2 秒刷新一次 hardcopy 输出，不附着 screen
+exec           进入 screen 控制台；退出请按 Ctrl+A 再按 D
+```
+
+### 协议端服务
+
+NapCat：
+
+```bash
+maibot napcat start
+maibot napcat stop
+maibot napcat restart
+maibot napcat status
+maibot napcat logs
+maibot napcat logs --tail 200 --follow
+maibot napcat rebuild
+maibot napcat remove-container
+maibot napcat exec
+```
+
+NapCat 命令说明：
+
+```text
+start             docker compose up -d
+stop              docker compose stop
+restart           docker compose restart
+status            基于 docker ps 判断运行状态
+logs              docker compose logs --tail=100
+logs --follow     docker compose logs -f
+rebuild           docker compose down && pull && up -d
+remove-container  删除现有 napcat 容器，不删除镜像和挂载目录
+exec              docker exec -it napcat /bin/sh
+```
+
+LuckyLilliaBot：
+
+```bash
+maibot llbot start
+maibot llbot stop
+maibot llbot restart
+maibot llbot status
+maibot llbot logs
+maibot llbot logs --tail 200 --follow
+maibot llbot exec
+maibot llbot password <新密码>
+```
+
+LuckyLilliaBot 命令说明：
+
+```text
+start          后台启动 LLBot，screen 会话名为 llbot
+stop           停止 llbot screen 会话
+restart        重启 LLBot
+status         输出 running / stopped
+logs           查看最近 100 行 screen 缓冲日志
+logs --tail N  指定输出日志行数
+logs --follow  每 2 秒刷新一次 hardcopy 输出，不附着 screen
+exec           进入 LLBot screen 控制台；退出请按 Ctrl+A 再按 D
+password       写入 LLBot WebUI 密码文件
+```
+
+也可以使用协议端聚合入口：
+
+```bash
+maibot protocol napcat restart
+maibot protocol llbot logs
+```
+
+### 配置与访问
+
+```bash
+maibot access show
+maibot access init
+maibot access adapter show
+maibot access adapter group-mode whitelist
+maibot access adapter group-add 123456
+maibot access adapter group-remove 123456
+maibot access adapter private-mode blacklist
+maibot access adapter private-add 10001
+maibot access adapter private-remove 10001
+maibot access adapter ban-add 10001
+maibot access adapter ban-remove 10001
+```
+
+`access init` 会把 MaiBot WebUI 绑定到 `0.0.0.0` 并启用 Napcat Adapter，执行前仍会二次确认。
+
+Adapter 命令说明：
+
+```text
+adapter show                 查看群聊、私聊和封禁 QQ 配置
+adapter group-mode MODE      设置群聊名单模式：whitelist 或 blacklist
+adapter group-add ID         添加群号到群聊列表
+adapter group-remove ID      从群聊列表移除群号
+adapter private-mode MODE    设置私聊名单模式：whitelist 或 blacklist
+adapter private-add QQ       添加 QQ 到私聊列表
+adapter private-remove QQ    从私聊列表移除 QQ
+adapter ban-add QQ           添加 QQ 到封禁列表
+adapter ban-remove QQ        从封禁列表移除 QQ
+```
+
+### 插件管理
+
+```bash
+maibot plugin list
+maibot plugin install username/repo
+maibot plugin install https://github.com/username/repo
+maibot plugin deps <插件目录名>
+maibot plugin remove <插件目录名>
+```
+
+插件命令说明：
+
+```text
+list     列出 MaiBot/plugins 下的插件目录
+install  支持完整 GitHub URL 或 username/repo；仓库存在时执行更新
+deps     为已安装插件重新安装 requirements.txt
+remove   删除对应插件目录
+```
 
 ### 按键
 

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use dialoguer::Select;
 use std::path::PathBuf;
 use std::process::Command;
@@ -64,12 +64,36 @@ impl App {
         let maibot_running = screen_exists("maibot").unwrap_or(false);
         let llbot_running = screen_exists("llbot").unwrap_or(false);
         let napcat_running = napcat_running();
-        self.print_status_dot("MaiBot", if maibot_running { "运行中 (screen: maibot)" } else { "未运行" }, maibot_running);
+        self.print_status_dot(
+            "MaiBot",
+            if maibot_running {
+                "运行中 (screen: maibot)"
+            } else {
+                "未运行"
+            },
+            maibot_running,
+        );
         if napcat_installed(&cfg.mai_path) {
-            self.print_status_dot("NapCat", if napcat_running { "运行中 (docker)" } else { "未运行" }, napcat_running);
+            self.print_status_dot(
+                "NapCat",
+                if napcat_running {
+                    "运行中 (docker)"
+                } else {
+                    "未运行"
+                },
+                napcat_running,
+            );
         }
         if llbot_installed(&cfg) {
-            self.print_status_dot("LLBot", if llbot_running { "运行中 (screen: llbot)" } else { "未运行" }, llbot_running);
+            self.print_status_dot(
+                "LLBot",
+                if llbot_running {
+                    "运行中 (screen: llbot)"
+                } else {
+                    "未运行"
+                },
+                llbot_running,
+            );
         }
         self.print_line();
     }

@@ -194,7 +194,9 @@ pub fn screen_exists(name: &str) -> Result<bool> {
 /// 构造一条 `先杀掉同名 screen，再后台启动新 screen` 的 shell 命令。
 pub fn screen_launch_cmd(name: &str, body: &str) -> String {
     let quoted = format!("'{}'", shell_escape_raw(&format!("{body}; exec bash")));
-    format!("screen -S {name} -X quit >/dev/null 2>&1 || true; screen -dmS {name} bash -lc {quoted}")
+    format!(
+        "screen -S {name} -X quit >/dev/null 2>&1 || true; screen -dmS {name} bash -lc {quoted}"
+    )
 }
 
 pub fn screen_quit_cmd(name: &str) -> String {
@@ -211,13 +213,7 @@ pub fn shell_escape_raw(s: &str) -> String {
 
 pub fn display_width(s: &str) -> usize {
     s.chars()
-        .map(|c| {
-            if c.is_ascii() || c.is_control() {
-                1
-            } else {
-                2
-            }
-        })
+        .map(|c| if c.is_ascii() || c.is_control() { 1 } else { 2 })
         .sum()
 }
 

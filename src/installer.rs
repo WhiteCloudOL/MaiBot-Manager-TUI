@@ -1,10 +1,21 @@
-use crate::{app::App, model::*, terminal::{TerminalUiGuard, restore_terminal_state}, utils::*};
-use anyhow::{anyhow, Context, Result};
+use crate::{
+    app::App,
+    model::*,
+    terminal::{TerminalUiGuard, restore_terminal_state},
+    utils::*,
+};
+use anyhow::{Context, Result, anyhow};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use dialoguer::console::style;
 use dialoguer::{Confirm, Input, Select};
 use serde_json::Value;
-use std::{fmt, fs, path::{Path, PathBuf}, process::Command, thread, time::Duration};
+use std::{
+    fmt, fs,
+    path::{Path, PathBuf},
+    process::Command,
+    thread,
+    time::Duration,
+};
 
 /// 用户主动取消的标记错误。沿用 anyhow 链向上传播，由 install_update_flow
 /// 捕获后转成温和提示返回主菜单，不弹红色 Error。
@@ -52,8 +63,15 @@ impl App {
                 Ok(()) => {}
                 Err(e) if e.downcast_ref::<UserCanceled>().is_some() => {
                     println!();
-                    println!("  {} {}", style("✕").yellow(), style(e.to_string()).yellow());
-                    println!("  {}", style("（已返回主菜单，未执行任何破坏性操作）").dim());
+                    println!(
+                        "  {} {}",
+                        style("✕").yellow(),
+                        style(e.to_string()).yellow()
+                    );
+                    println!(
+                        "  {}",
+                        style("（已返回主菜单，未执行任何破坏性操作）").dim()
+                    );
                 }
                 Err(e) => return Err(e),
             }
@@ -62,7 +80,11 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn install_planner(&mut self, current: &AppConfig, plan: &mut InstallPlan) -> Result<bool> {
+    pub(crate) fn install_planner(
+        &mut self,
+        current: &AppConfig,
+        plan: &mut InstallPlan,
+    ) -> Result<bool> {
         let _guard = TerminalUiGuard::enter()?;
         let mut target: Option<PlannerEntry> = None;
         let mut expanded: Option<PlanField> = None;
@@ -186,7 +208,9 @@ impl App {
         match field {
             PlanField::InstallPath => vec!["按 Enter 输入自定义路径".into()],
             PlanField::MaiBotBranch => vec!["main（稳定版）".into(), "dev（开发版）".into()],
-            PlanField::InstallMode => vec!["正常更新/修复".into(), "全新安装（清空目标目录）".into()],
+            PlanField::InstallMode => {
+                vec!["正常更新/修复".into(), "全新安装（清空目标目录）".into()]
+            }
             PlanField::PythonEnv => vec!["本机 python3".into(), "uv (Python 3.14)".into()],
             PlanField::VenvMode => {
                 if plan.install_mode == InstallMode::Clean {
@@ -276,7 +300,12 @@ impl App {
         }
     }
 
-    pub(crate) fn planner_choice_active(&self, plan: &InstallPlan, field: PlanField, choice_idx: usize) -> bool {
+    pub(crate) fn planner_choice_active(
+        &self,
+        plan: &InstallPlan,
+        field: PlanField,
+        choice_idx: usize,
+    ) -> bool {
         match field {
             PlanField::InstallPath => false,
             PlanField::MaiBotBranch => {
@@ -313,7 +342,9 @@ impl App {
                 } else {
                     !plan.github_proxy.is_empty()
                         && plan.github_proxy != "https://github.com"
-                        && !github_mirrors().iter().any(|mirror| *mirror == plan.github_proxy)
+                        && !github_mirrors()
+                            .iter()
+                            .any(|mirror| *mirror == plan.github_proxy)
                 }
             }
             PlanField::PipSource => match choice_idx {
@@ -323,9 +354,11 @@ impl App {
                 3 => plan.pip_display == "清华大学",
                 4 => plan.pip_display == "中国科学技术大学",
                 5 => plan.pip_display == "官方源",
-                _ => !plan.pip_index.is_empty()
-                    && !["阿里云", "腾讯云", "清华大学", "中国科学技术大学", "官方源"]
-                        .contains(&plan.pip_display.as_str()),
+                _ => {
+                    !plan.pip_index.is_empty()
+                        && !["阿里云", "腾讯云", "清华大学", "中国科学技术大学", "官方源"]
+                            .contains(&plan.pip_display.as_str())
+                }
             },
             PlanField::BotProtocols => match choice_idx {
                 0 => plan.bot_protocols == vec![BotProtocol::NapCat],
@@ -515,11 +548,7 @@ impl App {
                     })?;
                     let custom = normalize_url(&custom);
                     plan.pip_display = custom.clone();
-                    plan.pip_host = custom
-                        .split('/')
-                        .nth(2)
-                        .unwrap_or_default()
-                        .to_string();
+                    plan.pip_host = custom.split('/').nth(2).unwrap_or_default().to_string();
                     plan.pip_index = custom;
                     plan.uv_index = plan.pip_index.clone();
                 }
@@ -543,7 +572,9 @@ impl App {
                         _ => DockerMirror::Keep,
                     };
                 } else {
-                    self.with_prompt_mode(|| self.pause("当前未选择 NapCatQQ，无需配置 Docker 镜像；按回车继续"))?;
+                    self.with_prompt_mode(|| {
+                        self.pause("当前未选择 NapCatQQ，无需配置 Docker 镜像；按回车继续")
+                    })?;
                 }
             }
         }
@@ -609,7 +640,12 @@ impl App {
                 current.pip_index.clone(),
             )
         } else {
-            ("系统默认".into(), String::new(), String::new(), String::new())
+            (
+                "系统默认".into(),
+                String::new(),
+                String::new(),
+                String::new(),
+            )
         };
 
         Ok(InstallPlan {
@@ -758,7 +794,12 @@ impl App {
 
         match best {
             Some((url, ms)) => {
-                println!("  {} {} ({:.0} ms)", style("✔ 已选择").green().bold(), style(&url).cyan(), ms);
+                println!(
+                    "  {} {} ({:.0} ms)",
+                    style("✔ 已选择").green().bold(),
+                    style(&url).cyan(),
+                    ms
+                );
                 Ok(url)
             }
             None => {
@@ -797,10 +838,7 @@ impl App {
         let pm = PkgManager::detect();
         self.clear();
         self.print_header(Some(plan));
-        self.print_section(
-            "依赖检查",
-            &format!("检测到包管理器：{}", pm.label()),
-        );
+        self.print_section("依赖检查", &format!("检测到包管理器：{}", pm.label()));
         self.print_kv("待安装", &needed.join(" "));
         self.print_line();
 
@@ -824,7 +862,10 @@ impl App {
         if plan.github_proxy.is_empty() {
             self.clear();
             self.print_header(Some(&plan));
-            self.print_section("GitHub 线路测速", "未手动指定线路，正在自动测速并选择最佳线路");
+            self.print_section(
+                "GitHub 线路测速",
+                "未手动指定线路，正在自动测速并选择最佳线路",
+            );
             plan.github_proxy = self.run_github_speedtest()?;
         }
 
@@ -842,10 +883,7 @@ impl App {
             plan.install_mode,
         )?;
         self.clone_or_update_repo(
-            &repo_url(
-                &plan.github_proxy,
-                "MaiM-with-u/MaiBot-Napcat-Adapter",
-            ),
+            &repo_url(&plan.github_proxy, "MaiM-with-u/MaiBot-Napcat-Adapter"),
             &plan
                 .install_path
                 .join("MaiBot")
@@ -966,10 +1004,7 @@ impl App {
             .output()
             .with_context(|| format!("git status 执行失败: {}", target.display()))?;
         let porcelain = String::from_utf8_lossy(&output.stdout);
-        let lines: Vec<&str> = porcelain
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .collect();
+        let lines: Vec<&str> = porcelain.lines().filter(|l| !l.trim().is_empty()).collect();
         if lines.is_empty() {
             return Ok(());
         }
@@ -1035,7 +1070,8 @@ impl App {
                 ))?;
                 println!(
                     "  {}",
-                    style("已保存到 git stash。日后恢复请执行: git stash list / git stash pop").dim()
+                    style("已保存到 git stash。日后恢复请执行: git stash list / git stash pop")
+                        .dim()
                 );
             }
             1 => {
@@ -1232,11 +1268,7 @@ impl App {
         }
         println!(
             "    {}",
-            style(format!(
-                "compose 目录: {}",
-                napcat_dir.display()
-            ))
-            .dim()
+            style(format!("compose 目录: {}", napcat_dir.display())).dim()
         );
         println!(
             "    {}",
@@ -1265,11 +1297,12 @@ impl App {
         fs::create_dir_all(&llbot_dir)?;
         let arch = detect_arch()?;
         let asset_name = format!("LLBot-CLI-linux-{arch}.zip");
-        let proxy_prefix = if plan.github_proxy.is_empty() || plan.github_proxy == "https://github.com" {
-            String::new()
-        } else {
-            format!("{}/", plan.github_proxy.trim_end_matches('/'))
-        };
+        let proxy_prefix =
+            if plan.github_proxy.is_empty() || plan.github_proxy == "https://github.com" {
+                String::new()
+            } else {
+                format!("{}/", plan.github_proxy.trim_end_matches('/'))
+            };
         let script = format!(
             r#"set -e
 api_url="https://api.github.com/repos/LLOneBot/LuckyLilliaBot/releases/latest"

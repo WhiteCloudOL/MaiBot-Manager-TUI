@@ -23,9 +23,15 @@ Release builds use musl static targets so the binaries do not depend on the targ
 
 ## Architecture
 
-This is a single-binary TUI that orchestrates `bash` to install/manage MaiBot on a Linux server. Almost every "action" — clone, venv, docker, screen, systemctl — is a shell string executed via `App::run_shell`, not native Rust. Treat shell command strings as the primary IR; the Rust code is a config builder + menu driver around them.
+This is a single-binary TUI + CLI that orchestrates `bash` to install/manage MaiBot on a Linux server. Almost every "action" — clone, venv, docker, screen, systemctl — is a shell string executed via `App::run_shell`, not native Rust. Treat shell command strings as the primary IR; the Rust code is a config builder + menu/CLI driver around them.
 
-**Module shape.** Every domain module (`installer`, `services`, `access`, `lpmm`, `plugins`, `runtime`, `ui`) is `impl App for ...` — they share state via `App` (theme + config path) rather than holding their own types. `app.rs` is the entry shell that prints the main menu and dispatches; `main.rs` only wires terminal cleanup and the OS guard.
+**Entry behavior.** `main.rs` parses args before the Linux guard only for global help (`help`, `-h`, `--help`) so help can be printed anywhere. No args or `tui` enters the TUI. Any other first arg dispatches to `App::run_cli`. Keep this behavior when adding commands.
+
+**Module shape.** Every domain module (`installer`, `services`, `access`, `plugins`, `runtime`, `ui`) is `impl App for ...` — they share state via `App` (theme + config path) rather than holding their own types. `app.rs` is the TUI shell that prints the main menu and dispatches; `src/cli/` is the CLI shell. Keep CLI parsing split by domain (`install`, `services`, `access`, `plugins`, `help`) instead of growing one giant command file.
+
+**CLI contract.** CLI commands should reuse the same `App` action methods used by TUI menus rather than duplicating shell strings. `maibot install` / `maibot update` build an `InstallPlan` from existing config plus command-line overrides and then call `run_install`. `maibot core|napcat|llbot ...` should remain script-friendly: status/log commands print and exit, while interactive commands (`core exec`, `llbot exec`, `napcat exec`) intentionally inherit stdio.
+
+**Help text.** `src/cli/help.rs` must use `model::APP_VERSION` instead of hardcoding versions. `APP_VERSION` comes from `app.toml` through `build.rs`.
 
 **Config.** `~/.maibot_config` is a shell-style `KEY="value"` file (NOT TOML), read/written by `runtime.rs::{load_config,save_config}`. `require_config()` is the gate every management menu uses to refuse to run before installation.
 
@@ -33,7 +39,7 @@ This is a single-binary TUI that orchestrates `bash` to install/manage MaiBot on
 
 **Terminal modes.** The planner runs under `TerminalUiGuard` (raw mode + hidden cursor, restored on Drop). `dialoguer` prompts conflict with raw mode — when you need an `Input`/`Confirm`/`Select` from inside the planner, wrap it in `App::with_prompt_mode(|| ...)` which temporarily disables raw mode. `terminal.rs` also installs a `ctrlc` handler so abnormal exits still restore the terminal.
 
-**Screen-based background jobs.** Long-running processes are wrapped in `screen -dmS <name>` sessions. Hardcoded session names: `maibot`, `llbot`, `mai-lpmm-info`, `mai-lpmm-import`. Status detection is `utils::screen_exists` (or `docker ps` filter for NapCat). Main menu's "running" indicators read these.
+**Screen-based background jobs.** Long-running processes are wrapped in `screen -dmS <name>` sessions. Hardcoded session names: `maibot`, `llbot`, `mai-lpmm-info`, `mai-lpmm-import`. Status detection is `utils::screen_exists` (or `docker ps` filter for NapCat). Main menu's "running" indicators read these. CLI logs for screen-backed services should use `screen -X hardcopy` (snapshot or follow loop) rather than `screen -r`, so log viewing does not attach to or disturb the running session. `exec` commands may attach, but must keep the warning prompt.
 
 **GitHub speedtest.** `installer.rs::run_github_speedtest` fans out one thread per mirror, each running `curl -sL -o /dev/null -w '%{time_total}'`. If every mirror fails, the function recurses with a retry/direct/cancel prompt — it never returns a silent fallback.
 

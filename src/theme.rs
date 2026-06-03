@@ -174,7 +174,6 @@ impl Theme for AppTheme {
         picked: bool,
         active: bool,
     ) -> fmt::Result {
-        self.inner
-            .format_sort_prompt_item(f, text, picked, active)
+        self.inner.format_sort_prompt_item(f, text, picked, active)
     }
 }

@@ -1,8 +1,13 @@
 use crate::app::App;
 use crate::model::AppConfig;
 use crate::terminal::restore_terminal_state;
-use anyhow::{anyhow, Context, Result, bail};
-use std::{collections::BTreeMap, fs, os::unix::process::ExitStatusExt, process::{Command, Stdio}};
+use anyhow::{Context, Result, anyhow, bail};
+use std::{
+    collections::BTreeMap,
+    fs,
+    os::unix::process::ExitStatusExt,
+    process::{Command, Stdio},
+};
 
 impl App {
     pub(crate) fn get_public_ip(&self) -> Result<String> {
@@ -118,5 +123,4 @@ impl App {
         }
         Ok(())
     }
-
 }
