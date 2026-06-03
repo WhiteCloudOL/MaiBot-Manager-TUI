@@ -11,7 +11,7 @@
 - **主菜单概览**：进入主菜单即可看到 MaiBot、NapCat、LLBot 的运行状态。
 - **安装向导**：单页式安装计划，方向键展开 / 折叠选项，所见即所得。
 - **Github优选**：GitHub 官方线路与镜像源并行测速，自动选择最佳线路；全部失败时提供重试 / 直连 / 取消的回退选择。
-- **MaiBot 管理**：启动、停止、进入 `screen` 控制台。
+- **MaiBot管理**：启动、停止、进入 `screen` 控制台。
 - **LLBot/Napcat安装**：支持安装MaiBot的同时同步安装LLBot与NapcatQQ与常用命令执行。
 - **依赖自检**：进入安装流程时自动检测包管理器，缺失的 `git/curl/screen/unzip/python3` 等基础工具按当前发行版自动补装。
 - **配置访问**：集中查看 MaiBot、NapCat、LLBot WebUI 地址与密钥；初始化访问配置带二次确认。

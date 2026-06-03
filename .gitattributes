@@ -1,3 +1,4 @@
 .gitattributes text eol=lf
 build-release.sh text eol=lf
+scripts/*.sh text eol=lf
 build-release.ps1 text eol=lf

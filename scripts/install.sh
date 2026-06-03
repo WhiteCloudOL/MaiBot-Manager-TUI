@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# MaiBot Manager TUI 一键安装脚本
+#!/bin/bash
+# MaiBot Manager 一键安装脚本
 # 用法:
 #   curl -fsSL https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/main/scripts/install.sh | bash
 #   或下载后直接执行: bash install.sh
@@ -7,7 +7,7 @@
 # 可选环境变量:
 #   MAIBOT_INSTALL_DIR   安装目录，默认 $HOME/.local/bin
 #   MAIBOT_FORCE_PROXY   强制使用的镜像（如 https://gh-proxy.org 或 direct）
-#   MAIBOT_VERSION       指定版本 tag（如 v0.1.2），默认拉取 latest
+#   MAIBOT_VERSION       指定版本 tag（如 v0.2.0），默认拉取 latest
 
 set -euo pipefail
 
@@ -341,8 +341,13 @@ main() {
     echo
     printf '%s%s%s\n' "$BOLD" "安装完成 ($tag)" "$RESET"
     printf '  二进制路径: %s\n' "$dst"
-    printf '  直接启动:   %s\n' "$BINARY_NAME"
-    printf '  以后进入 MaiBot 直接输入: %s\n' "$BINARY_NAME"
+    printf '  进入 TUI:   %s 或 %s tui\n' "$BINARY_NAME" "$BINARY_NAME"
+    printf '  查看帮助:   %s help\n' "$BINARY_NAME"
+    printf '  CLI 示例:   %s core status\n' "$BINARY_NAME"
+    printf '              %s core logs --tail 100\n' "$BINARY_NAME"
+    printf '              %s napcat restart\n' "$BINARY_NAME"
+    printf '              %s plugin list\n' "$BINARY_NAME"
+    printf '  更多命令:   %s --help\n' "$BINARY_NAME"
     echo
     if ! command -v "$BINARY_NAME" >/dev/null 2>&1; then
         warn "当前 shell 仍未识别 maibot 命令。"
