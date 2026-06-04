@@ -76,7 +76,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 仓库根的 `app.toml` 是构建时配置（**非运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
 
 ```toml
-version          = "0.2.1"   # 标题栏显示的版本号
+version          = "0.2.2"   # 标题栏显示的版本号
 build_label      = "..."     # 标题栏副标题
 github_test_path = "..."     # 测速参考文件
 github_mirrors   = [...]     # 镜像源候选清单
@@ -125,7 +125,7 @@ curl -fsSL https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/mai
 ```text
 MAIBOT_INSTALL_DIR  安装目录，默认 ~/.local/bin
 MAIBOT_FORCE_PROXY  跳过测速，强制使用的镜像（或 direct）
-MAIBOT_VERSION      指定版本 tag（如 v0.2.1），默认 latest
+MAIBOT_VERSION      指定版本 tag（如 v0.2.2），默认 latest
 ```
 
 安装完成后重启终端或 `source` 对应的 rc 文件，即可在任意位置执行 `maibot`。
@@ -356,7 +356,7 @@ maibot plugin remove <插件目录名>
 
 ```text
 list     列出 MaiBot/plugins 下的插件目录
-install  支持完整 GitHub URL 或 username/repo；仓库存在时执行更新
+install  支持完整 GitHub URL 或 username/repo；仓库存在时执行更新，并按 _manifest.json 的 id 作为最终插件目录名
 deps     为已安装插件重新安装 requirements.txt
 remove   删除对应插件目录
 ```

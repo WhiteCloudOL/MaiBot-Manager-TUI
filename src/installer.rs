@@ -1,6 +1,7 @@
 use crate::{
     app::App,
     model::*,
+    plugins::{NAPCAT_ADAPTER_PLUGIN_ID, NAPCAT_ADAPTER_REPO_NAME},
     terminal::{TerminalUiGuard, restore_terminal_state},
     utils::*,
 };
@@ -882,13 +883,10 @@ impl App {
             Some(&plan.maibot_branch),
             plan.install_mode,
         )?;
-        self.clone_or_update_repo(
-            &repo_url(&plan.github_proxy, "MaiM-with-u/MaiBot-Napcat-Adapter"),
-            &plan
-                .install_path
-                .join("MaiBot")
-                .join("plugins")
-                .join("MaiBot-Napcat-Adapter"),
+        self.sync_plugin_repo_with_manifest_dir(
+            &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-Napcat-Adapter"),
+            &plan.install_path.join("MaiBot").join("plugins"),
+            NAPCAT_ADAPTER_REPO_NAME,
             Some("main"),
             plan.install_mode,
         )?;
@@ -1191,9 +1189,11 @@ impl App {
                     String::new()
                 };
                 self.run_shell(&format!(
-                    "cd '{}' && . venv/bin/activate && {}pip install --upgrade pip && if [ -f MaiBot/requirements.txt ]; then pip install -r MaiBot/requirements.txt; fi && if [ -f MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt ]; then pip install -r MaiBot/plugins/MaiBot-Napcat-Adapter/requirements.txt; fi",
+                    "cd '{}' && . venv/bin/activate && {}pip install --upgrade pip && if [ -f MaiBot/requirements.txt ]; then pip install -r MaiBot/requirements.txt; fi && if [ -f MaiBot/plugins/{}/requirements.txt ]; then pip install -r MaiBot/plugins/{}/requirements.txt; fi",
                     shell_escape(root),
-                    pip_prefix
+                    pip_prefix,
+                    NAPCAT_ADAPTER_PLUGIN_ID,
+                    NAPCAT_ADAPTER_PLUGIN_ID
                 ))?;
             }
         }

@@ -120,7 +120,7 @@ MaiBot 核心:
   maibot plugin deps <插件目录名>
 
 说明:
-  plugin install     克隆或更新插件仓库；如果存在 requirements.txt 会自动安装依赖
+  plugin install     克隆或更新插件仓库；会读取 _manifest.json 中的 id 作为最终目录名，并自动安装 requirements.txt
   plugin remove      删除 MaiBot/plugins 下对应插件目录
   plugin deps        为已安装插件重新安装 requirements.txt
 

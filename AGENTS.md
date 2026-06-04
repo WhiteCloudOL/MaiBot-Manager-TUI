@@ -31,6 +31,8 @@ This is a single-binary TUI + CLI that orchestrates `bash` to install/manage Mai
 
 **CLI contract.** CLI commands should reuse the same `App` action methods used by TUI menus rather than duplicating shell strings. `maibot install` / `maibot update` build an `InstallPlan` from existing config plus command-line overrides and then call `run_install`. `maibot core|napcat|llbot ...` should remain script-friendly: status/log commands print and exit, while interactive commands (`core exec`, `llbot exec`, `napcat exec`) intentionally inherit stdio.
 
+**Plugin directory naming.** Plugin install/update must not assume the final directory name equals the repository name. After clone/update, resolve the plugin's `_manifest.json` and use its `id` as the canonical folder name under `MaiBot/plugins`. `src/plugins.rs` owns this logic for generic plugin installs, and the built-in NapCat adapter install in `installer.rs` must follow the same rule. Keep compatibility with the historical `MaiBot/plugins/MaiBot-Napcat-Adapter` path by migrating it to `maibot-team.napcat-adapter`; if the destination already exists, preserve the old directory as a backup instead of overwriting it.
+
 **Install defaults.** TUI and CLI share `installer.rs::build_default_install_plan` and `build_recommended_defaults`. The recommended default install path is the current user's HOME joined with `maimai` (displayed as `~/maimai` in docs, but built via `dirs::home_dir()`), the default Python environment is `uv`, and the default protocol is NapCatQQ. Keep README/help/AGENTS in sync when changing defaults.
 
 **Help text.** `src/cli/help.rs` must use `model::APP_VERSION` instead of hardcoding versions. `APP_VERSION` comes from `app.toml` through `build.rs`.

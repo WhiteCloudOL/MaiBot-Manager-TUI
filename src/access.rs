@@ -2,6 +2,7 @@ use crate::app::App;
 use anyhow::{Result, anyhow, bail};
 use dialoguer::{Confirm, Input, Select};
 
+use crate::plugins::NAPCAT_ADAPTER_PLUGIN_ID;
 use crate::theme::AppTheme;
 use dialoguer::console::style;
 use regex::Regex;
@@ -10,10 +11,14 @@ use std::{fs, path::PathBuf};
 use toml_edit::{DocumentMut, Item, Value as TomlValue, value};
 
 impl App {
-    fn adapter_config_path(&self) -> Result<PathBuf> {
+    fn napcat_adapter_dir(&self) -> Result<PathBuf> {
         let cfg = self.require_config()?;
-        let path =
-            PathBuf::from(cfg.mai_path).join("MaiBot/plugins/MaiBot-Napcat-Adapter/config.toml");
+        let plugins_dir = PathBuf::from(cfg.mai_path).join("MaiBot/plugins");
+        self.require_plugin_dir_by_id(&plugins_dir, NAPCAT_ADAPTER_PLUGIN_ID)
+    }
+
+    fn adapter_config_path(&self) -> Result<PathBuf> {
+        let path = self.napcat_adapter_dir()?.join("config.toml");
         if !path.exists() {
             bail!("未找到 Adapter 配置文件: {}", path.display());
         }
@@ -219,7 +224,7 @@ impl App {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
         let bot_cfg = root.join("MaiBot/config/bot_config.toml");
-        let adapter_cfg = root.join("MaiBot/plugins/MaiBot-Napcat-Adapter/config.toml");
+        let adapter_cfg = self.napcat_adapter_dir()?.join("config.toml");
         if bot_cfg.exists() {
             let mut doc: DocumentMut = fs::read_to_string(&bot_cfg)?.parse()?;
             if doc["webui"].is_none() {
