@@ -10,6 +10,8 @@ use serde_json::Value;
 use std::{fs, path::PathBuf};
 use toml_edit::{DocumentMut, Item, Value as TomlValue, value};
 
+const CHAT_TABLE: &str = "chat";
+
 impl App {
     fn napcat_adapter_dir(&self) -> Result<PathBuf> {
         let cfg = self.require_config()?;
@@ -139,32 +141,23 @@ impl App {
         let doc: DocumentMut = fs::read_to_string(&path)?.parse()?;
         self.print_kv(
             "群聊模式",
-            doc["group_list_type"].as_str().unwrap_or("Unknown"),
+            config_string(&doc, CHAT_TABLE, "group_list_type", "Unknown"),
         );
         self.print_kv(
             "群聊列表",
-            &doc["group_list"]
-                .as_array()
-                .map(display_array)
-                .unwrap_or_default(),
+            &config_array_display(&doc, CHAT_TABLE, "group_list"),
         );
         self.print_kv(
             "私聊模式",
-            doc["private_list_type"].as_str().unwrap_or("Unknown"),
+            config_string(&doc, CHAT_TABLE, "private_list_type", "Unknown"),
         );
         self.print_kv(
             "私聊列表",
-            &doc["private_list"]
-                .as_array()
-                .map(display_array)
-                .unwrap_or_default(),
+            &config_array_display(&doc, CHAT_TABLE, "private_list"),
         );
         self.print_kv(
             "封禁 QQ",
-            &doc["ban_user_id"]
-                .as_array()
-                .map(display_array)
-                .unwrap_or_default(),
+            &config_array_display(&doc, CHAT_TABLE, "ban_user_id"),
         );
         Ok(())
     }
@@ -175,7 +168,7 @@ impl App {
         }
         let path = self.adapter_config_path()?;
         let mut doc: DocumentMut = fs::read_to_string(&path)?.parse()?;
-        doc[key] = value(mode);
+        set_table_value(&mut doc, CHAT_TABLE, key, value(mode));
         fs::write(&path, doc.to_string())?;
         Ok(())
     }
@@ -191,7 +184,7 @@ impl App {
         }
         let path = self.adapter_config_path()?;
         let mut doc: DocumentMut = fs::read_to_string(&path)?.parse()?;
-        update_numeric_array(&mut doc, key, input, add)?;
+        update_numeric_array(&mut doc, CHAT_TABLE, key, input, add)?;
         fs::write(&path, doc.to_string())?;
         Ok(())
     }
@@ -255,32 +248,23 @@ impl App {
             self.print_section("Adapter 黑白名单", "查看并修改群聊、私聊和黑名单规则");
             self.print_kv(
                 "群聊模式",
-                doc["group_list_type"].as_str().unwrap_or("Unknown"),
+                config_string(&doc, CHAT_TABLE, "group_list_type", "Unknown"),
             );
             self.print_kv(
                 "群聊列表",
-                &doc["group_list"]
-                    .as_array()
-                    .map(display_array)
-                    .unwrap_or_default(),
+                &config_array_display(&doc, CHAT_TABLE, "group_list"),
             );
             self.print_kv(
                 "私聊模式",
-                doc["private_list_type"].as_str().unwrap_or("Unknown"),
+                config_string(&doc, CHAT_TABLE, "private_list_type", "Unknown"),
             );
             self.print_kv(
                 "私聊列表",
-                &doc["private_list"]
-                    .as_array()
-                    .map(display_array)
-                    .unwrap_or_default(),
+                &config_array_display(&doc, CHAT_TABLE, "private_list"),
             );
             self.print_kv(
                 "封禁 QQ",
-                &doc["ban_user_id"]
-                    .as_array()
-                    .map(display_array)
-                    .unwrap_or_default(),
+                &config_array_display(&doc, CHAT_TABLE, "ban_user_id"),
             );
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("Adapter 黑白名单管理")
@@ -299,19 +283,67 @@ impl App {
                 .interact()?;
             let result = match choice {
                 0 => {
-                    toggle_string(&mut doc, "group_list_type", "whitelist", "blacklist");
+                    toggle_string(
+                        &mut doc,
+                        CHAT_TABLE,
+                        "group_list_type",
+                        "whitelist",
+                        "blacklist",
+                    );
                     Ok(())
                 }
-                1 => prompt_modify_numeric_array(&mut doc, "group_list", true, &self.theme),
-                2 => prompt_modify_numeric_array(&mut doc, "group_list", false, &self.theme),
+                1 => prompt_modify_numeric_array(
+                    &mut doc,
+                    CHAT_TABLE,
+                    "group_list",
+                    true,
+                    &self.theme,
+                ),
+                2 => prompt_modify_numeric_array(
+                    &mut doc,
+                    CHAT_TABLE,
+                    "group_list",
+                    false,
+                    &self.theme,
+                ),
                 3 => {
-                    toggle_string(&mut doc, "private_list_type", "whitelist", "blacklist");
+                    toggle_string(
+                        &mut doc,
+                        CHAT_TABLE,
+                        "private_list_type",
+                        "whitelist",
+                        "blacklist",
+                    );
                     Ok(())
                 }
-                4 => prompt_modify_numeric_array(&mut doc, "private_list", true, &self.theme),
-                5 => prompt_modify_numeric_array(&mut doc, "private_list", false, &self.theme),
-                6 => prompt_modify_numeric_array(&mut doc, "ban_user_id", true, &self.theme),
-                7 => prompt_modify_numeric_array(&mut doc, "ban_user_id", false, &self.theme),
+                4 => prompt_modify_numeric_array(
+                    &mut doc,
+                    CHAT_TABLE,
+                    "private_list",
+                    true,
+                    &self.theme,
+                ),
+                5 => prompt_modify_numeric_array(
+                    &mut doc,
+                    CHAT_TABLE,
+                    "private_list",
+                    false,
+                    &self.theme,
+                ),
+                6 => prompt_modify_numeric_array(
+                    &mut doc,
+                    CHAT_TABLE,
+                    "ban_user_id",
+                    true,
+                    &self.theme,
+                ),
+                7 => prompt_modify_numeric_array(
+                    &mut doc,
+                    CHAT_TABLE,
+                    "ban_user_id",
+                    false,
+                    &self.theme,
+                ),
                 _ => break,
             };
             if self.handle_menu_result(
@@ -332,13 +364,47 @@ fn display_array(arr: &toml_edit::Array) -> String {
         .join(", ")
 }
 
-fn toggle_string(doc: &mut DocumentMut, key: &str, left: &str, right: &str) {
-    let current = doc[key].as_str().unwrap_or(left);
-    doc[key] = value(if current == left { right } else { left });
+fn config_string<'a>(doc: &'a DocumentMut, table: &str, key: &str, default: &'a str) -> &'a str {
+    doc.get(table)
+        .and_then(Item::as_table)
+        .and_then(|table| table.get(key))
+        .and_then(Item::as_str)
+        .unwrap_or(default)
+}
+
+fn config_array_display(doc: &DocumentMut, table: &str, key: &str) -> String {
+    doc.get(table)
+        .and_then(Item::as_table)
+        .and_then(|table| table.get(key))
+        .and_then(Item::as_array)
+        .map(display_array)
+        .unwrap_or_default()
+}
+
+fn ensure_table(doc: &mut DocumentMut, table: &str) {
+    if !doc.get(table).and_then(Item::as_table).is_some() {
+        doc[table] = Item::Table(Default::default());
+    }
+}
+
+fn set_table_value(doc: &mut DocumentMut, table: &str, key: &str, new_value: Item) {
+    ensure_table(doc, table);
+    doc[table][key] = new_value;
+}
+
+fn toggle_string(doc: &mut DocumentMut, table: &str, key: &str, left: &str, right: &str) {
+    let current = config_string(doc, table, key, left);
+    set_table_value(
+        doc,
+        table,
+        key,
+        value(if current == left { right } else { left }),
+    );
 }
 
 fn prompt_modify_numeric_array(
     doc: &mut DocumentMut,
+    table: &str,
     key: &str,
     add: bool,
     theme: &AppTheme,
@@ -353,16 +419,23 @@ fn prompt_modify_numeric_array(
     if !Regex::new(r"^\d+$")?.is_match(&input) {
         bail!("号码必须为纯数字");
     }
-    update_numeric_array(doc, key, &input, add)
+    update_numeric_array(doc, table, key, &input, add)
 }
 
-fn update_numeric_array(doc: &mut DocumentMut, key: &str, input: &str, add: bool) -> Result<()> {
-    if doc[key].is_none() {
-        doc[key] = Item::Value(TomlValue::Array(Default::default()));
+fn update_numeric_array(
+    doc: &mut DocumentMut,
+    table: &str,
+    key: &str,
+    input: &str,
+    add: bool,
+) -> Result<()> {
+    ensure_table(doc, table);
+    if doc[table].get(key).map(Item::is_none).unwrap_or(true) {
+        doc[table][key] = Item::Value(TomlValue::Array(Default::default()));
     }
-    let arr = doc[key]
+    let arr = doc[table][key]
         .as_array_mut()
-        .ok_or_else(|| anyhow!("{} 不是数组", key))?;
+        .ok_or_else(|| anyhow!("{}.{} 不是数组", table, key))?;
     let values = arr
         .iter()
         .filter_map(|v| v.as_integer())
