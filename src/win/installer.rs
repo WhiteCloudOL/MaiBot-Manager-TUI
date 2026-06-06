@@ -15,6 +15,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
+    thread,
 };
 
 const LLBOT_RELEASE_TAG_FILE: &str = ".maibot-llbot-release";
@@ -616,7 +617,8 @@ impl App {
     pub(crate) fn run_install(&self, plan: &InstallPlan) -> Result<()> {
         let mut plan = plan.clone();
         if plan.github_proxy.trim().is_empty() {
-            plan.github_proxy = self.select_github_proxy();
+            self.print_section("GitHub 线路测速", "自动选择最快的 GitHub / 镜像线路");
+            plan.github_proxy = self.run_github_speedtest(plan.github_fallback)?;
         }
         if plan.install_mode == InstallMode::Clean {
             if self.cli_mode
@@ -655,38 +657,101 @@ impl App {
         Ok(())
     }
 
-    fn select_github_proxy(&self) -> String {
-        let mut candidates = github_mirrors().to_vec();
-        candidates.push("https://github.com");
-        let mut best: Option<(&str, f64)> = None;
-        for candidate in candidates {
-            let url = accelerate_github_url(TEST_FILE_PATH, candidate);
-            let output = Command::new("cmd")
-                .args([
-                    "/C",
-                    &format!(
-                        "curl.exe -sL -o NUL -w \"%%{{time_total}}\" --connect-timeout 5 --max-time 15 {}",
-                        bat_arg(&url)
-                    ),
-                ])
-                .output();
-            let Ok(output) = output else {
-                continue;
-            };
-            if !output.status.success() {
-                continue;
-            }
-            let elapsed = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .parse::<f64>()
-                .unwrap_or(f64::MAX);
-            if elapsed.is_finite() && best.is_none_or(|(_, best_elapsed)| elapsed < best_elapsed) {
-                best = Some((candidate, elapsed));
+    pub(crate) fn run_github_speedtest(&self, fallback: GithubFallbackMode) -> Result<String> {
+        let mut mirrors = vec!["https://github.com".to_string()];
+        mirrors.extend(github_mirrors().iter().map(|v| v.to_string()));
+        println!("  {}", style("正在并行测速，请稍候...").dim());
+        self.print_line();
+
+        let handles: Vec<_> = mirrors
+            .into_iter()
+            .map(|mirror| {
+                thread::spawn(move || {
+                    let test_url = if mirror == "https://github.com" {
+                        TEST_FILE_PATH.to_string()
+                    } else {
+                        format!("{}/{}", mirror.trim_end_matches('/'), TEST_FILE_PATH)
+                    };
+                    let output = Command::new("cmd")
+                        .args([
+                            "/C",
+                            &format!(
+                                "curl.exe -sL -o NUL --max-time 5 --connect-timeout 3 -w \"%%{{time_total}}\" {}",
+                                bat_arg(&test_url)
+                            ),
+                        ])
+                        .output();
+
+                    match output {
+                        Ok(output) if output.status.success() => {
+                            let ms = String::from_utf8_lossy(&output.stdout)
+                                .trim()
+                                .parse::<f64>()
+                                .unwrap_or(9.999)
+                                * 1000.0;
+                            (mirror, ms, true)
+                        }
+                        _ => (mirror, 9999.0, false),
+                    }
+                })
+            })
+            .collect();
+
+        let mut results = Vec::new();
+        for handle in handles {
+            results.push(
+                handle
+                    .join()
+                    .map_err(|_| anyhow!("GitHub 并行测速线程异常退出"))?,
+            );
+        }
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut best: Option<(String, f64)> = None;
+        for (mirror, ms, ok) in &results {
+            if *ok {
+                println!("  {} {}", style(format!("{:>6.0} ms", ms)).green(), mirror);
+                if best.as_ref().map(|b| *ms < b.1).unwrap_or(true) {
+                    best = Some((mirror.clone(), *ms));
+                }
+            } else {
+                println!("  {}     {}", style("  失败 ").red(), style(mirror).dim());
             }
         }
-        let selected = best.map(|(proxy, _)| proxy).unwrap_or("https://github.com");
-        println!("GitHub 线路: {selected}");
-        selected.to_string()
+        self.print_line();
+
+        match best {
+            Some((url, ms)) => {
+                println!(
+                    "  {} {} ({:.0} ms)",
+                    style("✔ 已选择").green().bold(),
+                    style(&url).cyan(),
+                    ms
+                );
+                Ok(url)
+            }
+            None => {
+                println!("  {}", style("✗ 全部线路连接失败").red().bold());
+                match fallback {
+                    GithubFallbackMode::Ask => {
+                        let choice = Select::with_theme(&self.theme)
+                            .with_prompt("请选择回退方案")
+                            .items(["重试测速", "使用 GitHub 官方直连", "取消安装"])
+                            .default(0)
+                            .interact()?;
+                        match choice {
+                            0 => self.run_github_speedtest(fallback),
+                            1 => Ok("https://github.com".to_string()),
+                            _ => Err(anyhow!("用户取消安装")),
+                        }
+                    }
+                    GithubFallbackMode::Direct => Ok("https://github.com".to_string()),
+                    GithubFallbackMode::Cancel => Err(anyhow!(
+                        "GitHub 线路测速全部失败；CLI 可使用 --github-fallback direct 改为直连继续"
+                    )),
+                }
+            }
+        }
     }
 
     fn ensure_base_dependencies(&self, plan: &InstallPlan) -> Result<()> {
