@@ -31,17 +31,45 @@ impl App {
         let logs_dir = maibot_dir.parent().unwrap_or(&maibot_dir).join("logs");
         fs::create_dir_all(&logs_dir)?;
         let log_path = logs_dir.join("maibot.log");
+        let launcher_path = logs_dir.join("start-maibot.bat");
         let run = if py_env == "uv" {
-            "uv run bot.py".to_string()
+            format!(
+                "where uv >nul 2>nul || (echo [ERROR] 未找到 uv，请先安装 uv 或重新安装 MaiBot。 & pause & exit /b 1)\r\n\
+                 powershell -NoProfile -ExecutionPolicy Bypass -Command \"& {{ uv run bot.py 2^>^&1 | Tee-Object -FilePath {} -Append }}\"",
+                ps_single_quote(&log_path)
+            )
         } else {
-            "call ..\\venv\\Scripts\\activate.bat && python bot.py".to_string()
+            format!(
+                "if not exist ..\\venv\\Scripts\\activate.bat (echo [ERROR] 未找到虚拟环境: ..\\venv\\Scripts\\activate.bat & pause & exit /b 1)\r\n\
+                 call ..\\venv\\Scripts\\activate.bat\r\n\
+                 powershell -NoProfile -ExecutionPolicy Bypass -Command \"& {{ python bot.py 2^>^&1 | Tee-Object -FilePath {} -Append }}\"",
+                ps_single_quote(&log_path)
+            )
         };
+        fs::write(
+            &launcher_path,
+            format!(
+                "@echo off\r\n\
+                 setlocal EnableExtensions\r\n\
+                 title {MAIBOT_TITLE}\r\n\
+                 cd /d {}\r\n\
+                 echo MaiBot 启动目录: {}\r\n\
+                 echo 日志文件: {}\r\n\
+                 echo ------------------------------------------------------------\r\n\
+                 {run}\r\n\
+                 echo ------------------------------------------------------------\r\n\
+                 echo MaiBot 进程已退出，退出码: %ERRORLEVEL%\r\n\
+                 pause\r\n",
+                bat_quote(&maibot_dir),
+                maibot_dir.display(),
+                log_path.display()
+            ),
+        )?;
         let window_flag = if attach { "" } else { "/MIN" };
         self.run_shell(&format!(
-            "start \"{MAIBOT_TITLE}\" {window_flag} /D {} cmd /K \"{} 1>>{} 2>>&1\"",
+            "start \"{MAIBOT_TITLE}\" {window_flag} /D {} cmd.exe /K call {}",
             bat_quote(&maibot_dir),
-            run,
-            bat_quote(&log_path)
+            bat_quote(&launcher_path)
         ))
     }
 
@@ -395,6 +423,10 @@ fn run_as_admin_script(target: &Path, workdir: &Path, title: &str) -> String {
             "echo 将请求管理员权限启动 {title}...\r\npowershell -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process -FilePath '{target}' -WorkingDirectory '{workdir}' -Verb RunAs\""
         )
     }
+}
+
+fn ps_single_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
 fn cmd_success_with_timeout(command: &str, timeout: Duration) -> Result<Option<bool>> {
