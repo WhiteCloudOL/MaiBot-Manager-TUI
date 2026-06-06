@@ -21,7 +21,7 @@ cargo build --release --target aarch64-unknown-linux-musl
 
 Release builds use musl static targets so the binaries do not depend on the target server's GLIBC version. There are no tests.
 
-GitHub Actions publishes every automatic build as a prerelease only. Keep release tags in the form `v<version>-nextdev-<short-sha>` (for example `v0.2.4-nextdev-abcdef1`) and do not create stable `v<version>` releases from the automatic workflow.
+GitHub Actions publishes every automatic build as a prerelease only. Keep release tags in the form `v<version>-nextdev-<short-sha>` (for example `v0.2.4-nextdev-abcdef1`) and do not create stable `v<version>` releases from the automatic workflow. Release notes should compare the current build with the latest stable GitHub Release and group conventional commits under professional sections such as `Feature:` and `Fix:`.
 
 ## Architecture
 

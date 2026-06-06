@@ -76,6 +76,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Read version
         id: version
@@ -111,30 +113,106 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
 
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags --force
+
+          BASE_TAG=$(gh release list \
+            --exclude-drafts \
+            --exclude-pre-releases \
+            --limit 1 \
+            --json tagName \
+            --jq '.[0].tagName // ""' \
+            --repo "${GITHUB_REPOSITORY}")
+
+          if [ -n "${BASE_TAG}" ] && git rev-parse -q --verify "refs/tags/${BASE_TAG}" >/dev/null; then
+            LOG_RANGE="${BASE_TAG}..${{ github.sha }}"
+            COMPARE_TEXT="Changes since ${BASE_TAG}"
+          else
+            LOG_RANGE="${{ github.sha }}"
+            COMPARE_TEXT="Changes in this build"
+          fi
+
+          mkdir -p dist/notes
+          : > dist/notes/feature.md
+          : > dist/notes/fix.md
+          : > dist/notes/performance.md
+          : > dist/notes/refactor.md
+          : > dist/notes/docs.md
+          : > dist/notes/ci.md
+          : > dist/notes/chore.md
+          : > dist/notes/other.md
+
+          while IFS='|' read -r sha subject; do
+            [ -n "${sha}" ] || continue
+
+            type=$(printf '%s' "${subject}" | sed -nE 's/^([A-Za-z]+)(\([^)]+\))?!?: .*/\1/p' | tr '[:upper:]' '[:lower:]')
+            message=$(printf '%s' "${subject}" | sed -E 's/^[A-Za-z]+(\([^)]+\))?!?:[[:space:]]*//')
+            entry="- ${message} (${sha})"
+
+            case "${type}" in
+              feat) printf '%s\n' "${entry}" >> dist/notes/feature.md ;;
+              fix) printf '%s\n' "${entry}" >> dist/notes/fix.md ;;
+              perf) printf '%s\n' "${entry}" >> dist/notes/performance.md ;;
+              refactor) printf '%s\n' "${entry}" >> dist/notes/refactor.md ;;
+              docs) printf '%s\n' "${entry}" >> dist/notes/docs.md ;;
+              ci|build) printf '%s\n' "${entry}" >> dist/notes/ci.md ;;
+              chore|style|test) printf '%s\n' "${entry}" >> dist/notes/chore.md ;;
+              *) printf '%s\n' "- ${subject} (${sha})" >> dist/notes/other.md ;;
+            esac
+          done < <(git log "${LOG_RANGE}" --no-merges --pretty=format:'%h|%s')
+
+          {
+            echo "Automated prerelease build from commit ${{ github.sha }}."
+            echo
+            echo "## ${COMPARE_TEXT}"
+            echo
+
+            for section in \
+              "Feature:dist/notes/feature.md" \
+              "Fix:dist/notes/fix.md" \
+              "Performance:dist/notes/performance.md" \
+              "Refactor:dist/notes/refactor.md" \
+              "Documentation:dist/notes/docs.md" \
+              "CI / Build:dist/notes/ci.md" \
+              "Chore:dist/notes/chore.md" \
+              "Other:dist/notes/other.md"; do
+              title="${section%%:*}"
+              file="${section#*:}"
+              if [ -s "${file}" ]; then
+                echo "${title}:"
+                cat "${file}"
+                echo
+              fi
+            done
+
+            echo "Artifacts:"
+            echo "- \`maibot-manager-x86_64\`: Linux x86_64"
+            echo "- \`maibot-manager-arm64\`: Linux aarch64"
+          } > dist/release-notes.md
+
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
           TITLE="${{ steps.meta.outputs.title }}"
-          NOTES="Automated build from commit ${{ github.sha }}.
-
-          - \`maibot-manager-x86_64\`: Linux x86_64
-          - \`maibot-manager-arm64\`: Linux aarch64"
 
           ASSETS=(dist/maibot-manager-x86_64 dist/maibot-manager-arm64)
 
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release edit "${TAG}" \
               --title "${TITLE}" \
-              --notes "${NOTES}" \
+              --notes-file dist/release-notes.md \
               --prerelease \
               --repo "${GITHUB_REPOSITORY}"
             gh release upload "${TAG}" "${ASSETS[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
           else
             gh release create "${TAG}" \
               --title "${TITLE}" \
-              --notes "${NOTES}" \
+              --notes-file dist/release-notes.md \
               --target "${{ github.sha }}" \
               --prerelease \
               --repo "${GITHUB_REPOSITORY}" \
