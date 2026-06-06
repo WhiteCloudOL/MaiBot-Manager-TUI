@@ -33,8 +33,8 @@ TARGETS=(
     aarch64-unknown-linux-musl
 )
 OUTPUT_NAMES=(
-    maibot-manager-x86_64
-    maibot-manager-arm64
+    maibot-manager-linux-x86_64
+    maibot-manager-linux-arm64
 )
 
 mkdir -p output

@@ -183,8 +183,8 @@ chmod +x ./build-release.sh
 构建完成后会在 `output/` 目录生成：
 
 ```text
-output/maibot-manager-x86_64
-output/maibot-manager-arm64
+output/maibot-manager-linux-x86_64
+output/maibot-manager-linux-arm64
 output/maibot-manager-windows-x86_64.exe
 
 ```
@@ -199,12 +199,12 @@ output/maibot-manager-windows-x86_64.exe
 
 ```bash
 # x86_64 服务器
-chmod +x ./maibot-manager-x86_64
-./maibot-manager-x86_64
+chmod +x ./maibot-manager-linux-x86_64
+./maibot-manager-linux-x86_64
 
 # ARM64 服务器
-chmod +x ./maibot-manager-arm64
-./maibot-manager-arm64
+chmod +x ./maibot-manager-linux-arm64
+./maibot-manager-linux-arm64
 
 # Windows 10/11
 .\maibot-manager-windows-x86_64.exe
@@ -393,7 +393,7 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 
 ## ⚠️ 注意事项
 
-* 请下载与平台匹配的产物：Linux 使用 `maibot-manager-x86_64` / `maibot-manager-arm64`，Windows 使用 `maibot-manager-windows-x86_64.exe`。
+* 请下载与平台匹配的产物：Linux 使用 `maibot-manager-linux-x86_64` / `maibot-manager-linux-arm64`，Windows 使用 `maibot-manager-windows-x86_64.exe`。
 * Linux LLBot 安装时会尝试自动安装 LinuxQQ，`apt` 环境下可能需要输入 `sudo` 密码。
 * Windows NapCat Shell 与 LLBot Desktop 启动时会请求管理员权限，这是上游程序运行需要。
 * Docker、GitHub、PyPI、NapCat / LLBot Release 下载都依赖目标机器的网络。

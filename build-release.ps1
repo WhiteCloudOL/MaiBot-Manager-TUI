@@ -60,6 +60,12 @@ if (-not $SkipLinux) {
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+    foreach ($linuxOutput in @("maibot-manager-linux-x86_64", "maibot-manager-linux-arm64")) {
+        $linuxOutputPath = Join-Path $outputDir $linuxOutput
+        if (-not (Test-Path -LiteralPath $linuxOutputPath)) {
+            throw "Linux build did not produce expected artifact: $linuxOutput"
+        }
+    }
 }
 
 Write-Host "Build complete:"

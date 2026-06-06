@@ -58,8 +58,8 @@ detect_asset() {
     local arch
     arch="$(uname -m)"
     case "$arch" in
-        x86_64|amd64)   echo "maibot-manager-x86_64" ;;
-        aarch64|arm64)  echo "maibot-manager-arm64"  ;;
+        x86_64|amd64)   echo "maibot-manager-linux-x86_64" ;;
+        aarch64|arm64)  echo "maibot-manager-linux-arm64"  ;;
         *)
             err "当前架构暂不支持: $arch"
             exit 1
