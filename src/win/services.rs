@@ -4,7 +4,9 @@ use dialoguer::{Confirm, Input, Select};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 const MAIBOT_TITLE: &str = "MaiBot maibot";
@@ -206,20 +208,20 @@ impl App {
     }
 
     pub(crate) fn llbot_running(&self) -> Result<bool> {
-        let output = Command::new("cmd")
-            .args([
-                "/C",
-                "tasklist /fi \"imagename eq llbot.exe\" | findstr /i \"llbot.exe\"",
-            ])
-            .output()?;
-        Ok(output.status.success())
+        Ok(cmd_success_with_timeout(
+            "tasklist /fi \"imagename eq llbot.exe\" | findstr /i \"llbot.exe\"",
+            Duration::from_millis(800),
+        )?
+        .unwrap_or(false))
     }
 
     pub(crate) fn napcat_running(&self) -> Result<bool> {
-        let output = Command::new("cmd")
-            .args(["/C", "tasklist /v | findstr /i \"NapCat\""])
-            .output()?;
-        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+        Ok(cmd_output_with_timeout(
+            "tasklist /v | findstr /i \"NapCat\"",
+            Duration::from_millis(800),
+        )?
+        .map(|output| !String::from_utf8_lossy(&output.stdout).trim().is_empty())
+        .unwrap_or(false))
     }
 
     pub(crate) fn manage_bot_protocol_menu(&self) -> Result<()> {
@@ -352,13 +354,11 @@ impl App {
 }
 
 fn window_running(title: &str) -> Result<bool> {
-    let output = Command::new("cmd")
-        .args([
-            "/C",
-            &format!("tasklist /v /fi \"WINDOWTITLE eq {title}*\" | findstr /i \"cmd.exe\""),
-        ])
-        .output()?;
-    Ok(output.status.success())
+    Ok(cmd_success_with_timeout(
+        &format!("tasklist /v /fi \"WINDOWTITLE eq {title}*\" | findstr /i \"cmd.exe\""),
+        Duration::from_millis(800),
+    )?
+    .unwrap_or(false))
 }
 
 fn print_window_status(name: &str, title: &str) -> Result<()> {
@@ -394,5 +394,29 @@ fn run_as_admin_script(target: &Path, workdir: &Path, title: &str) -> String {
         format!(
             "echo 将请求管理员权限启动 {title}...\r\npowershell -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process -FilePath '{target}' -WorkingDirectory '{workdir}' -Verb RunAs\""
         )
+    }
+}
+
+fn cmd_success_with_timeout(command: &str, timeout: Duration) -> Result<Option<bool>> {
+    Ok(cmd_output_with_timeout(command, timeout)?.map(|output| output.status.success()))
+}
+
+fn cmd_output_with_timeout(command: &str, timeout: Duration) -> Result<Option<Output>> {
+    let mut child = Command::new("cmd")
+        .args(["/C", command])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(Some(child.wait_with_output()?));
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
