@@ -50,6 +50,10 @@ pub struct InstallPlan {
     pub uv_index: String,
     pub bot_protocols: Vec<BotProtocol>,
     pub docker_mirror: DockerMirror,
+    pub github_fallback: GithubFallbackMode,
+    pub git_dirty_mode: GitDirtyMode,
+    pub napcat_conflict_mode: NapcatConflictMode,
+    pub llbot_update_mode: LlbotUpdateMode,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -86,6 +90,39 @@ pub enum DockerMirror {
     Official,
     #[default]
     Keep,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GithubFallbackMode {
+    #[default]
+    Ask,
+    Direct,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GitDirtyMode {
+    #[default]
+    Ask,
+    Stash,
+    Discard,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NapcatConflictMode {
+    #[default]
+    Ask,
+    Recreate,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LlbotUpdateMode {
+    #[default]
+    Prompt,
+    Update,
+    Skip,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

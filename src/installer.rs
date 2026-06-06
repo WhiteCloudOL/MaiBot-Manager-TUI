@@ -18,6 +18,14 @@ use std::{
     time::Duration,
 };
 
+const LLBOT_RELEASE_TAG_FILE: &str = ".maibot-llbot-release";
+
+#[derive(Debug)]
+struct LlbotReleaseInfo {
+    tag_name: String,
+    asset_url: String,
+}
+
 /// 用户主动取消的标记错误。沿用 anyhow 链向上传播，由 install_update_flow
 /// 捕获后转成温和提示返回主菜单，不弹红色 Error。
 #[derive(Debug)]
@@ -32,6 +40,104 @@ impl fmt::Display for UserCanceled {
 impl std::error::Error for UserCanceled {}
 
 impl App {
+    fn remove_env_dir_safely(&self, env_dir: &Path, install_root: &Path) -> Result<()> {
+        if !env_dir.exists() {
+            return Ok(());
+        }
+        let canonical_env = env_dir
+            .canonicalize()
+            .with_context(|| format!("解析虚拟环境目录失败: {}", env_dir.display()))?;
+        let canonical_root = install_root
+            .canonicalize()
+            .unwrap_or_else(|_| install_root.to_path_buf());
+        let canonical_maibot = install_root
+            .join("MaiBot")
+            .canonicalize()
+            .unwrap_or_else(|_| install_root.join("MaiBot"));
+        let canonical_parent = env_dir
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok());
+
+        if canonical_env == canonical_root
+            || canonical_env == canonical_maibot
+            || canonical_parent.as_ref() == Some(&canonical_env)
+        {
+            anyhow::bail!(
+                "拒绝删除虚拟环境目录：{} 实际指向了安装目录或程序本体",
+                env_dir.display()
+            );
+        }
+        if !canonical_env.starts_with(&canonical_root) {
+            anyhow::bail!(
+                "拒绝删除安装目录之外的虚拟环境：{} -> {}",
+                env_dir.display(),
+                canonical_env.display()
+            );
+        }
+
+        let metadata = fs::symlink_metadata(env_dir)
+            .with_context(|| format!("读取虚拟环境目录属性失败: {}", env_dir.display()))?;
+        if metadata.file_type().is_symlink() {
+            fs::remove_file(env_dir)
+                .with_context(|| format!("删除虚拟环境符号链接失败: {}", env_dir.display()))?;
+        } else {
+            fs::remove_dir_all(env_dir)
+                .with_context(|| format!("删除虚拟环境目录失败: {}", env_dir.display()))?;
+        }
+        Ok(())
+    }
+
+    fn fetch_llbot_release_info(&self, asset_name: &str) -> Result<LlbotReleaseInfo> {
+        let api_url = "https://api.github.com/repos/LLOneBot/LuckyLilliaBot/releases/latest";
+        let output = Command::new("bash")
+            .arg("-lc")
+            .arg(format!(
+                "curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: maibot-manager-tui' '{api_url}'"
+            ))
+            .output()
+            .with_context(|| format!("获取 LLBot 最新 release 失败: {api_url}"))?;
+        if !output.status.success() {
+            anyhow::bail!("获取 LLBot 最新 release 失败: {api_url}");
+        }
+
+        let data: Value = serde_json::from_slice(&output.stdout)
+            .with_context(|| "解析 LLBot release JSON 失败")?;
+        let tag_name = data
+            .get("tag_name")
+            .and_then(Value::as_str)
+            .filter(|v| !v.trim().is_empty())
+            .ok_or_else(|| anyhow!("LLBot release 缺少 tag_name"))?
+            .to_string();
+        let asset_url = data
+            .get("assets")
+            .and_then(Value::as_array)
+            .and_then(|assets| {
+                assets.iter().find_map(|asset| {
+                    (asset.get("name").and_then(Value::as_str) == Some(asset_name))
+                        .then(|| asset.get("browser_download_url").and_then(Value::as_str))
+                        .flatten()
+                })
+            })
+            .ok_or_else(|| anyhow!("LLBot release 未找到资产包: {asset_name}"))?
+            .to_string();
+
+        Ok(LlbotReleaseInfo {
+            tag_name,
+            asset_url,
+        })
+    }
+
+    fn llbot_release_tag_path(&self, llbot_dir: &Path) -> PathBuf {
+        llbot_dir.join(LLBOT_RELEASE_TAG_FILE)
+    }
+
+    fn current_llbot_release_tag(&self, llbot_dir: &Path) -> Option<String> {
+        fs::read_to_string(self.llbot_release_tag_path(llbot_dir))
+            .ok()
+            .map(|tag| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+    }
+
     /// 在 destructive 提示出现之前清空 tty 输入缓冲。
     /// 用户上一次多按的 Enter 不应被下一个 prompt 立刻吃掉默认项。
     pub(crate) fn drain_pending_input(&self) {
@@ -666,6 +772,10 @@ impl App {
             uv_index,
             bot_protocols,
             docker_mirror: DockerMirror::Keep,
+            github_fallback: GithubFallbackMode::Ask,
+            git_dirty_mode: GitDirtyMode::Ask,
+            napcat_conflict_mode: NapcatConflictMode::Ask,
+            llbot_update_mode: LlbotUpdateMode::Prompt,
         })
     }
 
@@ -685,6 +795,10 @@ impl App {
             uv_index: String::new(),
             bot_protocols: vec![BotProtocol::NapCat],
             docker_mirror: DockerMirror::Keep,
+            github_fallback: GithubFallbackMode::Ask,
+            git_dirty_mode: GitDirtyMode::Ask,
+            napcat_conflict_mode: NapcatConflictMode::Ask,
+            llbot_update_mode: LlbotUpdateMode::Prompt,
         }
     }
 
@@ -734,7 +848,7 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn run_github_speedtest(&self) -> Result<String> {
+    pub(crate) fn run_github_speedtest(&self, fallback: GithubFallbackMode) -> Result<String> {
         let mut mirrors = vec!["https://github.com".to_string()];
         mirrors.extend(github_mirrors().iter().map(|v| v.to_string()));
         println!("  {}", style("正在并行测速，请稍候...").dim());
@@ -805,18 +919,26 @@ impl App {
             }
             None => {
                 println!("  {}", style("✗ 全部线路连接失败").red().bold());
-                let choice = self.with_prompt_mode(|| {
-                    Select::with_theme(&self.theme)
-                        .with_prompt("请选择回退方案")
-                        .items(["重试测速", "使用 GitHub 官方直连", "取消安装"])
-                        .default(0)
-                        .interact()
-                        .map_err(Into::into)
-                })?;
-                match choice {
-                    0 => self.run_github_speedtest(),
-                    1 => Ok("https://github.com".to_string()),
-                    _ => Err(anyhow!("用户取消安装")),
+                match fallback {
+                    GithubFallbackMode::Ask => {
+                        let choice = self.with_prompt_mode(|| {
+                            Select::with_theme(&self.theme)
+                                .with_prompt("请选择回退方案")
+                                .items(["重试测速", "使用 GitHub 官方直连", "取消安装"])
+                                .default(0)
+                                .interact()
+                                .map_err(Into::into)
+                        })?;
+                        match choice {
+                            0 => self.run_github_speedtest(fallback),
+                            1 => Ok("https://github.com".to_string()),
+                            _ => Err(anyhow!("用户取消安装")),
+                        }
+                    }
+                    GithubFallbackMode::Direct => Ok("https://github.com".to_string()),
+                    GithubFallbackMode::Cancel => Err(anyhow!(
+                        "GitHub 线路测速全部失败；CLI 可使用 --github-fallback direct 改为直连继续"
+                    )),
                 }
             }
         }
@@ -867,7 +989,7 @@ impl App {
                 "GitHub 线路测速",
                 "未手动指定线路，正在自动测速并选择最佳线路",
             );
-            plan.github_proxy = self.run_github_speedtest()?;
+            plan.github_proxy = self.run_github_speedtest(plan.github_fallback)?;
         }
 
         if plan.install_mode == InstallMode::Clean {
@@ -882,6 +1004,8 @@ impl App {
             &plan.install_path.join("MaiBot"),
             Some(&plan.maibot_branch),
             plan.install_mode,
+            true,
+            plan.git_dirty_mode,
         )?;
         self.sync_plugin_repo_with_manifest_dir(
             &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-Napcat-Adapter"),
@@ -957,12 +1081,14 @@ impl App {
         target: &Path,
         branch: Option<&str>,
         mode: InstallMode,
+        auto_discard_single_uv_lock: bool,
+        dirty_mode: GitDirtyMode,
     ) -> Result<()> {
         if target.join(".git").exists() {
             if mode == InstallMode::Clean {
                 fs::remove_dir_all(target)?;
             } else {
-                self.ensure_clean_worktree(target)?;
+                self.ensure_clean_worktree(target, auto_discard_single_uv_lock, dirty_mode)?;
                 let branch = branch.unwrap_or("main");
                 let cmd = format!(
                     "cd '{}' && git fetch --depth 1 '{}' '{}' && git checkout -fB '{}' FETCH_HEAD && git reset --hard FETCH_HEAD",
@@ -992,7 +1118,12 @@ impl App {
     /// 如果目标仓库工作区有本地修改或未跟踪文件，列出后请用户选择处理方式：
     /// 1) git stash 临时保存；2) 丢弃；3) 取消更新。
     /// 丢弃前还会再确认一次，避免误操作。
-    fn ensure_clean_worktree(&self, target: &Path) -> Result<()> {
+    fn ensure_clean_worktree(
+        &self,
+        target: &Path,
+        auto_discard_single_uv_lock: bool,
+        dirty_mode: GitDirtyMode,
+    ) -> Result<()> {
         let output = Command::new("bash")
             .arg("-lc")
             .arg(format!(
@@ -1032,6 +1163,44 @@ impl App {
                 .get(3..)
                 .map(|s| s.trim() == "uv.lock")
                 .unwrap_or(false);
+        if only_uv_lock && auto_discard_single_uv_lock {
+            println!("{}", style(&bar).yellow().bold());
+            println!(
+                "  {} {}",
+                style("✔ 自动处理：").green().bold(),
+                style("MaiBot 仓库仅 uv.lock 被改动，已按策略直接丢弃并继续更新")
+                    .green()
+                    .bold()
+            );
+            self.run_shell(&format!(
+                "cd '{}' && (git checkout -- uv.lock 2>/dev/null || true) && git clean -f -- uv.lock",
+                shell_escape(target)
+            ))?;
+            return Ok(());
+        }
+        match dirty_mode {
+            GitDirtyMode::Stash => {
+                self.run_shell(&format!(
+                    "cd '{}' && git stash push -u -m \"maibot-mgr-tui-$(date +%Y%m%d-%H%M%S)\"",
+                    shell_escape(target)
+                ))?;
+                return Ok(());
+            }
+            GitDirtyMode::Discard => {
+                self.run_shell(&format!(
+                    "cd '{}' && git reset --hard HEAD && git clean -fd",
+                    shell_escape(target)
+                ))?;
+                return Ok(());
+            }
+            GitDirtyMode::Cancel => {
+                return Err(anyhow!(UserCanceled(format!(
+                    "已取消：{} 存在未保存的本地修改；CLI 可使用 --git-dirty stash 或 --git-dirty discard 指定处理方式",
+                    target.display()
+                ))));
+            }
+            GitDirtyMode::Ask => {}
+        }
         println!("{}", style(&bar).red().bold());
         if only_uv_lock {
             println!(
@@ -1137,7 +1306,7 @@ impl App {
                 }
                 let venv = maibot_dir.join(".venv");
                 if plan.venv_mode == VenvMode::Recreate && venv.exists() {
-                    fs::remove_dir_all(&venv)?;
+                    self.remove_env_dir_safely(&venv, root)?;
                 }
                 let mut prefix = String::new();
                 if !plan.uv_index.is_empty() {
@@ -1162,7 +1331,7 @@ impl App {
             PythonEnv::System => {
                 let venv_dir = root.join("venv");
                 if plan.venv_mode == VenvMode::Recreate && venv_dir.exists() {
-                    fs::remove_dir_all(&venv_dir)?;
+                    self.remove_env_dir_safely(&venv_dir, root)?;
                 }
                 if !venv_dir.exists() {
                     self.run_shell(&format!(
@@ -1220,7 +1389,7 @@ impl App {
 "#;
             fs::write(&compose_path, compose)?;
         }
-        self.handle_napcat_container_conflict(&napcat_dir)?;
+        self.handle_napcat_container_conflict(&napcat_dir, plan.napcat_conflict_mode)?;
         self.run_shell(&format!(
             "cd '{}' && docker compose up -d",
             shell_escape(&napcat_dir)
@@ -1230,7 +1399,11 @@ impl App {
     /// `docker compose up -d` 在同名容器（非本 compose 项目托管）存在时会冲突。
     /// 这里先用 `docker ps -aq --filter name=^napcat$` 探测，命中就询问用户
     /// 是否 `docker rm -f` 后重建；选否则按用户取消处理。
-    fn handle_napcat_container_conflict(&self, napcat_dir: &Path) -> Result<()> {
+    fn handle_napcat_container_conflict(
+        &self,
+        napcat_dir: &Path,
+        conflict_mode: NapcatConflictMode,
+    ) -> Result<()> {
         let output = Command::new("bash")
             .arg("-lc")
             .arg("docker ps -aq --filter name=^napcat$ 2>/dev/null || true")
@@ -1275,17 +1448,26 @@ impl App {
             style("继续部署需先删除旧容器（镜像与挂载卷不会被动）").dim()
         );
 
-        self.drain_pending_input();
-        let confirmed = Confirm::with_theme(&self.theme)
-            .with_prompt("删除旧容器并重新部署？")
-            .default(true)
-            .interact()
-            .with_context(|| "读取确认失败")?;
-
-        if !confirmed {
-            return Err(anyhow!(UserCanceled(
-                "已取消：保留旧 napcat 容器，未重新部署".to_string()
-            )));
+        match conflict_mode {
+            NapcatConflictMode::Ask => {
+                self.drain_pending_input();
+                let confirmed = Confirm::with_theme(&self.theme)
+                    .with_prompt("删除旧容器并重新部署？")
+                    .default(true)
+                    .interact()
+                    .with_context(|| "读取确认失败")?;
+                if !confirmed {
+                    return Err(anyhow!(UserCanceled(
+                        "已取消：保留旧 napcat 容器，未重新部署".to_string()
+                    )));
+                }
+            }
+            NapcatConflictMode::Recreate => {}
+            NapcatConflictMode::Cancel => {
+                return Err(anyhow!(UserCanceled(
+                    "已取消：检测到同名 napcat 容器；CLI 可使用 --napcat-conflict recreate 允许重建".to_string()
+                )));
+            }
         }
 
         self.run_shell("docker rm -f napcat")?;
@@ -1297,32 +1479,125 @@ impl App {
         fs::create_dir_all(&llbot_dir)?;
         let arch = detect_arch()?;
         let asset_name = format!("LLBot-CLI-linux-{arch}.zip");
+        let release = self.fetch_llbot_release_info(&asset_name)?;
+        let current_tag = self.current_llbot_release_tag(&llbot_dir);
+        let start_script = llbot_dir.join("start.sh");
+        if current_tag.as_deref() == Some(release.tag_name.as_str()) && start_script.exists() {
+            println!(
+                "  {} LuckyLilliaBot 已是最新版本 {}，跳过更新",
+                style("✔").green(),
+                release.tag_name
+            );
+            return Ok(());
+        }
+        let llbot_exists = start_script.exists() || llbot_dir.join("bin/llbot").exists();
+        if llbot_exists {
+            match plan.llbot_update_mode {
+                LlbotUpdateMode::Prompt => {
+                    println!();
+                    println!(
+                        "  {} {}",
+                        style("!").yellow().bold(),
+                        style("检测到 LuckyLilliaBot 可更新").yellow().bold()
+                    );
+                    self.print_kv(
+                        "当前版本",
+                        current_tag
+                            .as_deref()
+                            .unwrap_or("未知（旧版本未记录 release）"),
+                    );
+                    self.print_kv("最新版本", &release.tag_name);
+                    self.drain_pending_input();
+                    let confirmed = Confirm::with_theme(&self.theme)
+                        .with_prompt("是否更新 LuckyLilliaBot？选择否将跳过更新")
+                        .default(false)
+                        .interact()
+                        .with_context(|| "读取 LLBot 更新确认失败")?;
+                    if !confirmed {
+                        println!("  {}", style("已跳过 LuckyLilliaBot 更新").dim());
+                        return Ok(());
+                    }
+                }
+                LlbotUpdateMode::Update => {}
+                LlbotUpdateMode::Skip => {
+                    println!(
+                        "  {} LuckyLilliaBot 已安装，按当前策略跳过更新（最新版本: {}）",
+                        style("→").yellow(),
+                        release.tag_name
+                    );
+                    return Ok(());
+                }
+            }
+        }
+
+        let data_dir = llbot_dir.join("bin/llbot/data");
+        let default_config_path = llbot_dir.join("bin/llbot/default_config.json");
+        let had_default_config = default_config_path.exists();
         let proxy_prefix =
             if plan.github_proxy.is_empty() || plan.github_proxy == "https://github.com" {
                 String::new()
             } else {
                 format!("{}/", plan.github_proxy.trim_end_matches('/'))
             };
+        let asset_url = format!("{proxy_prefix}{}", release.asset_url);
+        let llbot_abs = llbot_dir.display().to_string();
+        let data_abs = data_dir.display().to_string();
+        let default_config_abs = default_config_path.display().to_string();
         let script = format!(
             r#"set -e
-api_url="https://api.github.com/repos/LLOneBot/LuckyLilliaBot/releases/latest"
-asset_url=$(curl -fsSL "$api_url" | python3 -c 'import sys,json; data=json.load(sys.stdin); name=sys.argv[1]; print(next((a["browser_download_url"] for a in data.get("assets",[]) if a.get("name")==name),""))' "{asset_name}")
-[ -n "$asset_url" ]
-asset_url="{proxy}$asset_url"
-mkdir -p '{llbot}'
-zip_path='{llbot}/{asset_name}'
+llbot_dir='{llbot}'
+data_dir='{data_dir}'
+default_config='{default_config}'
+backup_root="$llbot_dir/.maibot-llbot-backup"
+backup_data="$backup_root/data"
+backup_config="$backup_root/default_config.json"
+asset_url='{asset_url}'
+
+rm -rf "$backup_root"
+mkdir -p "$llbot_dir"
+if [ -d "$data_dir" ]; then
+  mkdir -p "$backup_root"
+  cp -a "$data_dir" "$backup_data"
+fi
+if [ -f "$default_config" ]; then
+  mkdir -p "$backup_root"
+  cp -a "$default_config" "$backup_config"
+fi
+
+zip_path="$llbot_dir/{asset_name}"
 curl -fL --retry 3 --connect-timeout 10 -o "$zip_path" "$asset_url"
-rm -rf '{llbot}/bin' '{llbot}/llbot' '{llbot}/start.sh' '{llbot}/使用说明.txt' '{llbot}/更新日志.txt'
-unzip -oq "$zip_path" -d '{llbot}'
-chmod +x '{llbot}/start.sh' '{llbot}/llbot' 2>/dev/null || true
-find '{llbot}/bin' -type f -exec chmod +x {{}} \; 2>/dev/null || true
+rm -rf "$llbot_dir/bin" "$llbot_dir/llbot" "$llbot_dir/start.sh" "$llbot_dir/使用说明.txt" "$llbot_dir/更新日志.txt"
+unzip -oq "$zip_path" -d "$llbot_dir"
+
+if [ -d "$backup_data" ]; then
+  rm -rf "$data_dir"
+  mkdir -p "$(dirname "$data_dir")"
+  cp -a "$backup_data" "$data_dir"
+fi
+if [ -f "$backup_config" ]; then
+  mkdir -p "$(dirname "$default_config")"
+  cp -af "$backup_config" "$default_config"
+fi
+
+rm -rf "$backup_root"
+chmod +x "$llbot_dir/start.sh" "$llbot_dir/llbot" 2>/dev/null || true
+find "$llbot_dir/bin" -type f -exec chmod +x {{}} \; 2>/dev/null || true
 "#,
-            proxy = proxy_prefix,
-            llbot = shell_escape(&llbot_dir)
+            asset_name = asset_name,
+            asset_url = asset_url.replace('\'', "'\\''"),
+            llbot = shell_escape_raw(&llbot_abs),
+            data_dir = shell_escape_raw(&data_abs),
+            default_config = shell_escape_raw(&default_config_abs)
         );
         self.run_shell(&script)?;
         self.install_linuxqq_for_llbot()?;
-        self.update_llbot_default_config(&llbot_dir)?;
+        fs::write(
+            self.llbot_release_tag_path(&llbot_dir),
+            format!("{}\n", release.tag_name),
+        )?;
+        if !had_default_config {
+            self.update_llbot_default_config(&llbot_dir)?;
+        }
         Ok(())
     }
 

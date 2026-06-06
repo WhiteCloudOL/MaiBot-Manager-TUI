@@ -1,5 +1,5 @@
-use anyhow::{Result, anyhow};
-use dialoguer::Select;
+use anyhow::{Error, Result, anyhow};
+use dialoguer::{Select, console::style};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -9,6 +9,7 @@ use crate::utils::screen_exists;
 pub(crate) struct App {
     pub(crate) theme: AppTheme,
     pub(crate) config_path: PathBuf,
+    pub(crate) cli_mode: bool,
 }
 
 impl App {
@@ -17,7 +18,12 @@ impl App {
         Ok(Self {
             theme: AppTheme::new(),
             config_path: home.join(".maibot_config"),
+            cli_mode: false,
         })
+    }
+
+    pub(crate) fn set_cli_mode(&mut self) {
+        self.cli_mode = true;
     }
 
     pub(crate) fn run(&mut self) -> Result<()> {
@@ -39,15 +45,41 @@ impl App {
                 .items(&items)
                 .default(0)
                 .interact()?;
-            match choice {
-                0 => self.install_update_flow()?,
-                1 => self.manage_maibot_menu()?,
-                2 => self.manage_bot_protocol_menu()?,
-                3 => self.manage_config_access_menu()?,
-                4 => self.manage_plugins_menu()?,
+            let result = match choice {
+                0 => self.install_update_flow(),
+                1 => self.manage_maibot_menu(),
+                2 => self.manage_bot_protocol_menu(),
+                3 => self.manage_config_access_menu(),
+                4 => self.manage_plugins_menu(),
                 _ => break,
+            };
+            self.handle_menu_result(result)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn handle_menu_result(&self, result: Result<()>) -> Result<bool> {
+        match result {
+            Ok(()) => Ok(true),
+            Err(error) => {
+                self.print_menu_error(&error)?;
+                Ok(false)
             }
         }
+    }
+
+    fn print_menu_error(&self, error: &Error) -> Result<()> {
+        println!();
+        println!(
+            "  {} {}",
+            style("!").red().bold(),
+            style("操作失败").red().bold()
+        );
+        println!("  {}", style(error.to_string()).red());
+        for cause in error.chain().skip(1) {
+            println!("    {}", style(format!("原因: {cause}")).dim());
+        }
+        self.pause("按回车返回当前菜单")?;
         Ok(())
     }
 

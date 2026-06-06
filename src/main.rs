@@ -28,6 +28,7 @@ fn main() -> Result<()> {
     let result = if args.is_empty() || args.first().is_some_and(|arg| arg == "tui") {
         app.run()
     } else {
+        app.set_cli_mode();
         app.run_cli(&args)
     };
     restore_terminal_state();

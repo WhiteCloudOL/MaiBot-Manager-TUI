@@ -32,6 +32,9 @@ impl App {
                 .bold()
         );
         println!("{}", style(&bar).yellow().bold());
+        if self.cli_mode {
+            return Ok(());
+        }
         self.pause("按回车进入控制台...")?;
         Ok(())
     }
@@ -193,11 +196,12 @@ impl App {
                 .items(["管理 NapCatQQ", "管理 LuckyLilliaBot", "返回"])
                 .default(0)
                 .interact()?;
-            match choice {
-                0 => self.manage_napcat_menu()?,
-                1 => self.manage_llbot_menu()?,
+            let result = match choice {
+                0 => self.manage_napcat_menu(),
+                1 => self.manage_llbot_menu(),
                 _ => break,
-            }
+            };
+            self.handle_menu_result(result)?;
         }
         Ok(())
     }
@@ -222,20 +226,22 @@ impl App {
                 .items(["启动 MaiBot", "停止 MaiBot", "进入 Screen 控制台", "返回"])
                 .default(0)
                 .interact()?;
-            match choice {
+            let result = match choice {
                 0 => {
                     let run_mode = Select::with_theme(&self.theme)
                         .with_prompt("启动方式")
                         .items(["正常后台启动", "启动并进入控制台（首次运行建议）"])
                         .default(0)
                         .interact()?;
-                    self.start_maibot_core(run_mode == 1)?;
+                    self.start_maibot_core(run_mode == 1)
                 }
-                1 => self.stop_maibot_core()?,
-                2 => self.attach_screen("maibot")?,
+                1 => self.stop_maibot_core(),
+                2 => self.attach_screen("maibot"),
                 _ => break,
+            };
+            if self.handle_menu_result(result)? {
+                self.pause("操作已执行，按回车继续")?;
             }
-            self.pause("操作已执行，按回车继续")?;
         }
         Ok(())
     }
@@ -262,13 +268,13 @@ impl App {
                 ])
                 .default(0)
                 .interact()?;
-            match choice {
-                0 => self.start_napcat()?,
-                1 => self.stop_napcat()?,
-                2 => self.restart_napcat()?,
-                3 => self.print_napcat_logs(100, true)?,
-                4 => self.rebuild_napcat()?,
-                5 => self.remove_napcat_container()?,
+            let result = match choice {
+                0 => self.start_napcat(),
+                1 => self.stop_napcat(),
+                2 => self.restart_napcat(),
+                3 => self.print_napcat_logs(100, true),
+                4 => self.rebuild_napcat(),
+                5 => self.remove_napcat_container(),
                 6 => {
                     if Confirm::with_theme(&self.theme)
                         .with_prompt("确认删除 NapCat 目录及其数据？")
@@ -281,10 +287,13 @@ impl App {
                         ));
                         fs::remove_dir_all(&napcat_dir).ok();
                     }
+                    Ok(())
                 }
                 _ => break,
+            };
+            if self.handle_menu_result(result)? {
+                self.pause("操作已执行，按回车继续")?;
             }
-            self.pause("操作已执行，按回车继续")?;
         }
         Ok(())
     }
@@ -320,16 +329,16 @@ impl App {
                 ])
                 .default(0)
                 .interact()?;
-            match choice {
-                0 => self.start_llbot()?,
-                1 => self.stop_llbot()?,
-                2 => self.restart_llbot()?,
-                3 => self.attach_screen("llbot")?,
+            let result = match choice {
+                0 => self.start_llbot(),
+                1 => self.stop_llbot(),
+                2 => self.restart_llbot(),
+                3 => self.attach_screen("llbot"),
                 4 => {
                     let password: String = Input::with_theme(&self.theme)
                         .with_prompt("新的 WebUI 密码")
                         .interact_text()?;
-                    self.set_llbot_password(&password)?;
+                    self.set_llbot_password(&password)
                 }
                 5 => {
                     if Confirm::with_theme(&self.theme)
@@ -340,10 +349,13 @@ impl App {
                         let _ = self.stop_llbot();
                         fs::remove_dir_all(&llbot_dir).ok();
                     }
+                    Ok(())
                 }
                 _ => break,
+            };
+            if self.handle_menu_result(result)? {
+                self.pause("操作已执行，按回车继续")?;
             }
-            self.pause("操作已执行，按回车继续")?;
         }
         Ok(())
     }

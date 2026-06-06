@@ -1,4 +1,8 @@
-use crate::{app::App, model::InstallMode, utils::*};
+use crate::{
+    app::App,
+    model::{GitDirtyMode, InstallMode},
+    utils::*,
+};
 use anyhow::{Context, Result, bail};
 use dialoguer::{Input, Select};
 use serde_json::Value;
@@ -123,7 +127,7 @@ impl App {
         }
 
         let target_existed_before = target.exists();
-        self.clone_or_update_repo(url, &target, branch, mode)?;
+        self.clone_or_update_repo(url, &target, branch, mode, false, GitDirtyMode::Ask)?;
 
         let plugin_id = self.plugin_id_from_dir(&target)?;
         let canonical = plugins_dir.join(&plugin_id);
@@ -135,11 +139,10 @@ impl App {
             if target_existed_before {
                 self.move_plugin_dir_to_backup(&target)?;
             } else {
-                fs::remove_dir_all(&target).with_context(|| {
-                    format!("无法清理临时插件目录 {}", target.display())
-                })?;
+                fs::remove_dir_all(&target)
+                    .with_context(|| format!("无法清理临时插件目录 {}", target.display()))?;
             }
-            self.clone_or_update_repo(url, &canonical, branch, mode)?;
+            self.clone_or_update_repo(url, &canonical, branch, mode, false, GitDirtyMode::Ask)?;
             return Ok(canonical);
         }
 
@@ -236,12 +239,12 @@ impl App {
                 .items(["安装插件", "卸载插件", "安装插件依赖", "返回"])
                 .default(0)
                 .interact()?;
-            match choice {
+            let result = match choice {
                 0 => {
                     let input: String = Input::with_theme(&self.theme)
                         .with_prompt("输入 GitHub 插件地址或 username/repo")
                         .interact_text()?;
-                    self.install_plugin_from_input(&input)?;
+                    self.install_plugin_from_input(&input)
                 }
                 1 => {
                     let plugins = list_plugins(&plugins_dir)?;
@@ -254,7 +257,7 @@ impl App {
                         .items(&plugins)
                         .default(0)
                         .interact()?;
-                    self.remove_plugin(&plugins[idx])?;
+                    self.remove_plugin(&plugins[idx])
                 }
                 2 => {
                     let plugins = list_plugins(&plugins_dir)?;
@@ -267,11 +270,13 @@ impl App {
                         .items(&plugins)
                         .default(0)
                         .interact()?;
-                    self.install_plugin_dependencies(&plugins[idx])?;
+                    self.install_plugin_dependencies(&plugins[idx])
                 }
                 _ => break,
+            };
+            if self.handle_menu_result(result)? {
+                self.pause("操作已执行，按回车继续")?;
             }
-            self.pause("操作已执行，按回车继续")?;
         }
         Ok(())
     }

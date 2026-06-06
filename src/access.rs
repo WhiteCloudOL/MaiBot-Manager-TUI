@@ -39,12 +39,13 @@ impl App {
                 ])
                 .default(0)
                 .interact()?;
-            match choice {
-                0 => self.show_access_info()?,
-                1 => self.initialize_maibot_access_config()?,
-                2 => self.modify_adapter_config()?,
+            let result = match choice {
+                0 => self.show_access_info(),
+                1 => self.initialize_maibot_access_config(),
+                2 => self.modify_adapter_config(),
                 _ => break,
-            }
+            };
+            self.handle_menu_result(result)?;
         }
         Ok(())
     }
@@ -296,18 +297,28 @@ impl App {
                 ])
                 .default(0)
                 .interact()?;
-            match choice {
-                0 => toggle_string(&mut doc, "group_list_type", "whitelist", "blacklist"),
-                1 => prompt_modify_numeric_array(&mut doc, "group_list", true, &self.theme)?,
-                2 => prompt_modify_numeric_array(&mut doc, "group_list", false, &self.theme)?,
-                3 => toggle_string(&mut doc, "private_list_type", "whitelist", "blacklist"),
-                4 => prompt_modify_numeric_array(&mut doc, "private_list", true, &self.theme)?,
-                5 => prompt_modify_numeric_array(&mut doc, "private_list", false, &self.theme)?,
-                6 => prompt_modify_numeric_array(&mut doc, "ban_user_id", true, &self.theme)?,
-                7 => prompt_modify_numeric_array(&mut doc, "ban_user_id", false, &self.theme)?,
+            let result = match choice {
+                0 => {
+                    toggle_string(&mut doc, "group_list_type", "whitelist", "blacklist");
+                    Ok(())
+                }
+                1 => prompt_modify_numeric_array(&mut doc, "group_list", true, &self.theme),
+                2 => prompt_modify_numeric_array(&mut doc, "group_list", false, &self.theme),
+                3 => {
+                    toggle_string(&mut doc, "private_list_type", "whitelist", "blacklist");
+                    Ok(())
+                }
+                4 => prompt_modify_numeric_array(&mut doc, "private_list", true, &self.theme),
+                5 => prompt_modify_numeric_array(&mut doc, "private_list", false, &self.theme),
+                6 => prompt_modify_numeric_array(&mut doc, "ban_user_id", true, &self.theme),
+                7 => prompt_modify_numeric_array(&mut doc, "ban_user_id", false, &self.theme),
                 _ => break,
+            };
+            if self.handle_menu_result(
+                result.and_then(|_| fs::write(&path, doc.to_string()).map_err(Into::into)),
+            )? {
+                self.pause("操作已执行，按回车继续")?;
             }
-            fs::write(&path, doc.to_string())?;
         }
         Ok(())
     }

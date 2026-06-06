@@ -15,6 +15,8 @@ pub(crate) fn print_help() {
 常用示例:
   maibot install --path ~/maimai --python uv --protocol napcat
   maibot update --branch main --github auto
+  maibot update --protocol llbot --llbot-update update
+  maibot update --git-dirty stash --napcat-conflict recreate
   maibot core restart
   maibot core logs --tail 200
   maibot core exec
@@ -29,8 +31,8 @@ pub(crate) fn print_help() {
 
 说明:
   install 和 update 使用同一套安装计划。未指定的选项会优先读取 ~/.maibot_config，
-  没有配置时使用推荐默认值。执行过程中仍会保留必要的风险提示和确认，例如清空目录、
-  处理 Git 本地改动、删除冲突的 NapCat 容器等。
+  没有配置时使用推荐默认值。CLI 允许必要的交互确认；如果用于脚本或 Agent，
+  可通过下面的策略参数跳过对应询问并直接选择处理方式。
   推荐默认值为当前用户 HOME 下的 maimai 目录、uv Python 环境和 NapCatQQ 协议端。
 
 安装选项:
@@ -43,6 +45,10 @@ pub(crate) fn print_help() {
   --pip <system|aliyun|tencent|tsinghua|ustc|official|URL>
   --protocol <napcat|llbot|none> 协议端
   --docker <one-ms|xuanyuan|official|keep>
+  --github-fallback <direct|cancel>
+  --git-dirty <stash|discard|cancel>
+  --napcat-conflict <recreate|cancel>
+  --llbot-update <update|skip>
 
 安装选项说明:
   --mode normal      保留目标目录，更新或修复已有安装
@@ -54,6 +60,27 @@ pub(crate) fn print_help() {
   --pip URL          使用自定义 PyPI 镜像；仅写入当前 venv，不污染全局 pip 配置
   --protocol none    只部署 MaiBot 核心和 Adapter，不安装额外协议端
   --docker keep      不修改 /etc/docker/daemon.json
+  --github-fallback direct
+                    GitHub auto 测速全部失败时不再询问，改用官方直连继续
+  --github-fallback cancel
+                    GitHub auto 测速全部失败时不再询问，直接取消安装
+  --git-dirty stash  目标 Git 仓库有本地改动时不再询问，自动 git stash -u 后继续
+  --git-dirty discard
+                    目标 Git 仓库有本地改动时不再询问，自动丢弃后继续；仅在确认不需要保留改动时使用
+  --git-dirty cancel 目标 Git 仓库有本地改动时不再询问，直接取消更新
+  --napcat-conflict recreate
+                    检测到同名 napcat 容器时不再询问，删除旧容器并继续部署
+  --napcat-conflict cancel
+                    检测到同名 napcat 容器时不再询问，直接取消部署
+  --llbot-update update
+                    已安装 LuckyLilliaBot 且有新 release 时不再询问，执行更新并保留 data/default_config.json
+  --llbot-update skip
+                    已安装 LuckyLilliaBot 且有新 release 时不再询问，跳过更新
+
+CLI 交互策略:
+  install/update     默认允许交互确认。单独的 MaiBot uv.lock 改动会自动丢弃；其他 Git 改动、
+                    NapCat 容器冲突、LLBot 已安装更新等情况可用上述参数跳过询问。
+  TUI                仍会在这些分支展示提示，让用户现场选择。
 
 MaiBot 核心:
   maibot core start [--exec]
@@ -95,6 +122,7 @@ MaiBot 核心:
 配置与访问:
   maibot access show
   maibot access init
+  maibot access init --yes
   maibot access adapter show
   maibot access adapter group-mode <whitelist|blacklist>
   maibot access adapter group-add <群号>
@@ -107,7 +135,8 @@ MaiBot 核心:
 
 说明:
   access show        显示 MaiBot、NapCat、LLBot 的 WebUI 地址和密钥/密码
-  access init        将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter，执行前会二次确认
+  access init        将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter；默认会询问确认
+  access init --yes  跳过确认，直接应用访问配置，适合脚本中使用
   adapter show       查看 Adapter 群聊、私聊、封禁 QQ 配置
   group-mode         设置群聊名单模式，取值 whitelist 或 blacklist
   private-mode       设置私聊名单模式，取值 whitelist 或 blacklist

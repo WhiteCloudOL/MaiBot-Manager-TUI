@@ -24,4 +24,5 @@ $bashCommand = "cd $escapedProjectRoot && bash ./build-release.sh"
 
 Write-Host "Using WSL distro: $wslDistro"
 wsl -d $wslDistro -- bash -lc $bashCommand
+Pause
 exit $LASTEXITCODE

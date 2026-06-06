@@ -1,6 +1,9 @@
 use crate::{
     app::App,
-    model::{BotProtocol, DockerMirror, InstallMode, InstallPlan, PythonEnv, VenvMode},
+    model::{
+        BotProtocol, DockerMirror, GitDirtyMode, GithubFallbackMode, InstallMode, InstallPlan,
+        LlbotUpdateMode, NapcatConflictMode, PythonEnv, VenvMode,
+    },
     utils::{normalize_path, normalize_url},
 };
 use anyhow::{Result, bail};
@@ -95,6 +98,42 @@ fn parse_options(plan: &mut InstallPlan, args: &[String]) -> Result<()> {
                         "keep" => DockerMirror::Keep,
                         other => bail!("未知 Docker 镜像选项: {other}"),
                     };
+                idx += 2;
+            }
+            "--github-fallback" => {
+                plan.github_fallback = match value(args, idx, "--github-fallback <direct|cancel>")?
+                {
+                    "direct" => GithubFallbackMode::Direct,
+                    "cancel" => GithubFallbackMode::Cancel,
+                    other => bail!("未知 GitHub 失败回退选项: {other}"),
+                };
+                idx += 2;
+            }
+            "--git-dirty" => {
+                plan.git_dirty_mode = match value(args, idx, "--git-dirty <stash|discard|cancel>")?
+                {
+                    "stash" => GitDirtyMode::Stash,
+                    "discard" => GitDirtyMode::Discard,
+                    "cancel" => GitDirtyMode::Cancel,
+                    other => bail!("未知 Git 本地改动处理选项: {other}"),
+                };
+                idx += 2;
+            }
+            "--napcat-conflict" => {
+                plan.napcat_conflict_mode =
+                    match value(args, idx, "--napcat-conflict <recreate|cancel>")? {
+                        "recreate" => NapcatConflictMode::Recreate,
+                        "cancel" => NapcatConflictMode::Cancel,
+                        other => bail!("未知 NapCat 冲突处理选项: {other}"),
+                    };
+                idx += 2;
+            }
+            "--llbot-update" => {
+                plan.llbot_update_mode = match value(args, idx, "--llbot-update <update|skip>")? {
+                    "update" => LlbotUpdateMode::Update,
+                    "skip" => LlbotUpdateMode::Skip,
+                    other => bail!("未知 LLBot 更新选项: {other}"),
+                };
                 idx += 2;
             }
             other => bail!("未知安装参数: {other}"),

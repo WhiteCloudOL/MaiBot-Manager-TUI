@@ -6,14 +6,17 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str).unwrap_or("help") {
         "show" => app.print_access_info(),
         "init" => {
-            if Confirm::with_theme(&app.theme)
-                .with_prompt("确认将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter？")
-                .default(false)
-                .interact()?
-            {
-                app.apply_maibot_access_config()?;
-                println!("初始化完成，请重启 MaiBot 后生效");
+            let confirmed = args[1..].iter().any(|arg| arg == "--yes" || arg == "-y")
+                || Confirm::with_theme(&app.theme)
+                    .with_prompt("确认将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter？")
+                    .default(false)
+                    .interact()?;
+            if !confirmed {
+                println!("已取消访问配置初始化");
+                return Ok(());
             }
+            app.apply_maibot_access_config()?;
+            println!("初始化完成，请重启 MaiBot 后生效");
             Ok(())
         }
         "adapter" => run_adapter(app, &args[1..]),

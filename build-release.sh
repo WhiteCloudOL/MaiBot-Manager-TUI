@@ -41,6 +41,9 @@ mkdir -p output
 
 rustup target add "${TARGETS[@]}"
 
+echo "Synchronizing Cargo.lock without network..."
+cargo generate-lockfile --offline
+
 for index in "${!TARGETS[@]}"; do
     target="${TARGETS[$index]}"
     output_name="${OUTPUT_NAMES[$index]}"
