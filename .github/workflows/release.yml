@@ -8,7 +8,6 @@ on:
       - "CLAUDE.md"
       - ".gitignore"
       - "LICENSE"
-      - "build-release.*"
   workflow_dispatch:
 
 permissions:
@@ -20,15 +19,23 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.output_name }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
             output_name: maibot-manager-x86_64
-          - target: aarch64-unknown-linux-musl
+            binary_path: target/x86_64-unknown-linux-musl/release/maibot-manager-tui
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
             output_name: maibot-manager-arm64
+            binary_path: target/aarch64-unknown-linux-musl/release/maibot-manager-tui
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            output_name: maibot-manager-windows-x86_64.exe
+            binary_path: target/x86_64-pc-windows-msvc/release/maibot-manager-tui.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +47,7 @@ jobs:
 
       - name: Add rust-lld to PATH
         if: matrix.target == 'aarch64-unknown-linux-musl'
+        shell: bash
         run: |
           echo "$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin" >> "$GITHUB_PATH"
 
@@ -55,12 +63,16 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
 
       - name: Build release binary
+        shell: bash
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Prepare artifact
+        shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/maibot-manager-tui ${{ matrix.output_name }}
-          chmod +x ${{ matrix.output_name }}
+          cp "${{ matrix.binary_path }}" "${{ matrix.output_name }}"
+          if [[ "${{ runner.os }}" != "Windows" ]]; then
+            chmod +x "${{ matrix.output_name }}"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -102,6 +114,7 @@ jobs:
           ls -la dist
           test -f dist/maibot-manager-x86_64
           test -f dist/maibot-manager-arm64
+          test -f dist/maibot-manager-windows-x86_64.exe
 
       - name: Build prerelease metadata
         id: meta
@@ -191,6 +204,7 @@ jobs:
             echo "Artifacts:"
             echo "- \`maibot-manager-x86_64\`: Linux x86_64"
             echo "- \`maibot-manager-arm64\`: Linux aarch64"
+            echo "- \`maibot-manager-windows-x86_64.exe\`: Windows 10/11 x86_64"
           } > dist/release-notes.md
 
       - name: Create or update release
@@ -200,7 +214,7 @@ jobs:
           TAG="${{ steps.meta.outputs.tag }}"
           TITLE="${{ steps.meta.outputs.title }}"
 
-          ASSETS=(dist/maibot-manager-x86_64 dist/maibot-manager-arm64)
+          ASSETS=(dist/maibot-manager-x86_64 dist/maibot-manager-arm64 dist/maibot-manager-windows-x86_64.exe)
 
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release edit "${TAG}" \

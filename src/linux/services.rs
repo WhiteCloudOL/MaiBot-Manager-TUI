@@ -99,6 +99,22 @@ impl App {
         self.run_shell(&cmd)
     }
 
+    pub(crate) fn print_maibot_core_status(&self) -> Result<()> {
+        print_screen_status("maibot")
+    }
+
+    pub(crate) fn print_llbot_status(&self) -> Result<()> {
+        print_screen_status("llbot")
+    }
+
+    pub(crate) fn print_maibot_core_logs(&self, tail: usize, follow: bool) -> Result<()> {
+        self.print_screen_logs("maibot", tail, follow)
+    }
+
+    pub(crate) fn print_llbot_logs(&self, tail: usize, follow: bool) -> Result<()> {
+        self.print_screen_logs("llbot", tail, follow)
+    }
+
     fn napcat_dir(&self) -> Result<PathBuf> {
         let cfg = self.require_config()?;
         Ok(PathBuf::from(cfg.mai_path).join("NapCat"))
@@ -149,6 +165,23 @@ impl App {
             "cd '{}' && docker compose logs {follow_flag}--tail={tail}",
             shell_escape(&napcat_dir)
         ))
+    }
+
+    pub(crate) fn print_napcat_status(&self) -> Result<()> {
+        let output = std::process::Command::new("bash")
+            .arg("-lc")
+            .arg("docker ps --filter name=^napcat$ --filter status=running --format '{{.Names}}' 2>/dev/null")
+            .output()?;
+        if String::from_utf8_lossy(&output.stdout).trim().is_empty() {
+            println!("napcat: stopped");
+        } else {
+            println!("napcat: running");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn exec_napcat_shell(&self) -> Result<()> {
+        self.run_shell("docker exec -it napcat /bin/sh")
     }
 
     fn llbot_dir(&self) -> Result<PathBuf> {
@@ -359,4 +392,13 @@ impl App {
         }
         Ok(())
     }
+}
+
+fn print_screen_status(session: &str) -> Result<()> {
+    if screen_exists(session)? {
+        println!("{session}: running");
+    } else {
+        println!("{session}: stopped");
+    }
+    Ok(())
 }

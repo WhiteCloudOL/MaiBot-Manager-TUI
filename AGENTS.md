@@ -4,24 +4,29 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Build / run
 
-The compiled binary only runs on Linux — `main.rs` calls `ensure_linux()` and bails on any other OS. Use WSL for development on Windows.
+The binary supports Linux and Windows 10/11. `main.rs` selects platform implementations at compile time and bails on other OSes. Use WSL for Linux builds on Windows hosts; use the GitHub Actions Windows job or a local Windows Rust toolchain for Windows release checks.
 
 ```bash
 # Quick check
 cargo check --target x86_64-unknown-linux-musl
 
-# Release build, both architectures (what build-release.sh does)
+# Linux release build, both architectures (what build-release.sh does)
 cargo build --release --target x86_64-unknown-linux-musl
 cargo build --release --target aarch64-unknown-linux-musl
 
-# Full pipeline producing output/maibot-manager-{x86_64,arm64}
+# Windows release build
+cargo build --release --target x86_64-pc-windows-msvc
+
+# Full local pipelines
 ./build-release.sh                # inside Linux / WSL
-.\build-release.ps1               # Windows host, dispatches to WSL Ubuntu-24.04
+.\build-release.ps1               # Windows host, builds Windows exe then Linux binaries via WSL
 ```
 
-Release builds use musl static targets so the binaries do not depend on the target server's GLIBC version. There are no tests.
+Linux release builds use musl static targets so the binaries do not depend on the target server's GLIBC version. Windows release builds target Windows 10/11 x86_64. There are no tests.
 
-GitHub Actions publishes every automatic build as a prerelease only. Keep release tags in the form `v<version>-nextdev-<short-sha>` (for example `v0.2.4-nextdev-abcdef1`) and do not create stable `v<version>` releases from the automatic workflow. Release notes should compare the current build with the latest stable GitHub Release and group conventional commits under professional sections such as `Feature:` and `Fix:`.
+GitHub Actions publishes every automatic build as a prerelease only. Keep release tags in the form `v<version>-nextdev-<short-sha>` (for example `v0.3.0-nextdev-abcdef1`) and do not create stable `v<version>` releases from the automatic workflow. Release notes should compare the current build with the latest stable GitHub Release and group conventional commits under professional sections such as `Feature:` and `Fix:`.
+
+Windows support is compiled as a separate target. Linux-only implementations live in `src/linux/`, Windows-only implementations live in `src/win/`, and `src/main.rs` selects them with `#[cfg(target_os = "...")]` plus `#[path = "..."]`. Do not import non-current-platform modules from shared code, because release binaries should not include dead platform code.
 
 ## Architecture
 
@@ -30,6 +35,8 @@ This is a single-binary TUI + CLI that orchestrates `bash` to install/manage Mai
 **Entry behavior.** `main.rs` parses args before the Linux guard only for global help (`help`, `-h`, `--help`) so help can be printed anywhere. No args or `tui` enters the TUI. Any other first arg dispatches to `App::run_cli`. Keep this behavior when adding commands.
 
 **Module shape.** Every domain module (`installer`, `services`, `access`, `plugins`, `runtime`, `ui`) is `impl App for ...` — they share state via `App` (theme + config path) rather than holding their own types. `app.rs` is the TUI shell that prints the main menu and dispatches; `src/cli/` is the CLI shell. Keep CLI parsing split by domain (`install`, `services`, `access`, `plugins`, `help`) instead of growing one giant command file.
+
+**Windows implementation.** Windows commands should prefer BAT/cmd syntax executed through `App::run_shell`, which writes a temporary `.bat` and invokes `cmd.exe /C`. Use PowerShell only when cmd has no good primitive, currently UAC elevation via `Start-Process -Verb RunAs` and log tailing. Windows NapCat must use GitHub API to fetch the latest `NapCat.Shell.zip` from `NapNeko/NapCatQQ`, not Docker. Windows LLBot must use GitHub API to fetch the latest `LLBot-Desktop-win-x64.zip` from `LLOneBot/LuckyLilliaBot`, not the CLI zip. Apply the selected GitHub proxy to both API URLs and release asset URLs.
 
 **CLI contract.** CLI commands should reuse the same `App` action methods used by TUI menus rather than duplicating shell strings. `maibot install` / `maibot update` build an `InstallPlan` from existing config plus command-line overrides and then call `run_install`. CLI may ask for confirmation at risk points, but every install/update prompt that blocks scripting must have an explicit CLI strategy flag that bypasses the prompt: `--github-fallback`, `--git-dirty`, `--napcat-conflict`, `--llbot-update`. `maibot access init` prompts by default and `--yes` bypasses it. `maibot core|napcat|llbot ...` should remain script-friendly: status/log commands print and exit, while interactive commands (`core exec`, `llbot exec`, `napcat exec`) intentionally inherit stdio.
 

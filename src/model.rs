@@ -184,8 +184,8 @@ impl VenvMode {
 impl BotProtocol {
     pub fn label(self) -> &'static str {
         match self {
-            Self::NapCat => "NapCatQQ (Docker)",
-            Self::LuckyLilliaBot => "LuckyLilliaBot (LinuxCLI)",
+            Self::NapCat => "NapCatQQ",
+            Self::LuckyLilliaBot => "LuckyLilliaBot",
         }
     }
 }

@@ -4,7 +4,7 @@ pub(crate) fn print_help() {
     println!(
         r#"MaiBot Manager {APP_VERSION}
 
-这是 MaiBot 的 Linux 服务器部署与运维工具。
+这是 MaiBot 的 Linux / Windows 部署与运维工具。
 不加参数时进入交互式 TUI；带参数时直接执行对应 CLI 命令，适合脚本、SSH 快速操作和日常维护。
 
 用法:
@@ -44,7 +44,7 @@ pub(crate) fn print_help() {
   --github <auto|direct|URL>     GitHub 线路
   --pip <system|aliyun|tencent|tsinghua|ustc|official|URL>
   --protocol <napcat|llbot|none> 协议端
-  --docker <one-ms|xuanyuan|official|keep>
+  --docker <one-ms|xuanyuan|official|keep>  Linux NapCat Docker 部署使用；Windows Shell 版会忽略
   --github-fallback <direct|cancel>
   --git-dirty <stash|discard|cancel>
   --napcat-conflict <recreate|cancel>
@@ -59,7 +59,7 @@ pub(crate) fn print_help() {
   --pip system       不写 pip.conf，使用系统默认 PyPI 配置
   --pip URL          使用自定义 PyPI 镜像；仅写入当前 venv，不污染全局 pip 配置
   --protocol none    只部署 MaiBot 核心和 Adapter，不安装额外协议端
-  --docker keep      不修改 /etc/docker/daemon.json
+  --docker keep      Linux 下不修改 /etc/docker/daemon.json；Windows 下 NapCat 不使用 Docker
   --github-fallback direct
                     GitHub auto 测速全部失败时不再询问，改用官方直连继续
   --github-fallback cancel
@@ -110,11 +110,11 @@ MaiBot 核心:
   maibot llbot password <新密码>
 
 说明:
-  napcat             管理 NapCat Docker Compose 服务
-  napcat logs        使用 docker compose logs，不进入容器
-  napcat exec        进入 napcat 容器 shell
-  napcat rebuild     down + pull + up -d，适合重建容器
-  llbot              管理 LuckyLilliaBot 的 screen 会话 llbot
+  napcat             Linux 管理 NapCat Docker Compose；Windows 管理 NapCat Shell
+  napcat logs        Linux 使用 docker compose logs；Windows 读取 Shell 日志文件
+  napcat exec        Linux 进入 napcat 容器 shell；Windows 请求管理员权限启动 launcher.bat
+  napcat rebuild     Linux 执行 down + pull + up -d；Windows 请通过 install/update 重新下载 Shell 包
+  llbot              Linux 管理 LuckyLilliaBot screen 会话；Windows 管理 Desktop 程序 llbot.exe
   llbot logs         通过 screen hardcopy 读取日志缓冲，不影响 screen 会话
   llbot exec         执行 screen -r llbot，进入前会提示退出方式
   protocol           也可作为聚合入口，例如 maibot protocol napcat restart
