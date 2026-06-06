@@ -2,13 +2,17 @@ use crate::{
     app::App,
     model::*,
     plugins::{NAPCAT_ADAPTER_PLUGIN_ID, NAPCAT_ADAPTER_REPO_NAME},
+    terminal::{TerminalUiGuard, restore_terminal_state},
     utils::*,
 };
 use anyhow::{Context, Result, anyhow, bail};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use dialoguer::console::style;
 use dialoguer::{Confirm, Input, Select};
 use serde_json::Value;
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -36,81 +40,492 @@ impl App {
 
     pub(crate) fn install_planner(
         &mut self,
-        _current: &AppConfig,
+        current: &AppConfig,
         plan: &mut InstallPlan,
     ) -> Result<bool> {
-        self.clear();
-        self.print_header(Some(plan));
-        self.print_section("Windows 安装计划", "Windows 10/11 · cmd/BAT 优先执行");
-        self.print_kv("目录", &plan.install_path.display().to_string());
-        self.print_kv("主程序分支", &plan.maibot_branch);
-        self.print_kv("Python", plan.python_env.label());
-        self.print_kv("协议端", &self.protocols_label(plan));
-        self.print_line();
+        let _guard = TerminalUiGuard::enter()?;
+        let mut target: Option<PlannerEntry> = None;
+        let mut expanded: Option<PlanField> = None;
 
-        let items = [
-            "开始安装 / 更新",
-            "修改安装目录",
-            "切换 MaiBot 分支",
-            "切换 Python 环境",
-            "选择协议端",
-            "取消返回",
-        ];
         loop {
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("Windows 安装 / 更新")
-                .items(items)
-                .default(0)
-                .interact()?;
-            match choice {
-                0 => return Ok(true),
+            let entries = self.build_planner_entries(plan, expanded);
+            let mut selected = if let Some(t) = &target {
+                entries.iter().position(|e| e == t).unwrap_or(0)
+            } else {
+                0
+            };
+            if selected >= entries.len() {
+                selected = entries.len().saturating_sub(1);
+            }
+
+            self.clear();
+            self.print_header(None);
+            self.print_planner_view(plan, &entries, selected, expanded);
+
+            if let Event::Key(key) = event::read()? {
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+                {
+                    restore_terminal_state();
+                    eprintln!("\n安装已被用户中断 (Ctrl+C)");
+                    std::process::exit(130);
+                }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Up => {
+                        let next = selected.saturating_sub(1);
+                        target = entries.get(next).cloned();
+                    }
+                    KeyCode::Down => {
+                        let next = if selected + 1 < entries.len() {
+                            selected + 1
+                        } else {
+                            selected
+                        };
+                        target = entries.get(next).cloned();
+                    }
+                    KeyCode::Home => {
+                        target = entries.first().cloned();
+                    }
+                    KeyCode::End => {
+                        target = entries.last().cloned();
+                    }
+                    KeyCode::Enter => match entries.get(selected).cloned() {
+                        Some(PlannerEntry::Field(field)) => {
+                            if field == PlanField::InstallPath {
+                                target = Some(PlannerEntry::Field(field));
+                                self.edit_install_path(plan)?;
+                            } else if expanded == Some(field) {
+                                expanded = None;
+                                target = Some(PlannerEntry::Field(field));
+                            } else {
+                                expanded = Some(field);
+                                target = Some(PlannerEntry::Field(field));
+                            }
+                        }
+                        Some(PlannerEntry::Choice(field, choice_idx)) => {
+                            self.apply_planner_choice(current, plan, field, choice_idx)?;
+                            self.save_config(&self.plan_to_config(plan))?;
+                            target = Some(PlannerEntry::Choice(field, choice_idx));
+                        }
+                        Some(PlannerEntry::Action(PlanAction::StartInstall)) => {
+                            return Ok(true);
+                        }
+                        Some(PlannerEntry::Action(PlanAction::ResetDefaults)) => {
+                            *plan = self.build_recommended_defaults();
+                            self.save_config(&self.plan_to_config(plan))?;
+                            target = None;
+                            expanded = None;
+                        }
+                        Some(PlannerEntry::Action(PlanAction::BackToMenu)) => {
+                            return Ok(false);
+                        }
+                        None => {}
+                    },
+                    KeyCode::Esc => return Ok(false),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    pub(crate) fn build_planner_entries(
+        &self,
+        plan: &InstallPlan,
+        expanded: Option<PlanField>,
+    ) -> Vec<PlannerEntry> {
+        let fields = [
+            PlanField::InstallPath,
+            PlanField::MaiBotBranch,
+            PlanField::InstallMode,
+            PlanField::PythonEnv,
+            PlanField::VenvMode,
+            PlanField::GithubProxy,
+            PlanField::PipSource,
+            PlanField::BotProtocols,
+        ];
+
+        let mut entries = Vec::new();
+        for field in fields {
+            entries.push(PlannerEntry::Field(field));
+            if expanded == Some(field) {
+                for idx in 0..self.planner_choices(plan, field).len() {
+                    entries.push(PlannerEntry::Choice(field, idx));
+                }
+            }
+        }
+        entries.push(PlannerEntry::Action(PlanAction::StartInstall));
+        entries.push(PlannerEntry::Action(PlanAction::ResetDefaults));
+        entries.push(PlannerEntry::Action(PlanAction::BackToMenu));
+        entries
+    }
+
+    pub(crate) fn planner_choices(&self, plan: &InstallPlan, field: PlanField) -> Vec<String> {
+        match field {
+            PlanField::InstallPath => vec!["按 Enter 输入自定义路径".into()],
+            PlanField::MaiBotBranch => vec!["main（稳定版）".into(), "dev（开发版）".into()],
+            PlanField::InstallMode => {
+                vec!["正常更新/修复".into(), "全新安装（清空目标目录）".into()]
+            }
+            PlanField::PythonEnv => vec!["本机 Python".into(), "uv (Python 3.14)".into()],
+            PlanField::VenvMode => {
+                if plan.install_mode == InstallMode::Clean {
+                    vec!["全新安装时固定为：删除并重建环境".into()]
+                } else if plan.python_env == PythonEnv::Uv {
+                    vec!["保留现有 .venv".into(), "删除并重建 .venv".into()]
+                } else {
+                    vec!["保留现有环境".into(), "删除并重建环境".into()]
+                }
+            }
+            PlanField::GithubProxy => {
+                let mut items = vec!["自动测速选择最佳线路".into(), "官方直连".into()];
+                items.extend(github_mirrors().iter().map(|v| (*v).to_string()));
+                items.push("自定义镜像源".into());
+                items
+            }
+            PlanField::PipSource => vec![
+                "系统默认".into(),
+                "阿里云".into(),
+                "腾讯云".into(),
+                "清华大学".into(),
+                "中国科学技术大学".into(),
+                "官方源".into(),
+                "自定义镜像源".into(),
+            ],
+            PlanField::BotProtocols => vec![
+                "仅 NapCatQQ Shell".into(),
+                "仅 LuckyLilliaBot Desktop".into(),
+                "暂不安装附加协议端".into(),
+            ],
+            PlanField::DockerMirror => vec!["Windows 不使用 Docker".into()],
+        }
+    }
+
+    pub(crate) fn planner_field_label(&self, field: PlanField) -> &'static str {
+        match field {
+            PlanField::InstallPath => "目录",
+            PlanField::MaiBotBranch => "主程序分支",
+            PlanField::InstallMode => "模式",
+            PlanField::PythonEnv => "Python",
+            PlanField::VenvMode => "环境",
+            PlanField::GithubProxy => "GitHub",
+            PlanField::PipSource => "PyPI",
+            PlanField::BotProtocols => "协议端",
+            PlanField::DockerMirror => "Docker",
+        }
+    }
+
+    pub(crate) fn planner_field_value(&self, plan: &InstallPlan, field: PlanField) -> String {
+        match field {
+            PlanField::InstallPath => plan.install_path.display().to_string(),
+            PlanField::MaiBotBranch => plan.maibot_branch.clone(),
+            PlanField::InstallMode => plan.install_mode.label().to_string(),
+            PlanField::PythonEnv => plan.python_env.label().to_string(),
+            PlanField::VenvMode => plan.venv_mode.label(plan.python_env).to_string(),
+            PlanField::GithubProxy => {
+                if plan.github_proxy.is_empty() {
+                    "自动测速（执行时选择最佳线路）".into()
+                } else {
+                    plan.github_proxy.clone()
+                }
+            }
+            PlanField::PipSource => {
+                if plan.pip_display.is_empty() {
+                    "系统默认".into()
+                } else {
+                    plan.pip_display.clone()
+                }
+            }
+            PlanField::BotProtocols => self.protocols_label(plan),
+            PlanField::DockerMirror => "Windows 不使用 Docker".into(),
+        }
+    }
+
+    pub(crate) fn planner_choice_active(
+        &self,
+        plan: &InstallPlan,
+        field: PlanField,
+        choice_idx: usize,
+    ) -> bool {
+        match field {
+            PlanField::InstallPath => false,
+            PlanField::MaiBotBranch => {
+                matches!(
+                    (choice_idx, plan.maibot_branch.as_str()),
+                    (0, "main") | (1, "dev")
+                )
+            }
+            PlanField::InstallMode => {
+                matches!(
+                    (choice_idx, plan.install_mode),
+                    (0, InstallMode::Normal) | (1, InstallMode::Clean)
+                )
+            }
+            PlanField::PythonEnv => {
+                matches!(
+                    (choice_idx, plan.python_env),
+                    (0, PythonEnv::System) | (1, PythonEnv::Uv)
+                )
+            }
+            PlanField::VenvMode => {
+                matches!(
+                    (choice_idx, plan.venv_mode),
+                    (0, VenvMode::Keep) | (1, VenvMode::Recreate)
+                )
+            }
+            PlanField::GithubProxy => {
+                if choice_idx == 0 {
+                    plan.github_proxy.is_empty()
+                } else if choice_idx == 1 {
+                    plan.github_proxy == "https://github.com"
+                } else if choice_idx >= 2 && choice_idx < 2 + github_mirrors().len() {
+                    plan.github_proxy == github_mirrors()[choice_idx - 2]
+                } else {
+                    !plan.github_proxy.is_empty()
+                        && plan.github_proxy != "https://github.com"
+                        && !github_mirrors()
+                            .iter()
+                            .any(|mirror| *mirror == plan.github_proxy)
+                }
+            }
+            PlanField::PipSource => match choice_idx {
+                0 => plan.pip_index.is_empty(),
+                1 => plan.pip_display == "阿里云",
+                2 => plan.pip_display == "腾讯云",
+                3 => plan.pip_display == "清华大学",
+                4 => plan.pip_display == "中国科学技术大学",
+                5 => plan.pip_display == "官方源",
+                _ => {
+                    !plan.pip_index.is_empty()
+                        && !["阿里云", "腾讯云", "清华大学", "中国科学技术大学", "官方源"]
+                            .contains(&plan.pip_display.as_str())
+                }
+            },
+            PlanField::BotProtocols => match choice_idx {
+                0 => plan.bot_protocols == vec![BotProtocol::NapCat],
+                1 => plan.bot_protocols == vec![BotProtocol::LuckyLilliaBot],
+                _ => plan.bot_protocols.is_empty(),
+            },
+            PlanField::DockerMirror => true,
+        }
+    }
+
+    pub(crate) fn print_planner_view(
+        &self,
+        plan: &InstallPlan,
+        entries: &[PlannerEntry],
+        selected: usize,
+        expanded: Option<PlanField>,
+    ) {
+        self.print_section(
+            "Windows 安装计划",
+            "↑/↓ 移动 · Enter 展开/收起 · Esc 返回 · Windows 10/11",
+        );
+        let mut printed_actions = false;
+        for (idx, entry) in entries.iter().enumerate() {
+            let active = idx == selected;
+            match entry {
+                PlannerEntry::Field(field) => {
+                    let cursor = if active { "▶" } else { " " };
+                    let is_expanded = expanded == Some(*field);
+                    let expand_mark = if is_expanded { "▾" } else { "▸" };
+                    let label = self.planner_field_label(*field);
+                    let padded_label = pad_left(label, 8);
+                    let value = self.planner_field_value(plan, *field);
+                    let line = format!("  {cursor} {expand_mark} {padded_label}  {value}");
+                    if active {
+                        print!("{}\r\n", style(line).cyan().bold());
+                    } else if is_expanded {
+                        print!("{}\r\n", style(line).cyan());
+                    } else {
+                        print!("{}\r\n", style(line).white());
+                    }
+                }
+                PlannerEntry::Choice(field, choice_idx) => {
+                    let choice = &self.planner_choices(plan, *field)[*choice_idx];
+                    let current = self.planner_choice_active(plan, *field, *choice_idx);
+                    let marker = if current { "●" } else { "○" };
+                    let cursor = if active { "▶" } else { " " };
+                    let line = format!("      {cursor} {marker} {choice}");
+                    if active {
+                        print!("{}\r\n", style(line).green().bold());
+                    } else if current {
+                        print!("{}\r\n", style(line).cyan());
+                    } else {
+                        print!("{}\r\n", style(line).dim());
+                    }
+                }
+                PlannerEntry::Action(action) => {
+                    if !printed_actions {
+                        self.print_line();
+                        printed_actions = true;
+                    }
+                    let label = match action {
+                        PlanAction::StartInstall => "▶ 开始安装 / 更新",
+                        PlanAction::ResetDefaults => "↺ 恢复推荐默认",
+                        PlanAction::BackToMenu => "← 返回主菜单",
+                    };
+                    let cursor = if active { "▶" } else { " " };
+                    let text = format!("  {cursor} {label}");
+                    let styled = match action {
+                        PlanAction::StartInstall => style(text).green(),
+                        PlanAction::ResetDefaults => style(text).yellow(),
+                        PlanAction::BackToMenu => style(text).red(),
+                    };
+                    if active {
+                        print!("{}\r\n", styled.bold());
+                    } else {
+                        print!("{}\r\n", styled.dim());
+                    }
+                }
+            }
+        }
+        self.print_line();
+        let _ = std::io::stdout().flush();
+    }
+
+    pub(crate) fn apply_planner_choice(
+        &mut self,
+        current: &AppConfig,
+        plan: &mut InstallPlan,
+        field: PlanField,
+        choice_idx: usize,
+    ) -> Result<()> {
+        match field {
+            PlanField::InstallPath => self.edit_install_path(plan)?,
+            PlanField::MaiBotBranch => {
+                plan.maibot_branch = if choice_idx == 1 { "dev" } else { "main" }.into();
+            }
+            PlanField::InstallMode => {
+                plan.install_mode = if choice_idx == 1 {
+                    InstallMode::Clean
+                } else {
+                    InstallMode::Normal
+                };
+                if plan.install_mode == InstallMode::Clean {
+                    plan.venv_mode = VenvMode::Recreate;
+                }
+            }
+            PlanField::PythonEnv => {
+                plan.python_env = if choice_idx == 1 {
+                    PythonEnv::Uv
+                } else {
+                    PythonEnv::System
+                };
+            }
+            PlanField::VenvMode => {
+                if plan.install_mode != InstallMode::Clean {
+                    plan.venv_mode = if choice_idx == 1 {
+                        VenvMode::Recreate
+                    } else {
+                        VenvMode::Keep
+                    };
+                }
+            }
+            PlanField::GithubProxy => match choice_idx {
+                0 => plan.github_proxy.clear(),
+                1 => plan.github_proxy = "https://github.com".into(),
+                idx if idx >= 2 && idx < 2 + github_mirrors().len() => {
+                    plan.github_proxy = github_mirrors()[idx - 2].to_string();
+                }
+                _ => {
+                    let input: String = self.with_prompt_mode(|| {
+                        Input::with_theme(&self.theme)
+                            .with_prompt("输入自定义镜像源")
+                            .interact_text()
+                            .map_err(Into::into)
+                    })?;
+                    plan.github_proxy = normalize_url(&input);
+                }
+            },
+            PlanField::PipSource => match choice_idx {
+                0 => {
+                    plan.pip_display.clear();
+                    plan.pip_index.clear();
+                    plan.pip_host.clear();
+                    plan.uv_index.clear();
+                }
                 1 => {
-                    let value: String = Input::with_theme(&self.theme)
-                        .with_prompt("安装目录")
-                        .default(plan.install_path.display().to_string())
-                        .interact_text()?;
-                    plan.install_path = normalize_path(&value)?;
+                    plan.pip_display = "阿里云".into();
+                    plan.pip_index = "https://mirrors.aliyun.com/pypi/simple/".into();
+                    plan.pip_host = "mirrors.aliyun.com".into();
+                    plan.uv_index = plan.pip_index.clone();
                 }
                 2 => {
-                    let branch = Select::with_theme(&self.theme)
-                        .with_prompt("MaiBot 分支")
-                        .items(["main（稳定版）", "dev（开发版）"])
-                        .default(if plan.maibot_branch == "dev" { 1 } else { 0 })
-                        .interact()?;
-                    plan.maibot_branch = if branch == 1 { "dev" } else { "main" }.into();
+                    plan.pip_display = "腾讯云".into();
+                    plan.pip_index = "http://mirrors.cloud.tencent.com/pypi/simple".into();
+                    plan.pip_host = "mirrors.cloud.tencent.com".into();
+                    plan.uv_index = plan.pip_index.clone();
                 }
                 3 => {
-                    let py = Select::with_theme(&self.theme)
-                        .with_prompt("Python 环境")
-                        .items(["uv (推荐)", "系统 Python"])
-                        .default(if plan.python_env == PythonEnv::System {
-                            1
-                        } else {
-                            0
-                        })
-                        .interact()?;
-                    plan.python_env = if py == 1 {
-                        PythonEnv::System
-                    } else {
-                        PythonEnv::Uv
-                    };
+                    plan.pip_display = "清华大学".into();
+                    plan.pip_index = "https://pypi.tuna.tsinghua.edu.cn/simple".into();
+                    plan.pip_host = "pypi.tuna.tsinghua.edu.cn".into();
+                    plan.uv_index = plan.pip_index.clone();
                 }
                 4 => {
-                    let protocol = Select::with_theme(&self.theme)
-                        .with_prompt("协议端")
-                        .items(["NapCatQQ (Shell)", "LuckyLilliaBot Desktop", "暂不安装"])
-                        .default(0)
-                        .interact()?;
-                    plan.bot_protocols = match protocol {
-                        0 => vec![BotProtocol::NapCat],
-                        1 => vec![BotProtocol::LuckyLilliaBot],
-                        _ => Vec::new(),
-                    };
+                    plan.pip_display = "中国科学技术大学".into();
+                    plan.pip_index = "https://pypi.mirrors.ustc.edu.cn/simple/".into();
+                    plan.pip_host = "pypi.mirrors.ustc.edu.cn".into();
+                    plan.uv_index = plan.pip_index.clone();
                 }
-                _ => return Ok(false),
+                5 => {
+                    plan.pip_display = "官方源".into();
+                    plan.pip_index = "https://pypi.org/simple".into();
+                    plan.pip_host = "pypi.org".into();
+                    plan.uv_index = plan.pip_index.clone();
+                }
+                _ => {
+                    let custom: String = self.with_prompt_mode(|| {
+                        Input::with_theme(&self.theme)
+                            .with_prompt("自定义 PyPI 镜像源")
+                            .interact_text()
+                            .map_err(Into::into)
+                    })?;
+                    let custom = normalize_url(&custom);
+                    plan.pip_display = custom.clone();
+                    plan.pip_host = custom.split('/').nth(2).unwrap_or_default().to_string();
+                    plan.pip_index = custom;
+                    plan.uv_index = plan.pip_index.clone();
+                }
+            },
+            PlanField::BotProtocols => {
+                plan.bot_protocols = match choice_idx {
+                    0 => vec![BotProtocol::NapCat],
+                    1 => vec![BotProtocol::LuckyLilliaBot],
+                    _ => Vec::new(),
+                };
+                plan.docker_mirror = DockerMirror::Keep;
             }
-            self.save_config(&self.plan_to_config(plan))?;
+            PlanField::DockerMirror => {
+                plan.docker_mirror = DockerMirror::Keep;
+            }
         }
+
+        if matches!(field, PlanField::InstallMode | PlanField::PythonEnv)
+            && plan.install_mode == InstallMode::Clean
+        {
+            plan.venv_mode = VenvMode::Recreate;
+        }
+        if matches!(field, PlanField::InstallPath) && plan.install_path.as_os_str().is_empty() {
+            *plan = self.build_default_install_plan(current)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn edit_install_path(&self, plan: &mut InstallPlan) -> Result<()> {
+        let value: String = self.with_prompt_mode(|| {
+            Input::with_theme(&self.theme)
+                .with_prompt("安装目录")
+                .default(plan.install_path.display().to_string())
+                .interact_text()
+                .map_err(Into::into)
+        })?;
+        plan.install_path = normalize_path(&value)?;
+        fs::create_dir_all(&plan.install_path)?;
+        Ok(())
     }
 
     pub(crate) fn build_default_install_plan(&self, current: &AppConfig) -> Result<InstallPlan> {
