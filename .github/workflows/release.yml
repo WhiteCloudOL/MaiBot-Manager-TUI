@@ -101,26 +101,15 @@ jobs:
           test -f dist/maibot-manager-x86_64
           test -f dist/maibot-manager-arm64
 
-      - name: Decide release tag and title
+      - name: Build prerelease metadata
         id: meta
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           SHORT_SHA="${{ steps.version.outputs.short_sha }}"
-          STABLE_TAG="v${VERSION}"
-          if gh release view "${STABLE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            TAG="v${VERSION}-beta.${SHORT_SHA}"
-            TITLE="MaiBot Manager TUI v${VERSION} (beta ${SHORT_SHA})"
-            PRERELEASE="true"
-          else
-            TAG="${STABLE_TAG}"
-            TITLE="MaiBot Manager TUI v${VERSION}"
-            PRERELEASE="false"
-          fi
+          TAG="v${VERSION}-nextdev-${SHORT_SHA}"
+          TITLE="MaiBot Manager TUI v${VERSION} nextdev ${SHORT_SHA}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
-          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
 
       - name: Create or update release
         env:
@@ -136,17 +125,18 @@ jobs:
           ASSETS=(dist/maibot-manager-x86_64 dist/maibot-manager-arm64)
 
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" \
+              --title "${TITLE}" \
+              --notes "${NOTES}" \
+              --prerelease \
+              --repo "${GITHUB_REPOSITORY}"
             gh release upload "${TAG}" "${ASSETS[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
           else
-            EXTRA=()
-            if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
-              EXTRA+=(--prerelease)
-            fi
             gh release create "${TAG}" \
               --title "${TITLE}" \
               --notes "${NOTES}" \
               --target "${{ github.sha }}" \
-              "${EXTRA[@]}" \
+              --prerelease \
               --repo "${GITHUB_REPOSITORY}" \
               "${ASSETS[@]}"
           fi

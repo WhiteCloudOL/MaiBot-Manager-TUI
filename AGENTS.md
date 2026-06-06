@@ -21,6 +21,8 @@ cargo build --release --target aarch64-unknown-linux-musl
 
 Release builds use musl static targets so the binaries do not depend on the target server's GLIBC version. There are no tests.
 
+GitHub Actions publishes every automatic build as a prerelease only. Keep release tags in the form `v<version>-nextdev-<short-sha>` (for example `v0.2.4-nextdev-abcdef1`) and do not create stable `v<version>` releases from the automatic workflow.
+
 ## Architecture
 
 This is a single-binary TUI + CLI that orchestrates `bash` to install/manage MaiBot on a Linux server. Almost every "action" — clone, venv, docker, screen, systemctl — is a shell string executed via `App::run_shell`, not native Rust. Treat shell command strings as the primary IR; the Rust code is a config builder + menu/CLI driver around them.
