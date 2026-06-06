@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
+    time::Instant,
 };
 
 const LLBOT_RELEASE_TAG_FILE: &str = ".maibot-llbot-release";
@@ -660,38 +661,48 @@ impl App {
     pub(crate) fn run_github_speedtest(&self, fallback: GithubFallbackMode) -> Result<String> {
         let mut mirrors = vec!["https://github.com".to_string()];
         mirrors.extend(github_mirrors().iter().map(|v| v.to_string()));
-        println!("  {}", style("正在并行测速，请稍候...").dim());
+        println!("  {}", style("正在并行测试 git 访问，请稍候...").dim());
         self.print_line();
 
         let handles: Vec<_> = mirrors
             .into_iter()
             .map(|mirror| {
                 thread::spawn(move || {
-                    let test_url = if mirror == "https://github.com" {
-                        TEST_FILE_PATH.to_string()
-                    } else {
-                        format!("{}/{}", mirror.trim_end_matches('/'), TEST_FILE_PATH)
-                    };
-                    let output = Command::new("cmd")
+                    let repo = repo_url(&mirror, "MaiM-with-u/MaiBot");
+                    let started = Instant::now();
+                    let output = Command::new("git")
                         .args([
-                            "/C",
-                            &format!(
-                                "curl.exe -sL -o NUL --max-time 5 --connect-timeout 3 -w \"%%{{time_total}}\" {}",
-                                bat_arg(&test_url)
-                            ),
+                            "-c",
+                            "credential.helper=",
+                            "-c",
+                            "http.lowSpeedLimit=1",
+                            "-c",
+                            "http.lowSpeedTime=5",
+                            "ls-remote",
+                            "--heads",
+                            &repo,
+                            "main",
                         ])
+                        .env("GIT_TERMINAL_PROMPT", "0")
                         .output();
 
                     match output {
-                        Ok(output) if output.status.success() => {
-                            let ms = String::from_utf8_lossy(&output.stdout)
+                        Ok(output) if output.status.success() => (
+                            mirror,
+                            started.elapsed().as_secs_f64() * 1000.0,
+                            true,
+                            String::new(),
+                        ),
+                        Ok(output) => {
+                            let detail = String::from_utf8_lossy(&output.stderr)
+                                .lines()
+                                .next()
+                                .unwrap_or("git ls-remote 失败")
                                 .trim()
-                                .parse::<f64>()
-                                .unwrap_or(9.999)
-                                * 1000.0;
-                            (mirror, ms, true)
+                                .to_string();
+                            (mirror, 9999.0, false, detail)
                         }
-                        _ => (mirror, 9999.0, false),
+                        Err(e) => (mirror, 9999.0, false, format!("无法启动 git: {e}")),
                     }
                 })
             })
@@ -708,14 +719,21 @@ impl App {
         results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut best: Option<(String, f64)> = None;
-        for (mirror, ms, ok) in &results {
+        for (mirror, ms, ok, detail) in &results {
             if *ok {
                 println!("  {} {}", style(format!("{:>6.0} ms", ms)).green(), mirror);
                 if best.as_ref().map(|b| *ms < b.1).unwrap_or(true) {
                     best = Some((mirror.clone(), *ms));
                 }
-            } else {
+            } else if detail.is_empty() {
                 println!("  {}     {}", style("  失败 ").red(), style(mirror).dim());
+            } else {
+                println!(
+                    "  {}     {}  {}",
+                    style("  失败 ").red(),
+                    style(mirror).dim(),
+                    style(detail).dim()
+                );
             }
         }
         self.print_line();
