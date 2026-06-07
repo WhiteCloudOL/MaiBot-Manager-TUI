@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     model::InstallMode,
-    utils::{bat_arg, bat_quote, convert_github_url, list_plugins},
+    utils::{bat_arg, bat_quote, convert_github_url, list_plugins, with_windows_tools_path},
 };
 use anyhow::{Context, Result, bail};
 use dialoguer::{Input, Select};
@@ -15,13 +15,13 @@ pub(crate) const NAPCAT_ADAPTER_REPO_NAME: &str = "MaiBot-Napcat-Adapter";
 pub(crate) const NAPCAT_ADAPTER_PLUGIN_ID: &str = "maibot-team.napcat-adapter";
 
 impl App {
-    fn plugin_context(&self) -> Result<(PathBuf, PathBuf, String)> {
+    fn plugin_context(&self) -> Result<(PathBuf, PathBuf, PathBuf, String)> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
         let maibot_dir = root.join("MaiBot");
         let plugins_dir = maibot_dir.join("plugins");
         fs::create_dir_all(&plugins_dir)?;
-        Ok((maibot_dir, plugins_dir, cfg.mai_python_env))
+        Ok((root, maibot_dir, plugins_dir, cfg.mai_python_env))
     }
 
     pub(crate) fn plugin_id_from_dir(&self, dir: &Path) -> Result<String> {
@@ -65,14 +65,17 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("未找到插件目录: {plugin_id}"))
     }
 
-    fn clone_or_update_plugin(&self, url: &str, target: &Path) -> Result<()> {
+    fn clone_or_update_plugin(&self, root: &Path, url: &str, target: &Path) -> Result<()> {
         if target.join(".git").exists() {
-            self.run_shell(&format!(
-                "cd /d {}\r\ngit pull --ff-only",
-                bat_quote(target)
+            self.run_shell(&with_windows_tools_path(
+                root,
+                &format!("cd /d {}\r\ngit pull --ff-only", bat_quote(target)),
             ))
         } else {
-            self.run_shell(&format!("git clone {} {}", bat_arg(url), bat_quote(target)))
+            self.run_shell(&with_windows_tools_path(
+                root,
+                &format!("git clone {} {}", bat_arg(url), bat_quote(target)),
+            ))
         }
     }
 
@@ -84,9 +87,11 @@ impl App {
         _branch: Option<&str>,
         _mode: InstallMode,
     ) -> Result<PathBuf> {
+        let cfg = self.require_config()?;
+        let root = PathBuf::from(cfg.mai_path);
         fs::create_dir_all(plugins_dir)?;
         let repo_path = plugins_dir.join(repo_name);
-        self.clone_or_update_plugin(url, &repo_path)?;
+        self.clone_or_update_plugin(&root, url, &repo_path)?;
         let plugin_id = self.plugin_id_from_dir(&repo_path)?;
         let canonical = plugins_dir.join(plugin_id);
         if canonical != repo_path {
@@ -100,7 +105,7 @@ impl App {
     }
 
     pub(crate) fn install_plugin_from_input(&self, input: &str) -> Result<()> {
-        let (maibot_dir, plugins_dir, py_env) = self.plugin_context()?;
+        let (root, maibot_dir, plugins_dir, py_env) = self.plugin_context()?;
         let url = convert_github_url(input, "https://github.com");
         let repo_name = url
             .rsplit('/')
@@ -116,13 +121,13 @@ impl App {
         )?;
         let req = plugin_path.join("requirements.txt");
         if req.exists() {
-            self.install_requirements(&maibot_dir, &py_env, &req)?;
+            self.install_requirements(&root, &maibot_dir, &py_env, &req)?;
         }
         Ok(())
     }
 
     pub(crate) fn remove_plugin(&self, name: &str) -> Result<()> {
-        let (_, plugins_dir, _) = self.plugin_context()?;
+        let (_, _, plugins_dir, _) = self.plugin_context()?;
         let path = plugins_dir.join(name);
         if !path.exists() {
             bail!("插件目录不存在: {name}");
@@ -132,10 +137,10 @@ impl App {
     }
 
     pub(crate) fn install_plugin_dependencies(&self, name: &str) -> Result<()> {
-        let (maibot_dir, plugins_dir, py_env) = self.plugin_context()?;
+        let (root, maibot_dir, plugins_dir, py_env) = self.plugin_context()?;
         let req = plugins_dir.join(name).join("requirements.txt");
         if req.exists() {
-            self.install_requirements(&maibot_dir, &py_env, &req)?;
+            self.install_requirements(&root, &maibot_dir, &py_env, &req)?;
         } else {
             println!("插件没有 requirements.txt: {name}");
         }
@@ -143,7 +148,7 @@ impl App {
     }
 
     pub(crate) fn print_plugins(&self) -> Result<()> {
-        let (_, plugins_dir, _) = self.plugin_context()?;
+        let (_, _, plugins_dir, _) = self.plugin_context()?;
         let plugins = list_plugins(&plugins_dir)?;
         if plugins.is_empty() {
             println!("暂无已安装插件");
@@ -156,7 +161,7 @@ impl App {
     }
 
     pub(crate) fn manage_plugins_menu(&self) -> Result<()> {
-        let (_, plugins_dir, _) = self.plugin_context()?;
+        let (_, _, plugins_dir, _) = self.plugin_context()?;
         loop {
             self.clear();
             self.print_header(None);
@@ -214,19 +219,32 @@ impl App {
         Ok(())
     }
 
-    fn install_requirements(&self, maibot_dir: &Path, py_env: &str, req: &Path) -> Result<()> {
+    fn install_requirements(
+        &self,
+        root: &Path,
+        maibot_dir: &Path,
+        py_env: &str,
+        req: &Path,
+    ) -> Result<()> {
         if py_env == "uv" {
-            self.run_shell(&format!(
-                "cd /d {}\r\nuv pip install -r {}",
-                bat_quote(maibot_dir),
-                bat_quote(req)
+            self.run_shell(&with_windows_tools_path(
+                root,
+                &format!(
+                    "cd /d {}\r\nuv pip install -r {}",
+                    bat_quote(maibot_dir),
+                    bat_quote(req)
+                ),
             ))
         } else {
-            self.run_shell(&format!(
-                "cd /d {}\r\ncall ..\\venv\\Scripts\\activate.bat\r\npip install -r {}",
+            let python = root.join("venv").join("Scripts").join("python.exe");
+            self.run_shell(&with_windows_tools_path(root, &format!(
+                "cd /d {}\r\nif not exist {} (echo 未找到 Python 虚拟环境: {} & exit /b 1)\r\n{} -m pip install -r {}",
                 bat_quote(maibot_dir),
+                bat_quote(&python),
+                python.display(),
+                bat_quote(&python),
                 bat_quote(req)
-            ))
+            )))
         }
     }
 }

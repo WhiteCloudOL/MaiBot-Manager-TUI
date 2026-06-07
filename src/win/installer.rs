@@ -637,6 +637,7 @@ impl App {
         fs::create_dir_all(&plan.install_path)?;
         self.ensure_base_dependencies(&plan)?;
         self.clone_or_update_repo(
+            &plan.install_path,
             &repo_url(
                 &github_proxy_or_direct(&plan.github_proxy),
                 "MaiM-with-u/MaiBot",
@@ -661,48 +662,50 @@ impl App {
     pub(crate) fn run_github_speedtest(&self, fallback: GithubFallbackMode) -> Result<String> {
         let mut mirrors = vec!["https://github.com".to_string()];
         mirrors.extend(github_mirrors().iter().map(|v| v.to_string()));
-        println!("  {}", style("正在并行测试 git 访问，请稍候...").dim());
+        println!("  {}", style("正在并行测试 GitHub 访问，请稍候...").dim());
         self.print_line();
 
         let handles: Vec<_> = mirrors
             .into_iter()
             .map(|mirror| {
                 thread::spawn(move || {
-                    let repo = repo_url(&mirror, "MaiM-with-u/MaiBot");
+                    let test_url = accelerate_github_url(TEST_FILE_PATH, &mirror);
                     let started = Instant::now();
-                    let output = Command::new("git")
+                    let output = Command::new("curl.exe")
                         .args([
-                            "-c",
-                            "credential.helper=",
-                            "-c",
-                            "http.lowSpeedLimit=1",
-                            "-c",
-                            "http.lowSpeedTime=5",
-                            "ls-remote",
-                            "--heads",
-                            &repo,
-                            "main",
+                            "-fsSL",
+                            "--max-time",
+                            "8",
+                            "--connect-timeout",
+                            "4",
+                            "-o",
+                            "NUL",
+                            "-w",
+                            "%{time_total}",
+                            &test_url,
                         ])
-                        .env("GIT_TERMINAL_PROMPT", "0")
                         .output();
 
                     match output {
-                        Ok(output) if output.status.success() => (
-                            mirror,
-                            started.elapsed().as_secs_f64() * 1000.0,
-                            true,
-                            String::new(),
-                        ),
+                        Ok(output) if output.status.success() => {
+                            let measured = String::from_utf8_lossy(&output.stdout)
+                                .trim()
+                                .parse::<f64>()
+                                .ok()
+                                .map(|sec| sec * 1000.0)
+                                .unwrap_or_else(|| started.elapsed().as_secs_f64() * 1000.0);
+                            (mirror, measured, true, String::new())
+                        }
                         Ok(output) => {
                             let detail = String::from_utf8_lossy(&output.stderr)
                                 .lines()
                                 .next()
-                                .unwrap_or("git ls-remote 失败")
+                                .unwrap_or("curl 探测失败")
                                 .trim()
                                 .to_string();
                             (mirror, 9999.0, false, detail)
                         }
-                        Err(e) => (mirror, 9999.0, false, format!("无法启动 git: {e}")),
+                        Err(e) => (mirror, 9999.0, false, format!("无法启动 curl.exe: {e}")),
                     }
                 })
             })
@@ -773,79 +776,202 @@ impl App {
     }
 
     fn ensure_base_dependencies(&self, plan: &InstallPlan) -> Result<()> {
-        if !command_exists("git")? {
-            self.run_shell(
-                "where winget >nul 2>nul || (echo 未找到 git，也未找到 winget，请先安装 Git for Windows。 & exit /b 1)\r\nwinget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements",
-            )?;
+        let root = &plan.install_path;
+        fs::create_dir_all(tools_dir(root))?;
+
+        if portable_git_exe(root).exists() {
+            println!("使用安装目录内 Git: {}", portable_git_exe(root).display());
+        } else if command_exists("git")? {
+            println!("使用系统 Git；如需完全便携，可删除系统 Git 后重新执行安装。");
+        } else {
+            self.install_portable_git(plan)?;
         }
-        if plan.python_env == PythonEnv::Uv && !command_exists("uv")? {
-            self.run_shell(
-                "where winget >nul 2>nul || (echo 未找到 uv，也未找到 winget，请先安装 uv 或改用 --python system。 & exit /b 1)\r\nwinget install --id astral-sh.uv -e --source winget --accept-package-agreements --accept-source-agreements",
-            )?;
+
+        let needs_uv = plan.python_env == PythonEnv::Uv
+            || (plan.python_env == PythonEnv::System
+                && !command_exists_with_tools(root, "python")?
+                && !command_exists_with_tools(root, "py")?);
+        if needs_uv {
+            if portable_uv_exe(root).exists() {
+                println!("使用安装目录内 uv: {}", portable_uv_exe(root).display());
+            } else if command_exists("uv")? {
+                println!("使用系统 uv，并将 uv 缓存/Python 下载目录固定到安装目录。");
+            } else {
+                self.install_portable_uv(plan)?;
+            }
         }
+
         if plan.python_env == PythonEnv::System
-            && !command_exists("python")?
-            && !command_exists("py")?
+            && !command_exists_with_tools(root, "python")?
+            && !command_exists_with_tools(root, "py")?
         {
-            bail!("未找到 Python。请先安装 Python 3.12+，或使用 --python uv");
+            println!("未找到本机 Python，将使用安装目录内 uv 创建本地 Python 虚拟环境。");
         }
+
         Ok(())
+    }
+
+    fn install_portable_git(&self, plan: &InstallPlan) -> Result<()> {
+        let root = &plan.install_path;
+        let tools = tools_dir(root);
+        let git_dir = portable_git_dir(root);
+        let git_tmp = tools.join("git-extract");
+        let zip_path = tools.join("MinGit.zip");
+        let release = self.fetch_latest_release_asset_matching(
+            "git-for-windows/git",
+            "MinGit-*-64-bit.zip",
+            &plan.github_proxy,
+            |name| {
+                name.starts_with("MinGit-")
+                    && name.ends_with("-64-bit.zip")
+                    && !name.contains("busybox")
+            },
+        )?;
+        println!("正在下载便携 Git: {}", release.tag_name);
+        let script = format!(
+            "if not exist {tools} mkdir {tools}\r\n\
+             if exist {tmp} rmdir /s /q {tmp}\r\n\
+             if exist {zip} del /q {zip}\r\n\
+             mkdir {tmp}\r\n\
+             curl.exe -fL --retry 3 --connect-timeout 10 -o {zip} {url} || exit /b 1\r\n\
+             tar -xf {zip} -C {tmp} || exit /b 1\r\n\
+             if not exist {tmp_git} (echo Git 便携包结构异常，未找到 cmd\\git.exe & exit /b 1)\r\n\
+             if exist {git} rmdir /s /q {git}\r\n\
+             move /y {tmp} {git} >nul || exit /b 1\r\n\
+             if not exist {git_exe} (echo Git 安装失败，未找到 git.exe & exit /b 1)\r\n\
+             del /q {zip}",
+            tools = bat_quote(&tools),
+            tmp = bat_quote(&git_tmp),
+            zip = bat_quote(&zip_path),
+            url = bat_arg(&release.asset_url),
+            tmp_git = bat_quote(&git_tmp.join("cmd").join("git.exe")),
+            git = bat_quote(&git_dir),
+            git_exe = bat_quote(&portable_git_exe(root)),
+        );
+        self.run_shell(&script)
+    }
+
+    fn install_portable_uv(&self, plan: &InstallPlan) -> Result<()> {
+        let root = &plan.install_path;
+        let tools = tools_dir(root);
+        let uv_dir = portable_uv_dir(root);
+        let uv_tmp = tools.join("uv-extract");
+        let zip_path = tools.join("uv-x86_64-pc-windows-msvc.zip");
+        let release = self.fetch_latest_release_asset(
+            "astral-sh/uv",
+            &["uv-x86_64-pc-windows-msvc.zip"],
+            &plan.github_proxy,
+        )?;
+        println!("正在下载便携 uv: {}", release.tag_name);
+        let script = format!(
+            "if not exist {tools} mkdir {tools}\r\n\
+             if exist {tmp} rmdir /s /q {tmp}\r\n\
+             if exist {zip} del /q {zip}\r\n\
+             if exist {uv_dir} rmdir /s /q {uv_dir}\r\n\
+             mkdir {tmp}\r\n\
+             mkdir {uv_dir}\r\n\
+             curl.exe -fL --retry 3 --connect-timeout 10 -o {zip} {url} || exit /b 1\r\n\
+             tar -xf {zip} -C {tmp} || exit /b 1\r\n\
+             for /r {tmp} %%F in (uv.exe) do if not exist {uv_exe} copy /y \"%%F\" {uv_exe} >nul\r\n\
+             for /r {tmp} %%F in (uvx.exe) do if not exist {uvx_exe} copy /y \"%%F\" {uvx_exe} >nul\r\n\
+             if not exist {uv_exe} (echo uv 便携包结构异常，未找到 uv.exe & exit /b 1)\r\n\
+             rmdir /s /q {tmp}\r\n\
+             del /q {zip}",
+            tools = bat_quote(&tools),
+            tmp = bat_quote(&uv_tmp),
+            zip = bat_quote(&zip_path),
+            uv_dir = bat_quote(&uv_dir),
+            url = bat_arg(&release.asset_url),
+            uv_exe = bat_quote(&portable_uv_exe(root)),
+            uvx_exe = bat_quote(&uv_dir.join("uvx.exe")),
+        );
+        self.run_shell(&script)
     }
 
     fn clone_or_update_repo(
         &self,
+        root: &Path,
         repo: &str,
         target: &Path,
         branch: &str,
         dirty_mode: GitDirtyMode,
     ) -> Result<()> {
         if target.join(".git").exists() {
-            self.handle_dirty_repo(target, dirty_mode)?;
-            self.run_shell(&format!(
-                "cd /d {}\r\ngit fetch --all --prune\r\ngit checkout {}\r\ngit pull --ff-only",
-                bat_quote(target),
-                bat_arg(branch)
+            self.handle_dirty_repo(root, target, dirty_mode)?;
+            self.run_shell(&with_windows_tools_path(
+                root,
+                &format!(
+                    "cd /d {}\r\ngit fetch --all --prune\r\ngit checkout {}\r\ngit pull --ff-only",
+                    bat_quote(target),
+                    bat_arg(branch)
+                ),
             ))
         } else {
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
             }
-            self.run_shell(&format!(
-                "git clone --branch {} --depth 1 {} {}",
-                bat_arg(branch),
-                bat_arg(repo),
-                bat_quote(target)
+            self.run_shell(&with_windows_tools_path(
+                root,
+                &format!(
+                    "git clone --branch {} --depth 1 {} {}",
+                    bat_arg(branch),
+                    bat_arg(repo),
+                    bat_quote(target)
+                ),
             ))
         }
     }
 
-    fn handle_dirty_repo(&self, target: &Path, dirty_mode: GitDirtyMode) -> Result<()> {
-        let output = Command::new("cmd")
-            .args([
-                "/C",
-                &format!("cd /d {} && git status --porcelain", bat_quote(target)),
-            ])
+    fn handle_dirty_repo(
+        &self,
+        root: &Path,
+        target: &Path,
+        dirty_mode: GitDirtyMode,
+    ) -> Result<()> {
+        let mut command = Command::new(git_executable(root));
+        apply_windows_tools_env(&mut command, root);
+        let output = command
+            .args(["status", "--porcelain"])
+            .current_dir(target)
             .output()?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .next()
+                .unwrap_or("git status 执行失败")
+                .trim()
+                .to_string();
+            bail!("检查 Git 状态失败: {} ({detail})", target.display());
+        }
         let status = String::from_utf8_lossy(&output.stdout);
         if status.trim().is_empty() {
             return Ok(());
         }
         let only_uv_lock = status.lines().all(|line| line.ends_with(" uv.lock"));
         if target.file_name().and_then(|s| s.to_str()) == Some("MaiBot") && only_uv_lock {
-            self.run_shell(&format!(
-                "cd /d {}\r\ngit checkout -- uv.lock",
-                bat_quote(target)
+            self.run_shell(&with_windows_tools_path(
+                root,
+                &format!(
+                    "cd /d {}\r\ngit reset -- uv.lock\r\ngit checkout -- uv.lock",
+                    bat_quote(target)
+                ),
             ))?;
             return Ok(());
         }
         match dirty_mode {
-            GitDirtyMode::Stash => self.run_shell(&format!(
-                "cd /d {}\r\ngit stash push -u -m maibot-manager-windows",
-                bat_quote(target)
+            GitDirtyMode::Stash => self.run_shell(&with_windows_tools_path(
+                root,
+                &format!(
+                    "cd /d {}\r\ngit stash push -u -m maibot-manager-windows",
+                    bat_quote(target)
+                ),
             )),
-            GitDirtyMode::Discard => self.run_shell(&format!(
-                "cd /d {}\r\ngit reset --hard HEAD\r\ngit clean -fd",
-                bat_quote(target)
+            GitDirtyMode::Discard => self.run_shell(&with_windows_tools_path(
+                root,
+                &format!(
+                    "cd /d {}\r\ngit reset --hard HEAD\r\ngit clean -fd",
+                    bat_quote(target)
+                ),
             )),
             GitDirtyMode::Cancel => bail!("目标仓库存在本地改动: {}", target.display()),
             GitDirtyMode::Ask => {
@@ -858,8 +984,8 @@ impl App {
                     .default(2)
                     .interact()?;
                 match choice {
-                    0 => self.handle_dirty_repo(target, GitDirtyMode::Stash),
-                    1 => self.handle_dirty_repo(target, GitDirtyMode::Discard),
+                    0 => self.handle_dirty_repo(root, target, GitDirtyMode::Stash),
+                    1 => self.handle_dirty_repo(root, target, GitDirtyMode::Discard),
                     _ => bail!("已取消：目标仓库存在本地改动"),
                 }
             }
@@ -870,6 +996,7 @@ impl App {
         let plugins_dir = plan.install_path.join("MaiBot").join("plugins");
         let target = plugins_dir.join(NAPCAT_ADAPTER_PLUGIN_ID);
         self.clone_or_update_repo(
+            &plan.install_path,
             &repo_url(
                 &plan.github_proxy,
                 &format!("Mai-with-u/{NAPCAT_ADAPTER_REPO_NAME}"),
@@ -900,16 +1027,17 @@ impl App {
                 if plan.venv_mode == VenvMode::Recreate && maibot_dir.join(".venv").exists() {
                     self.remove_env_dir_safely(&maibot_dir.join(".venv"), root)?;
                 }
-                self.run_shell(&format!(
+                self.run_shell(&with_windows_tools_path(root, &format!(
                     "cd /d {}\r\n{}if not exist .venv uv venv --python 3.14\r\nuv sync\r\nif exist {} uv pip install -r {}",
                     bat_quote(&maibot_dir),
                     index,
                     bat_quote(&adapter_req),
                     bat_quote(&adapter_req)
-                ))
+                )))
             }
             PythonEnv::System => {
                 let venv_dir = root.join("venv");
+                let python = venv_dir.join("Scripts").join("python.exe");
                 if plan.venv_mode == VenvMode::Recreate && venv_dir.exists() {
                     self.remove_env_dir_safely(&venv_dir, root)?;
                 }
@@ -918,13 +1046,36 @@ impl App {
                 } else {
                     format!("set PIP_INDEX_URL={}\r\n", plan.pip_index)
                 };
-                self.run_shell(&format!(
-                    "cd /d {}\r\nif not exist venv python -m venv venv\r\ncall venv\\Scripts\\activate.bat\r\n{}python -m pip install --upgrade pip\r\nif exist MaiBot\\requirements.txt pip install -r MaiBot\\requirements.txt\r\nif exist {} pip install -r {}",
+                self.run_shell(&with_windows_tools_path(root, &format!(
+                    "cd /d {}\r\n\
+                     if not exist {} (\r\n\
+                     where python >nul 2>nul\r\n\
+                     if not errorlevel 1 (\r\n\
+                     python -m venv venv\r\n\
+                     ) else (\r\n\
+                     where py >nul 2>nul\r\n\
+                     if not errorlevel 1 (\r\n\
+                     py -3 -m venv venv\r\n\
+                     ) else (\r\n\
+                     uv venv --python 3.14 venv\r\n\
+                     )\r\n\
+                     )\r\n\
+                     )\r\n\
+                     if not exist {} (echo Python 虚拟环境创建失败: {} & exit /b 1)\r\n\
+                     {}{} -m pip install --upgrade pip\r\n\
+                     if exist MaiBot\\requirements.txt {} -m pip install -r MaiBot\\requirements.txt\r\n\
+                     if exist {} {} -m pip install -r {}",
                     bat_quote(root),
+                    bat_quote(&python),
+                    bat_quote(&python),
+                    python.display(),
                     pip_index,
+                    bat_quote(&python),
+                    bat_quote(&python),
                     bat_quote(&adapter_req),
+                    bat_quote(&python),
                     bat_quote(&adapter_req)
-                ))
+                )))
             }
         }
     }
@@ -976,7 +1127,7 @@ impl App {
         let zip_path = napcat_dir.join("NapCat.Shell.zip");
         let backup_config = napcat_dir.join(".maibot-napcat-config-backup");
         let script = format!(
-            "if exist {backup} rmdir /s /q {backup}\r\nif exist {config} xcopy {config} {backup}\\ /e /i /y >nul\r\ncurl.exe -fL --retry 3 --connect-timeout 10 -o {zip} {url}\r\nfor /d %%D in ({napcat}\\*) do if /i not \"%%~nxD\"==\".maibot-napcat-config-backup\" rmdir /s /q \"%%D\"\r\nfor %%F in ({napcat}\\*) do if /i not \"%%~nxF\"==\"NapCat.Shell.zip\" del /q \"%%F\"\r\ntar -xf {zip} -C {napcat}\r\nif exist {backup} xcopy {backup} {config}\\ /e /i /y >nul\r\nif exist {backup} rmdir /s /q {backup}",
+            "if exist {backup} rmdir /s /q {backup}\r\nif exist {config} xcopy {config} {backup} /e /i /y >nul || exit /b 1\r\ncurl.exe -fL --retry 3 --connect-timeout 10 -o {zip} {url} || exit /b 1\r\nfor /d %%D in ({napcat}\\*) do if /i not \"%%~nxD\"==\".maibot-napcat-config-backup\" rmdir /s /q \"%%D\"\r\nfor %%F in ({napcat}\\*) do if /i not \"%%~nxF\"==\"NapCat.Shell.zip\" del /q \"%%F\"\r\ntar -xf {zip} -C {napcat} || exit /b 1\r\nif exist {backup} xcopy {backup} {config} /e /i /y >nul || exit /b 1\r\nif exist {backup} rmdir /s /q {backup}",
             backup = bat_quote(&backup_config),
             config = bat_quote(&napcat_dir.join("config")),
             zip = bat_quote(&zip_path),
@@ -989,6 +1140,12 @@ impl App {
             format!("{}\n", release.tag_name),
         )?;
         Ok(())
+    }
+
+    pub(crate) fn redownload_napcat_shell(&self, plan: &InstallPlan) -> Result<()> {
+        let napcat_dir = plan.install_path.join("NapCat");
+        let _ = fs::remove_file(napcat_dir.join(NAPCAT_RELEASE_TAG_FILE));
+        self.install_napcat(plan)
     }
 
     pub(crate) fn install_llbot(&self, plan: &InstallPlan) -> Result<()> {
@@ -1037,9 +1194,13 @@ impl App {
             .join("llbot")
             .join("default_config.json");
         let backup_dir = llbot_dir.join(".maibot-llbot-backup");
+        let backup_data_dir = backup_dir.join("data");
+        let backup_config_path = backup_dir.join("default_config.json");
         let script = format!(
-            "if exist {backup} rmdir /s /q {backup}\r\nmkdir {backup}\r\nif exist {data} xcopy {data} {backup}\\data\\ /e /i /y >nul\r\nif exist {config} copy /y {config} {backup}\\default_config.json >nul\r\ncurl.exe -fL --retry 3 --connect-timeout 10 -o {zip} {url}\r\nfor /d %%D in ({llbot}\\*) do if /i not \"%%~nxD\"==\".maibot-llbot-backup\" rmdir /s /q \"%%D\"\r\nfor %%F in ({llbot}\\*) do if /i not \"%%~nxF\"==\"LLBot-Desktop-win-x64.zip\" del /q \"%%F\"\r\ntar -xf {zip} -C {llbot}\r\nif exist {backup}\\data xcopy {backup}\\data {data}\\ /e /i /y >nul\r\nif exist {backup}\\default_config.json copy /y {backup}\\default_config.json {config} >nul\r\nrmdir /s /q {backup}",
+            "if exist {backup} rmdir /s /q {backup}\r\nmkdir {backup}\r\nif exist {data} xcopy {data} {backup_data} /e /i /y >nul || exit /b 1\r\nif exist {config} copy /y {config} {backup_config} >nul || exit /b 1\r\ncurl.exe -fL --retry 3 --connect-timeout 10 -o {zip} {url} || exit /b 1\r\nfor /d %%D in ({llbot}\\*) do if /i not \"%%~nxD\"==\".maibot-llbot-backup\" rmdir /s /q \"%%D\"\r\nfor %%F in ({llbot}\\*) do if /i not \"%%~nxF\"==\"LLBot-Desktop-win-x64.zip\" del /q \"%%F\"\r\ntar -xf {zip} -C {llbot} || exit /b 1\r\nif exist {backup_data} xcopy {backup_data} {data} /e /i /y >nul || exit /b 1\r\nif exist {backup_config} copy /y {backup_config} {config} >nul || exit /b 1\r\nrmdir /s /q {backup}",
             backup = bat_quote(&backup_dir),
+            backup_data = bat_quote(&backup_data_dir),
+            backup_config = bat_quote(&backup_config_path),
             data = bat_quote(&data_dir),
             config = bat_quote(&config_path),
             zip = bat_quote(&zip_path),
@@ -1060,50 +1221,98 @@ impl App {
         asset_names: &[&str],
         github_proxy: &str,
     ) -> Result<ReleaseAssetInfo> {
+        self.fetch_latest_release_asset_matching(
+            repo,
+            &asset_names.join(", "),
+            github_proxy,
+            |name| asset_names.contains(&name),
+        )
+    }
+
+    fn fetch_latest_release_asset_matching<F>(
+        &self,
+        repo: &str,
+        asset_description: &str,
+        github_proxy: &str,
+        matches_asset: F,
+    ) -> Result<ReleaseAssetInfo>
+    where
+        F: Fn(&str) -> bool,
+    {
         let api_url = format!("https://api.github.com/repos/{repo}/releases/latest");
-        let accelerated_api_url = accelerate_github_url(&api_url, github_proxy);
-        let output = Command::new("cmd")
-            .args([
-                "/C",
-                &format!(
-                    "curl.exe -fsSL -H \"Accept: application/vnd.github+json\" -H \"User-Agent: maibot-manager-tui\" {}",
-                    bat_arg(&accelerated_api_url)
-                ),
-            ])
-            .output()
-            .with_context(|| format!("获取 GitHub 最新 release 失败: {api_url}"))?;
-        if !output.status.success() {
-            bail!("获取 GitHub 最新 release 失败: {api_url}");
-        }
-        let data: Value = serde_json::from_slice(&output.stdout)?;
-        let tag_name = data
-            .get("tag_name")
-            .and_then(Value::as_str)
-            .filter(|v| !v.trim().is_empty())
-            .ok_or_else(|| anyhow!("GitHub release 缺少 tag_name: {repo}"))?
-            .to_string();
-        let asset_url = data
-            .get("assets")
-            .and_then(Value::as_array)
-            .and_then(|assets| {
-                assets.iter().find_map(|asset| {
-                    let name = asset.get("name").and_then(Value::as_str)?;
-                    asset_names
-                        .contains(&name)
-                        .then(|| asset.get("browser_download_url").and_then(Value::as_str))
-                        .flatten()
+        let mut errors = Vec::new();
+
+        for candidate in github_proxy_candidates(github_proxy) {
+            let accelerated_api_url = accelerate_github_url(&api_url, &candidate);
+            let output = Command::new("curl.exe")
+                .args([
+                    "-fsSL",
+                    "--retry",
+                    "2",
+                    "--connect-timeout",
+                    "10",
+                    "--max-time",
+                    "45",
+                    "-H",
+                    "Accept: application/vnd.github+json",
+                    "-H",
+                    "User-Agent: maibot-manager-tui",
+                    &accelerated_api_url,
+                ])
+                .output()
+                .with_context(|| format!("获取 GitHub 最新 release 失败: {api_url}"))?;
+            if !output.status.success() {
+                let detail = String::from_utf8_lossy(&output.stderr)
+                    .lines()
+                    .next()
+                    .unwrap_or("curl 请求失败")
+                    .trim()
+                    .to_string();
+                errors.push(format!("{candidate}: {detail}"));
+                continue;
+            }
+            let data: Value = match serde_json::from_slice(&output.stdout) {
+                Ok(data) => data,
+                Err(error) => {
+                    errors.push(format!("{candidate}: release JSON 解析失败: {error}"));
+                    continue;
+                }
+            };
+            let tag_name = data
+                .get("tag_name")
+                .and_then(Value::as_str)
+                .filter(|v| !v.trim().is_empty())
+                .ok_or_else(|| anyhow!("GitHub release 缺少 tag_name: {repo}"))?
+                .to_string();
+            let asset_url = data
+                .get("assets")
+                .and_then(Value::as_array)
+                .and_then(|assets| {
+                    assets.iter().find_map(|asset| {
+                        let name = asset.get("name").and_then(Value::as_str)?;
+                        matches_asset(name)
+                            .then(|| asset.get("browser_download_url").and_then(Value::as_str))
+                            .flatten()
+                    })
                 })
-            })
-            .ok_or_else(|| {
-                anyhow!(
-                    "GitHub release 未找到 Windows 资产包: {}",
-                    asset_names.join(", ")
-                )
-            })?;
-        Ok(ReleaseAssetInfo {
-            tag_name,
-            asset_url: accelerate_github_url(asset_url, github_proxy),
-        })
+                .ok_or_else(|| {
+                    anyhow!(
+                        "GitHub release 未找到 Windows 资产包: {}",
+                        asset_description
+                    )
+                })?;
+            return Ok(ReleaseAssetInfo {
+                tag_name,
+                asset_url: accelerate_github_url(asset_url, &candidate),
+            });
+        }
+
+        if errors.is_empty() {
+            bail!("获取 GitHub 最新 release 失败: {api_url}");
+        } else {
+            let detail = errors.into_iter().take(4).collect::<Vec<_>>().join("; ");
+            bail!("获取 GitHub 最新 release 失败: {api_url} ({detail})");
+        }
     }
 
     fn current_release_tag(&self, dir: &Path, file_name: &str) -> Option<String> {
@@ -1133,9 +1342,26 @@ fn github_proxy_or_direct(proxy: &str) -> String {
     }
 }
 
+fn github_proxy_candidates(primary: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut push_unique = |value: String| {
+        if !candidates.iter().any(|existing| existing == &value) {
+            candidates.push(value);
+        }
+    };
+
+    push_unique(github_proxy_or_direct(primary));
+    push_unique("https://github.com".to_string());
+    for mirror in github_mirrors() {
+        push_unique((*mirror).to_string());
+    }
+    candidates
+}
+
 fn accelerate_github_url(url: &str, proxy: &str) -> String {
     let proxy = github_proxy_or_direct(proxy);
-    if proxy == "https://github.com" || !url.contains("github.com/") {
+    let is_github_url = url.contains("github.com/") || url.contains("githubusercontent.com/");
+    if proxy == "https://github.com" || !is_github_url {
         url.to_string()
     } else {
         format!("{}/{}", proxy.trim_end_matches('/'), url)

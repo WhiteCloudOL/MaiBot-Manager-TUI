@@ -1,7 +1,9 @@
-use crate::{app::App, utils::bat_quote};
+use crate::{
+    app::App,
+    utils::{bat_quote, windows_tools_path_prelude},
+};
 use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input, Select};
-use std::os::windows::process::CommandExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -12,11 +14,10 @@ use std::{
 
 const MAIBOT_TITLE: &str = "MaiBot maibot";
 const LLBOT_TITLE: &str = "MaiBot llbot";
-const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 
 impl App {
     pub(crate) fn warn_before_screen_attach(&self, session: &str) -> Result<()> {
-        println!("Windows 版本使用独立 cmd 窗口运行 {session}，无需 screen 分离热键。");
+        println!("Windows 版本使用独立控制台 / Desktop 窗口运行 {session}，无法附着到已打开窗口。");
         Ok(())
     }
 
@@ -30,7 +31,8 @@ impl App {
 
     pub(crate) fn start_maibot_core(&self, _attach: bool) -> Result<()> {
         let (maibot_dir, py_env) = self.maibot_paths()?;
-        let logs_dir = maibot_dir.parent().unwrap_or(&maibot_dir).join("logs");
+        let root = maibot_dir.parent().unwrap_or(&maibot_dir).to_path_buf();
+        let logs_dir = root.join("logs");
         fs::create_dir_all(&logs_dir)?;
         let launcher_path = logs_dir.join("start-maibot.bat");
         let pid_path = logs_dir.join("maibot.pid");
@@ -39,15 +41,18 @@ impl App {
         }
         let _ = fs::remove_file(&pid_path);
 
+        let tools_prelude = windows_tools_path_prelude(&root);
         let run = if py_env == "uv" {
-            "where uv >nul 2>nul || (echo [ERROR] uv was not found. Install uv or reinstall MaiBot. & pause & exit /b 1)\r\n\
+            format!(
+                "{tools_prelude}where uv >nul 2>nul || (echo [ERROR] uv was not found. Install uv or reinstall MaiBot. & pause & exit /b 1)\r\n\
              uv run bot.py"
-                .to_string()
+            )
         } else {
-            "if not exist ..\\venv\\Scripts\\activate.bat (echo [ERROR] virtualenv was not found: ..\\venv\\Scripts\\activate.bat & pause & exit /b 1)\r\n\
+            format!(
+                "{tools_prelude}if not exist ..\\venv\\Scripts\\activate.bat (echo [ERROR] virtualenv was not found: ..\\venv\\Scripts\\activate.bat & pause & exit /b 1)\r\n\
              call ..\\venv\\Scripts\\activate.bat\r\n\
              python bot.py"
-                .to_string()
+            )
         };
         fs::write(
             &launcher_path,
@@ -74,29 +79,15 @@ impl App {
                 logs_dir.display()
             ),
         )?;
-        let mut command = if py_env == "uv" {
-            let mut command = Command::new("uv");
-            command.args(["run", "bot.py"]);
-            command
-        } else {
-            let root = maibot_dir.parent().unwrap_or(&maibot_dir);
+        if py_env != "uv" {
             let python = root.join("venv").join("Scripts").join("python.exe");
             if !python.exists() {
                 bail!("未找到 Python 虚拟环境: {}", python.display());
             }
-            let mut command = Command::new(python);
-            command.arg("bot.py");
-            command
-        };
-        let child = command
-            .current_dir(&maibot_dir)
-            .env("PYTHONUTF8", "1")
-            .env("PYTHONIOENCODING", "utf-8")
-            .env("PYTHONUNBUFFERED", "1")
-            .creation_flags(CREATE_NEW_CONSOLE)
-            .spawn()?;
-        fs::write(&pid_path, format!("{}\n", child.id()))?;
-        println!("MaiBot PID: {}", child.id());
+        }
+        let pid = start_bat_in_new_window(&launcher_path, &maibot_dir)?;
+        fs::write(&pid_path, format!("{pid}\n"))?;
+        println!("MaiBot PID: {pid}");
         Ok(())
     }
 
@@ -125,7 +116,12 @@ impl App {
     }
 
     pub(crate) fn print_llbot_status(&self) -> Result<()> {
-        print_window_status("llbot", LLBOT_TITLE)
+        if self.llbot_running()? {
+            println!("llbot: running");
+        } else {
+            println!("llbot: stopped");
+        }
+        Ok(())
     }
 
     pub(crate) fn print_maibot_core_logs(&self, tail: usize, follow: bool) -> Result<()> {
@@ -184,7 +180,7 @@ impl App {
     }
 
     pub(crate) fn stop_napcat(&self) -> Result<()> {
-        stop_process_tree_by_title_pattern("NapCat*")
+        stop_process_tree_by_image_or_title("NapCatWinBootMain.exe", "NapCat*")
     }
 
     pub(crate) fn restart_napcat(&self) -> Result<()> {
@@ -193,9 +189,9 @@ impl App {
     }
 
     pub(crate) fn rebuild_napcat(&self) -> Result<()> {
-        bail!(
-            "Windows NapCat Shell 不支持 Docker rebuild；请执行 install/update 重新下载最新 Shell 包"
-        )
+        let cfg = self.require_config()?;
+        let plan = self.build_default_install_plan(&cfg)?;
+        self.redownload_napcat_shell(&plan)
     }
 
     pub(crate) fn remove_napcat_container(&self) -> Result<()> {
@@ -280,12 +276,7 @@ impl App {
     }
 
     pub(crate) fn napcat_running(&self) -> Result<bool> {
-        Ok(cmd_output_with_timeout(
-            "tasklist /v | findstr /i \"NapCat\"",
-            Duration::from_millis(800),
-        )?
-        .map(|output| !String::from_utf8_lossy(&output.stdout).trim().is_empty())
-        .unwrap_or(false))
+        Ok(process_image_running("NapCatWinBootMain.exe")? || window_running("NapCat")?)
     }
 
     pub(crate) fn manage_bot_protocol_menu(&self) -> Result<()> {
@@ -345,7 +336,6 @@ impl App {
                     "重启 NapCat",
                     "查看实时日志",
                     "重新下载最新 Shell 包",
-                    "说明：Windows 版不使用 Docker",
                     "返回",
                 ])
                 .default(0)
@@ -356,7 +346,6 @@ impl App {
                 2 => self.restart_napcat(),
                 3 => self.print_napcat_logs(100, true),
                 4 => self.rebuild_napcat(),
-                5 => self.remove_napcat_container(),
                 _ => break,
             };
             if self.handle_menu_result(result)? {
@@ -427,15 +416,6 @@ fn window_running(title: &str) -> Result<bool> {
     )
 }
 
-fn print_window_status(name: &str, title: &str) -> Result<()> {
-    if window_running(title)? {
-        println!("{name}: running");
-    } else {
-        println!("{name}: stopped");
-    }
-    Ok(())
-}
-
 fn stop_window_by_pid_or_title(pid_path: &Path, title: &str) -> Result<()> {
     if let Some(pid) = read_pid(pid_path)? {
         if maibot_pid_running(pid)? {
@@ -459,7 +439,20 @@ fn stop_window_by_pid_or_title(pid_path: &Path, title: &str) -> Result<()> {
     bail!("未找到运行中的窗口: {title}")
 }
 
+fn stop_process_tree_by_image_or_title(image_name: &str, title_pattern: &str) -> Result<()> {
+    let status = Command::new("taskkill")
+        .args(["/IM", image_name, "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        return Ok(());
+    }
+    stop_process_tree_by_title_pattern(title_pattern)
+}
+
 fn stop_process_tree_by_title_pattern(title_pattern: &str) -> Result<()> {
+    let display_pattern = title_pattern.to_string();
     let title_pattern = ps_single_quote(title_pattern);
     let script = format!(
         "$p = Get-Process | Where-Object {{ $_.MainWindowTitle -like {title_pattern} }}; if ($p) {{ $p | ForEach-Object {{ taskkill /PID $_.Id /T /F | Out-Null }}; exit 0 }} else {{ exit 1 }}"
@@ -474,7 +467,7 @@ fn stop_process_tree_by_title_pattern(title_pattern: &str) -> Result<()> {
         ])
         .status()?;
     if !status.success() {
-        bail!("未找到匹配窗口: {}", title_pattern);
+        bail!("未找到匹配窗口: {display_pattern}");
     }
     Ok(())
 }
@@ -499,6 +492,23 @@ fn maibot_pid_running(pid: u32) -> Result<bool> {
         || stdout.contains("\"cmd.exe\""))
 }
 
+fn process_image_running(image_name: &str) -> Result<bool> {
+    let output = Command::new("tasklist")
+        .args([
+            "/FI",
+            &format!("IMAGENAME eq {image_name}"),
+            "/FO",
+            "CSV",
+            "/NH",
+        ])
+        .output()?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    Ok(stdout.contains(&format!("\"{}\"", image_name.to_ascii_lowercase())))
+}
+
 fn read_pid(pid_path: &Path) -> Result<Option<u32>> {
     if !pid_path.exists() {
         return Ok(None);
@@ -518,6 +528,44 @@ fn run_as_admin_script(target: &Path, workdir: &Path, title: &str) -> String {
             "echo 将请求管理员权限启动 {title}...\r\npowershell -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process -FilePath '{target}' -WorkingDirectory '{workdir}' -Verb RunAs\""
         )
     }
+}
+
+fn start_bat_in_new_window(launcher: &Path, workdir: &Path) -> Result<u32> {
+    let cmd_arg = format!("/C \"{}\"", launcher.display());
+    let script = format!(
+        "$ErrorActionPreference = 'Stop'; \
+         $p = Start-Process -FilePath $env:ComSpec -ArgumentList {} -WorkingDirectory {} -WindowStyle Normal -PassThru; \
+         Write-Output $p.Id",
+        ps_single_quote(&cmd_arg),
+        ps_single_quote(&workdir.display().to_string())
+    );
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = stderr
+            .lines()
+            .next()
+            .or_else(|| stdout.lines().next())
+            .unwrap_or("Start-Process 执行失败")
+            .trim()
+            .to_string();
+        bail!("启动 MaiBot 独立窗口失败: {detail}");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().parse::<u32>().ok())
+        .ok_or_else(|| anyhow::anyhow!("启动 MaiBot 后未获取到窗口 PID"))
 }
 
 fn ps_single_quote(value: &str) -> String {

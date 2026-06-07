@@ -25,7 +25,7 @@
 * **Github 优选**：GitHub 官方线路与镜像源并行测速，自动选择最佳线路；全部失败时提供重试 / 直连 / 取消的回退选择。
 * **MaiBot 管理**：Linux 使用 `screen` 后台会话；Windows 使用独立进程 / 窗口启动。
 * **LLBot / Napcat 安装**：Linux 使用 LLBot CLI + NapCat Docker；Windows 使用 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限。
-* **依赖自检**：Linux 自动检测包管理器并补装基础工具；Windows 优先使用 `winget` 补装 Git / uv。
+* **依赖自检**：Linux 自动检测包管理器并补装基础工具；Windows 缺少 Git / uv / Python 时会优先下载便携工具到 MaiBot 安装目录。
 * **配置访问**：集中查看 MaiBot、NapCat、LLBot WebUI 地址与密钥；初始化访问配置带二次确认。
 * **插件管理**：安装、卸载插件并按需补装依赖。
 
@@ -70,6 +70,7 @@ irm https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/main/scrip
 * `MAIBOT_VERSION` / `-Version`：指定版本 tag；不指定时会从 release 列表选择最新含 Windows 资产的版本
 
 > Windows 安装脚本本身不需要管理员权限；启动 NapCat Shell 的 `launcher.bat` 和 LLBot Desktop 的 `llbot.exe` 时，程序会通过 UAC 请求管理员权限。
+> Windows 版管理 MaiBot 时不会强制安装全局 Git / Python / uv；缺失依赖会放在你选择的 MaiBot 安装目录下，例如 `D:\Apps\maimai\tools`。
 
 ---
 
@@ -116,8 +117,8 @@ irm https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/main/scrip
 **Windows：**
 
 * **系统架构**：Windows 10/11 x86_64
-* **基础工具**：Git for Windows、Windows 自带 `curl.exe` / `tar.exe`，缺少 Git / uv 时会优先尝试 `winget`
-* **Python 环境**：推荐 `uv`，也可使用系统 Python
+* **基础工具**：Windows 自带 `curl.exe` / `tar.exe`；缺少 Git / uv 时会自动下载到 `<MaiBot安装目录>\tools\git` 与 `<MaiBot安装目录>\tools\uv`
+* **Python 环境**：推荐 `uv`；缺少系统 Python 时会通过安装目录内的 uv 创建本地虚拟环境，并把 uv 缓存与托管 Python 固定到 `<MaiBot安装目录>\tools`
 * **NapCatQQ**：通过 GitHub API 获取最新 `NapCat.Shell.zip`，启动 `launcher.bat` 时请求管理员权限，不使用 Docker
 * **LuckyLilliaBot**：通过 GitHub API 获取最新 `LLBot-Desktop-win-x64.zip`，启动 `llbot.exe` 时请求管理员权限
 
@@ -148,7 +149,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 仓库根的 `app.toml` 是构建时配置（**非运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
 
 ```toml
-version          = "0.2.2"   # 标题栏显示的版本号
+version          = "0.3.0"   # 标题栏显示的版本号
 build_label      = "..."     # 标题栏副标题
 github_test_path = "..."     # 测速参考文件
 github_mirrors   = [...]     # 镜像源候选清单
@@ -269,7 +270,7 @@ maibot update --protocol llbot --llbot-update update \
 | `--path <目录>` | 安装目录，默认读取配置或 `~/maimai` |
 | `--branch <main|dev>` | 部署的 MaiBot 分支 |
 | `--mode <normal|clean>` | `normal`: 保留目录更新修复；`clean`: 清空目录全新安装并强制重建虚拟环境 |
-| `--python <system|uv>` | `system`: 系统 python3+venv；`uv`: 使用 uv 创建并同步环境 |
+| `--python <system|uv>` | `system`: 系统 Python + venv；`uv`: 使用 uv 创建并同步环境。Windows 缺少系统 Python 时会自动使用安装目录内的 uv 创建本地 venv |
 | `--venv <keep|recreate>` | 保留或强制重建虚拟环境 |
 | `--github <auto|direct|URL>` | `auto`: 并行测速；`direct`: 强制官方直连；`URL`: 自定义代理前缀 |
 | `--pip <system|aliyun...|URL>` | 系统源/内置国内源/自定义源（仅写入当前虚拟环境配置，不污染全局） |
@@ -319,7 +320,7 @@ maibot napcat restart           # 重启 NapCat
 maibot napcat status            # 输出 running / stopped
 maibot napcat logs              # 查看最近 100 行日志
 maibot napcat logs --tail 200 --follow # 实时跟随日志
-maibot napcat rebuild           # Linux: down + pull + up -d；Windows: 请通过 install/update 重新下载 Shell 包
+maibot napcat rebuild           # Linux: down + pull + up -d；Windows: 重新下载最新 NapCat Shell 包
 maibot napcat remove-container  # Linux: 删除 napcat 容器；Windows: 不使用 Docker
 maibot napcat exec              # Linux: 进入容器 shell；Windows: 管理员启动 launcher.bat
 
@@ -396,6 +397,7 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 * 请下载与平台匹配的产物：Linux 使用 `maibot-manager-linux-x86_64` / `maibot-manager-linux-arm64`，Windows 使用 `maibot-manager-windows-x86_64.exe`。
 * Linux LLBot 安装时会尝试自动安装 LinuxQQ，`apt` 环境下可能需要输入 `sudo` 密码。
 * Windows NapCat Shell 与 LLBot Desktop 启动时会请求管理员权限，这是上游程序运行需要。
+* Windows 缺失 Git / uv / Python 时会在 MaiBot 安装目录的 `tools` 子目录准备便携工具链，不会写入系统安装目录。
 * Docker、GitHub、PyPI、NapCat / LLBot Release 下载都依赖目标机器的网络。
 * `初始化 MaiBot 访问配置` 会把 WebUI 绑定到 `0.0.0.0`，相当于把端口暴露给外网，请确认已设置 token 或防火墙策略。
 * NapCat 的 `docker-compose.yml` 仅在首次安装时写入，更新时不会覆盖你的自定义修改；如需重置请手动删除该文件再运行安装。

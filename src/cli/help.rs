@@ -1,6 +1,46 @@
 use crate::model::APP_VERSION;
 
 pub(crate) fn print_help() {
+    let core_notes = if cfg!(target_os = "windows") {
+        r#"  core start         在独立 Windows 控制台中启动 MaiBot，并记录 logs/maibot.pid
+  core start --exec  Windows 下等同于 start；控制台会独立打开
+  core logs          读取安装目录 logs/maibot.log，若上游未写入则提示不存在
+  core logs -f       每 2 秒刷新日志文件尾部
+  core exec          Windows 下无法附着已打开控制台；请查看独立窗口或日志"#
+    } else {
+        r#"  core start         在 screen 会话 maibot 中后台启动 MaiBot
+  core start --exec  启动后立刻进入 screen 控制台，进入前会提示退出方式
+  core logs          通过 screen hardcopy 读取日志缓冲，不会进入或抢占 screen
+  core logs -f       每 2 秒刷新一次 hardcopy 输出
+  core exec          执行 screen -r maibot，适合需要交互控制台时使用"#
+    };
+    let protocol_notes = if cfg!(target_os = "windows") {
+        r#"  napcat             管理 NapCat Shell；start/exec 会请求管理员权限启动 launcher.bat
+  napcat logs        读取 NapCat Shell 日志文件
+  napcat rebuild     Windows 不使用 Docker；会重新下载并解压最新 NapCat Shell 包
+  llbot              管理 LuckyLilliaBot Desktop 程序 llbot.exe
+  llbot logs         读取 LLBot 目录下的 llbot.log
+  llbot exec         Windows 下无法附着 Desktop 窗口；请查看已打开窗口
+  protocol           也可作为聚合入口，例如 maibot protocol napcat restart"#
+    } else {
+        r#"  napcat             管理 NapCat Docker Compose
+  napcat logs        使用 docker compose logs
+  napcat exec        进入 napcat 容器 shell
+  napcat rebuild     执行 down + pull + up -d
+  llbot              管理 LuckyLilliaBot screen 会话
+  llbot logs         通过 screen hardcopy 读取日志缓冲，不影响 screen 会话
+  llbot exec         执行 screen -r llbot，进入前会提示退出方式
+  protocol           也可作为聚合入口，例如 maibot protocol napcat restart"#
+    };
+    let console_tip = if cfg!(target_os = "windows") {
+        r#"Windows 控制台提示:
+  MaiBot 会在独立控制台窗口中运行，停止命令会优先读取 logs/maibot.pid 并结束完整进程树。
+  安装时若缺少 Git / uv / Python，会优先在安装目录 tools 下准备便携工具链；
+  uv 的缓存和托管 Python 也会固定在安装目录内，避免写到随机用户目录。"#
+    } else {
+        r#"Screen 退出提示:
+  进入 core exec 或 llbot exec 后，如需退出控制台但保持进程运行，请按 Ctrl+A，再按 D。"#
+    };
     println!(
         r#"MaiBot Manager {APP_VERSION}
 
@@ -91,11 +131,7 @@ MaiBot 核心:
   maibot core exec
 
 说明:
-  core start         在 screen 会话 maibot 中后台启动 MaiBot
-  core start --exec  启动后立刻进入 screen 控制台，进入前会提示退出方式
-  core logs          通过 screen hardcopy 读取日志缓冲，不会进入或抢占 screen
-  core logs -f       每 2 秒刷新一次 hardcopy 输出
-  core exec          执行 screen -r maibot，适合需要交互控制台时使用
+{core_notes}
 
 协议端:
   maibot napcat start|stop|restart|status
@@ -110,14 +146,7 @@ MaiBot 核心:
   maibot llbot password <新密码>
 
 说明:
-  napcat             Linux 管理 NapCat Docker Compose；Windows 管理 NapCat Shell
-  napcat logs        Linux 使用 docker compose logs；Windows 读取 Shell 日志文件
-  napcat exec        Linux 进入 napcat 容器 shell；Windows 请求管理员权限启动 launcher.bat
-  napcat rebuild     Linux 执行 down + pull + up -d；Windows 请通过 install/update 重新下载 Shell 包
-  llbot              Linux 管理 LuckyLilliaBot screen 会话；Windows 管理 Desktop 程序 llbot.exe
-  llbot logs         通过 screen hardcopy 读取日志缓冲，不影响 screen 会话
-  llbot exec         执行 screen -r llbot，进入前会提示退出方式
-  protocol           也可作为聚合入口，例如 maibot protocol napcat restart
+{protocol_notes}
 
 配置与访问:
   maibot access show
@@ -156,8 +185,7 @@ MaiBot 核心:
 配置文件:
   ~/.maibot_config   记录安装目录、Python 环境、LLBot 路径、安装偏好等
 
-Screen 退出提示:
-  进入 core exec 或 llbot exec 后，如需退出控制台但保持进程运行，请按 Ctrl+A，再按 D。
+{console_tip}
 "#
     );
 }

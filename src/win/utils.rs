@@ -1,8 +1,10 @@
 use anyhow::{Result, anyhow, bail};
 use std::{
-    env, fs,
+    env,
+    ffi::OsString,
+    fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 pub fn list_plugins(dir: &Path) -> Result<Vec<String>> {
@@ -104,6 +106,98 @@ pub fn command_exists(name: &str) -> Result<bool> {
         .args(["/C", "where", name])
         .status()?
         .success())
+}
+
+pub fn command_exists_with_tools(root: &Path, name: &str) -> Result<bool> {
+    let mut command = Command::new("where.exe");
+    apply_windows_tools_env(&mut command, root);
+    Ok(command
+        .arg(name)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?
+        .success())
+}
+
+pub fn tools_dir(root: &Path) -> PathBuf {
+    root.join("tools")
+}
+
+pub fn portable_git_dir(root: &Path) -> PathBuf {
+    tools_dir(root).join("git")
+}
+
+pub fn portable_git_exe(root: &Path) -> PathBuf {
+    portable_git_dir(root).join("cmd").join("git.exe")
+}
+
+pub fn git_executable(root: &Path) -> PathBuf {
+    let portable = portable_git_exe(root);
+    if portable.exists() {
+        portable
+    } else {
+        PathBuf::from("git")
+    }
+}
+
+pub fn portable_uv_dir(root: &Path) -> PathBuf {
+    tools_dir(root).join("uv")
+}
+
+pub fn portable_uv_exe(root: &Path) -> PathBuf {
+    portable_uv_dir(root).join("uv.exe")
+}
+
+pub fn uv_executable(root: &Path) -> PathBuf {
+    let portable = portable_uv_exe(root);
+    if portable.exists() {
+        portable
+    } else {
+        PathBuf::from("uv")
+    }
+}
+
+pub fn windows_tools_path_entries(root: &Path) -> Vec<PathBuf> {
+    let git = portable_git_dir(root);
+    vec![
+        git.join("cmd"),
+        git.join("bin"),
+        git.join("usr").join("bin"),
+        portable_uv_dir(root),
+    ]
+}
+
+pub fn windows_tools_path_prelude(root: &Path) -> String {
+    let entries = windows_tools_path_entries(root)
+        .into_iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(";");
+    let tools = tools_dir(root);
+    format!(
+        "set \"PATH={entries};%PATH%\"\r\n\
+         set \"UV_CACHE_DIR={}\"\r\n\
+         set \"UV_PYTHON_INSTALL_DIR={}\"\r\n",
+        tools.join("uv-cache").display(),
+        tools.join("python").display()
+    )
+}
+
+pub fn with_windows_tools_path(root: &Path, command: &str) -> String {
+    let mut script = windows_tools_path_prelude(root);
+    script.push_str(command);
+    script
+}
+
+pub fn apply_windows_tools_env(command: &mut Command, root: &Path) {
+    let current_path = env::var_os("PATH").unwrap_or_else(OsString::new);
+    let mut paths = windows_tools_path_entries(root);
+    paths.extend(env::split_paths(&current_path));
+    if let Ok(joined) = env::join_paths(paths) {
+        command.env("PATH", joined);
+    }
+    command.env("UV_CACHE_DIR", tools_dir(root).join("uv-cache"));
+    command.env("UV_PYTHON_INSTALL_DIR", tools_dir(root).join("python"));
 }
 
 pub fn detect_arch() -> Result<&'static str> {

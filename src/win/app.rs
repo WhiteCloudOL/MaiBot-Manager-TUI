@@ -97,7 +97,7 @@ impl App {
         self.print_status_dot(
             "MaiBot",
             if maibot_running {
-                "运行中 (Windows cmd 窗口)"
+                "运行中 (Windows 独立控制台)"
             } else {
                 "未运行"
             },
@@ -118,7 +118,7 @@ impl App {
             self.print_status_dot(
                 "LLBot",
                 if llbot_running {
-                    "运行中 (Windows cmd 窗口)"
+                    "运行中 (LLBot Desktop)"
                 } else {
                     "未运行"
                 },

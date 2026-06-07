@@ -62,15 +62,20 @@ fn main() -> Result<()> {
     }
 
     ensure_supported_platform()?;
-    install_terminal_cleanup_handler()?;
+    let use_tui = args.is_empty() || args.first().is_some_and(|arg| arg == "tui");
+    if use_tui {
+        install_terminal_cleanup_handler()?;
+    }
     let mut app = App::new()?;
-    let result = if args.is_empty() || args.first().is_some_and(|arg| arg == "tui") {
+    let result = if use_tui {
         app.run()
     } else {
         app.set_cli_mode();
         app.run_cli(&args)
     };
-    restore_terminal_state();
+    if use_tui {
+        restore_terminal_state();
+    }
     result
 }
 
