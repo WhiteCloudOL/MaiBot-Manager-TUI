@@ -1,6 +1,7 @@
 use crate::{app::App, utils::bat_quote};
 use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input, Select};
+use std::os::windows::process::CommandExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -11,6 +12,7 @@ use std::{
 
 const MAIBOT_TITLE: &str = "MaiBot maibot";
 const LLBOT_TITLE: &str = "MaiBot llbot";
+const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 
 impl App {
     pub(crate) fn warn_before_screen_attach(&self, session: &str) -> Result<()> {
@@ -26,18 +28,23 @@ impl App {
         ))
     }
 
-    pub(crate) fn start_maibot_core(&self, attach: bool) -> Result<()> {
+    pub(crate) fn start_maibot_core(&self, _attach: bool) -> Result<()> {
         let (maibot_dir, py_env) = self.maibot_paths()?;
         let logs_dir = maibot_dir.parent().unwrap_or(&maibot_dir).join("logs");
         fs::create_dir_all(&logs_dir)?;
         let launcher_path = logs_dir.join("start-maibot.bat");
         let pid_path = logs_dir.join("maibot.pid");
+        if pid_running(&pid_path)?.unwrap_or(false) {
+            bail!("MaiBot 已在运行中");
+        }
+        let _ = fs::remove_file(&pid_path);
+
         let run = if py_env == "uv" {
-            "where uv >nul 2>nul || (echo [ERROR] 未找到 uv，请先安装 uv 或重新安装 MaiBot。 & pause & exit /b 1)\r\n\
+            "where uv >nul 2>nul || (echo [ERROR] uv was not found. Install uv or reinstall MaiBot. & pause & exit /b 1)\r\n\
              uv run bot.py"
                 .to_string()
         } else {
-            "if not exist ..\\venv\\Scripts\\activate.bat (echo [ERROR] 未找到虚拟环境: ..\\venv\\Scripts\\activate.bat & pause & exit /b 1)\r\n\
+            "if not exist ..\\venv\\Scripts\\activate.bat (echo [ERROR] virtualenv was not found: ..\\venv\\Scripts\\activate.bat & pause & exit /b 1)\r\n\
              call ..\\venv\\Scripts\\activate.bat\r\n\
              python bot.py"
                 .to_string()
@@ -67,13 +74,30 @@ impl App {
                 logs_dir.display()
             ),
         )?;
-        let window_style = if attach { "Normal" } else { "Minimized" };
-        self.run_shell(&format!(
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/K','call',{}) -WorkingDirectory {} -WindowStyle {window_style} -PassThru; Set-Content -Encoding ASCII -Path {} -Value $p.Id; Write-Host ('MaiBot cmd PID: ' + $p.Id)\"",
-            ps_single_quote_path(&launcher_path),
-            ps_single_quote_path(&maibot_dir),
-            ps_single_quote_path(&pid_path)
-        ))
+        let mut command = if py_env == "uv" {
+            let mut command = Command::new("uv");
+            command.args(["run", "bot.py"]);
+            command
+        } else {
+            let root = maibot_dir.parent().unwrap_or(&maibot_dir);
+            let python = root.join("venv").join("Scripts").join("python.exe");
+            if !python.exists() {
+                bail!("未找到 Python 虚拟环境: {}", python.display());
+            }
+            let mut command = Command::new(python);
+            command.arg("bot.py");
+            command
+        };
+        let child = command
+            .current_dir(&maibot_dir)
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONUNBUFFERED", "1")
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .spawn()?;
+        fs::write(&pid_path, format!("{}\n", child.id()))?;
+        println!("MaiBot PID: {}", child.id());
+        Ok(())
     }
 
     pub(crate) fn stop_maibot_core(&self) -> Result<()> {
@@ -160,7 +184,7 @@ impl App {
     }
 
     pub(crate) fn stop_napcat(&self) -> Result<()> {
-        self.run_shell("taskkill /im node.exe /fi \"WINDOWTITLE eq NapCat*\" /t /f")
+        stop_process_tree_by_title_pattern("NapCat*")
     }
 
     pub(crate) fn restart_napcat(&self) -> Result<()> {
@@ -288,7 +312,7 @@ impl App {
         loop {
             self.clear();
             self.print_header(None);
-            self.print_section("MaiBot 核心", "Windows cmd 窗口启动、停止与日志查看");
+            self.print_section("MaiBot 核心", "Windows 独立控制台启动、PID 停止与日志查看");
             self.print_maibot_core_status()?;
             let choice = Select::with_theme(&self.theme)
                 .with_prompt("MaiBot 核心管理")
@@ -395,13 +419,12 @@ impl App {
 
 fn window_running(title: &str) -> Result<bool> {
     let title_pattern = ps_single_quote(&format!("{title}*"));
-    Ok(cmd_success_with_timeout(
+    powershell_success_with_timeout(
         &format!(
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Get-Process | Where-Object {{ $_.MainWindowTitle -like {title_pattern} }}) {{ exit 0 }} else {{ exit 1 }}\""
+            "if (Get-Process | Where-Object {{ $_.MainWindowTitle -like {title_pattern} }}) {{ exit 0 }} else {{ exit 1 }}"
         ),
         Duration::from_millis(800),
-    )?
-    .unwrap_or(false))
+    )
 }
 
 fn print_window_status(name: &str, title: &str) -> Result<()> {
@@ -415,30 +438,43 @@ fn print_window_status(name: &str, title: &str) -> Result<()> {
 
 fn stop_window_by_pid_or_title(pid_path: &Path, title: &str) -> Result<()> {
     if let Some(pid) = read_pid(pid_path)? {
-        let status = Command::new("cmd")
-            .args(["/C", &format!("taskkill /PID {pid} /T /F")])
-            .status()?;
-        if status.success() {
+        if maibot_pid_running(pid)? {
+            let pid = pid.to_string();
+            let status = Command::new("taskkill")
+                .args(["/PID", &pid, "/T", "/F"])
+                .status()?;
+            if status.success() {
+                let _ = fs::remove_file(pid_path);
+                return Ok(());
+            }
+        } else {
             let _ = fs::remove_file(pid_path);
-            return Ok(());
         }
     }
 
-    let title_pattern = ps_single_quote(&format!("{title}*"));
-    let status = Command::new("cmd")
-        .args([
-            "/C",
-            &format!(
-                "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$p = Get-Process | Where-Object {{ $_.MainWindowTitle -like {title_pattern} }}; if ($p) {{ $p | ForEach-Object {{ taskkill /PID $_.Id /T /F | Out-Null }}; exit 0 }} else {{ exit 1 }}\""
-            ),
-        ])
-        .status()?;
-    if status.success() {
+    if stop_process_tree_by_title_pattern(&format!("{title}*")).is_ok() {
         let _ = fs::remove_file(pid_path);
         return Ok(());
     }
+    bail!("未找到运行中的窗口: {title}")
+}
+
+fn stop_process_tree_by_title_pattern(title_pattern: &str) -> Result<()> {
+    let title_pattern = ps_single_quote(title_pattern);
+    let script = format!(
+        "$p = Get-Process | Where-Object {{ $_.MainWindowTitle -like {title_pattern} }}; if ($p) {{ $p | ForEach-Object {{ taskkill /PID $_.Id /T /F | Out-Null }}; exit 0 }} else {{ exit 1 }}"
+    );
+    let status = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .status()?;
     if !status.success() {
-        bail!("未找到运行中的窗口: {title}");
+        bail!("未找到匹配窗口: {}", title_pattern);
     }
     Ok(())
 }
@@ -447,15 +483,20 @@ fn pid_running(pid_path: &Path) -> Result<Option<bool>> {
     let Some(pid) = read_pid(pid_path)? else {
         return Ok(None);
     };
-    Ok(Some(
-        cmd_success_with_timeout(
-            &format!(
-                "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}\""
-            ),
-            Duration::from_millis(800),
-        )?
-        .unwrap_or(false),
-    ))
+    Ok(Some(maibot_pid_running(pid)?))
+}
+
+fn maibot_pid_running(pid: u32) -> Result<bool> {
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    Ok(stdout.contains("\"uv.exe\"")
+        || stdout.contains("\"python.exe\"")
+        || stdout.contains("\"cmd.exe\""))
 }
 
 fn read_pid(pid_path: &Path) -> Result<Option<u32>> {
@@ -483,17 +524,32 @@ fn ps_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn ps_single_quote_path(path: &Path) -> String {
-    ps_single_quote(&path.display().to_string())
-}
-
 fn cmd_success_with_timeout(command: &str, timeout: Duration) -> Result<Option<bool>> {
     Ok(cmd_output_with_timeout(command, timeout)?.map(|output| output.status.success()))
 }
 
-fn cmd_output_with_timeout(command: &str, timeout: Duration) -> Result<Option<Output>> {
-    let mut child = Command::new("cmd")
-        .args(["/C", command])
+fn cmd_output_with_timeout(command_text: &str, timeout: Duration) -> Result<Option<Output>> {
+    let mut command = Command::new("cmd");
+    command.args(["/C", command_text]);
+    command_output_with_timeout(&mut command, timeout)
+}
+
+fn powershell_success_with_timeout(script: &str, timeout: Duration) -> Result<bool> {
+    let mut command = Command::new("powershell");
+    command.args([
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+    ]);
+    Ok(command_output_with_timeout(&mut command, timeout)?
+        .map(|output| output.status.success())
+        .unwrap_or(false))
+}
+
+fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Result<Option<Output>> {
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
