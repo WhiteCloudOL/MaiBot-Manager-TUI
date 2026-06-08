@@ -1,6 +1,7 @@
 use crate::{
     app::App,
     model::{GitDirtyMode, InstallMode},
+    ui::ActionItem,
     utils::*,
 };
 use anyhow::{Context, Result, bail};
@@ -229,16 +230,19 @@ impl App {
             self.print_section("插件管理", "安装、卸载和补装 Python 依赖");
             self.print_kv("插件目录", &plugins_dir.display().to_string());
             let plugins = list_plugins(&plugins_dir)?;
+            self.print_kv("插件数量", &plugins.len().to_string());
             if plugins.is_empty() {
                 self.print_kv("已安装插件", "暂无");
             } else {
                 self.print_kv("已安装插件", &plugins.join(", "));
             }
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("插件管理")
-                .items(["安装插件", "卸载插件", "安装插件依赖", "返回"])
-                .default(0)
-                .interact()?;
+            let actions = [
+                ActionItem::primary("安装插件", "从 GitHub 仓库安装或更新插件"),
+                ActionItem::destructive("卸载插件", "删除选定插件目录"),
+                ActionItem::normal("修复依赖", "为选定插件安装 requirements"),
+                ActionItem::back("返回", "回到主菜单"),
+            ];
+            let choice = self.select_action("选择插件操作", &actions)?;
             let result = match choice {
                 0 => {
                     let input: String = Input::with_theme(&self.theme)

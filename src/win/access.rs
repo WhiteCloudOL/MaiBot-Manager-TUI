@@ -1,4 +1,4 @@
-use crate::{app::App, plugins::NAPCAT_ADAPTER_PLUGIN_ID, theme::AppTheme};
+use crate::{app::App, plugins::NAPCAT_ADAPTER_PLUGIN_ID, theme::AppTheme, ui::ActionItem};
 use anyhow::{Result, anyhow, bail};
 use dialoguer::{Confirm, Input, Select};
 use regex::Regex;
@@ -27,16 +27,14 @@ impl App {
         loop {
             self.clear();
             self.print_header(None);
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("配置与访问")
-                .items([
-                    "查看 WebUI 访问信息",
-                    "初始化 MaiBot 访问配置",
-                    "修改 Adapter 黑白名单配置",
-                    "返回",
-                ])
-                .default(0)
-                .interact()?;
+            self.print_section("配置与访问", "集中维护 WebUI 入口、密钥和 Adapter 策略");
+            let actions = [
+                ActionItem::primary("查看访问信息", "汇总 MaiBot / NapCat / LLBot WebUI"),
+                ActionItem::normal("初始化访问配置", "绑定 0.0.0.0 并启用 Adapter"),
+                ActionItem::normal("黑白名单策略", "维护群聊、私聊和黑名单规则"),
+                ActionItem::back("返回", "回到主菜单"),
+            ];
+            let choice = self.select_action("选择访问操作", &actions)?;
             let result = match choice {
                 0 => self.show_access_info(),
                 1 => self.initialize_maibot_access_config(),

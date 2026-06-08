@@ -1,8 +1,9 @@
 use anyhow::{Error, Result, anyhow};
-use dialoguer::{Select, console::style};
+use dialoguer::console::style;
 use std::path::PathBuf;
 
 use crate::theme::AppTheme;
+use crate::ui::{ActionItem, StatusCard};
 
 pub(crate) struct App {
     pub(crate) theme: AppTheme,
@@ -31,18 +32,14 @@ impl App {
             self.print_runtime_status();
             self.print_home_banner();
             let items = [
-                "安装 / 更新 MaiBot",
-                "管理 MaiBot 核心",
-                "管理 Bot 协议端服务",
-                "配置与访问",
-                "插件管理",
-                "退出",
+                ActionItem::primary("部署与更新", "安装、更新或调整 MaiBot 工作区"),
+                ActionItem::normal("核心服务", "管理独立控制台和 PID 停止"),
+                ActionItem::normal("协议端服务", "管理 NapCat Shell / LLBot Desktop"),
+                ActionItem::normal("访问配置", "查看 WebUI 地址、密钥和白名单"),
+                ActionItem::normal("插件中心", "安装、卸载和修复插件依赖"),
+                ActionItem::back("退出管理器", "已启动窗口保持当前状态"),
             ];
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("主菜单")
-                .items(items)
-                .default(0)
-                .interact()?;
+            let choice = self.select_action("选择工作区", &items)?;
             let result = match choice {
                 0 => self.install_update_flow(),
                 1 => self.manage_maibot_menu(),
@@ -85,46 +82,43 @@ impl App {
         let cfg = match self.load_config() {
             Ok(cfg) if !cfg.mai_path.is_empty() => cfg,
             _ => {
-                self.print_hint("未检测到安装，进入「安装 / 更新 MaiBot」开始部署");
-                self.print_line();
+                self.print_empty_state(
+                    "未检测到 MaiBot 工作区",
+                    "从「部署与更新」开始，完成后这里会显示服务健康状态。",
+                );
                 return;
             }
         };
-        self.print_section("运行状态", "");
         let maibot_running = self.maibot_core_running().unwrap_or(false);
         let llbot_running = self.llbot_running().unwrap_or(false);
         let napcat_running = self.napcat_running().unwrap_or(false);
-        self.print_status_dot(
-            "MaiBot",
-            if maibot_running {
-                "运行中 (Windows 独立控制台)"
+        let mut cards = Vec::new();
+        cards.push(if maibot_running {
+            StatusCard::running("MaiBot", "独立 Windows 控制台 · PID 文件可停止进程树")
+        } else {
+            StatusCard::stopped("MaiBot", "核心控制台未运行")
+        });
+        cards.push(if PathBuf::from(&cfg.mai_path).join("NapCat").exists() {
+            if napcat_running {
+                StatusCard::running("NapCatQQ", "NapCat Shell 窗口/进程已运行")
             } else {
-                "未运行"
-            },
-            maibot_running,
-        );
-        if PathBuf::from(&cfg.mai_path).join("NapCat").exists() {
-            self.print_status_dot(
-                "NapCat",
-                if napcat_running {
-                    "运行中 (NapCat Shell)"
-                } else {
-                    "未运行"
-                },
-                napcat_running,
-            );
-        }
-        if !cfg.mai_llbot_path.is_empty() || PathBuf::from(&cfg.mai_path).join("LLBot").exists() {
-            self.print_status_dot(
-                "LLBot",
+                StatusCard::stopped("NapCatQQ", "已安装，NapCat Shell 未运行")
+            }
+        } else {
+            StatusCard::neutral("NapCatQQ", "未安装", "可在部署计划中启用")
+        });
+        cards.push(
+            if !cfg.mai_llbot_path.is_empty() || PathBuf::from(&cfg.mai_path).join("LLBot").exists()
+            {
                 if llbot_running {
-                    "运行中 (LLBot Desktop)"
+                    StatusCard::running("LuckyLilliaBot", "Desktop 进程已运行")
                 } else {
-                    "未运行"
-                },
-                llbot_running,
-            );
-        }
-        self.print_line();
+                    StatusCard::stopped("LuckyLilliaBot", "已安装，Desktop 进程未运行")
+                }
+            } else {
+                StatusCard::neutral("LuckyLilliaBot", "未安装", "可在部署计划中启用")
+            },
+        );
+        self.print_status_cards("服务概览", &cards);
     }
 }

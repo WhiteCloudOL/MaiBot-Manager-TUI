@@ -105,9 +105,7 @@ impl App {
     }
 
     pub(crate) fn run_shell(&self, command: &str) -> Result<()> {
-        use dialoguer::console::style;
-
-        println!("\n{} {}\n", style("▶").cyan().bold(), style(command).dim());
+        self.print_command_start(command);
         let mut script = String::from("@echo off\r\nsetlocal EnableExtensions\r\n");
         script.push_str(command);
         if !command.ends_with('\n') {

@@ -103,8 +103,7 @@ impl App {
     }
 
     pub(crate) fn run_shell(&self, command: &str) -> Result<()> {
-        use dialoguer::console::style;
-        println!("\n{} {}\n", style("▶").cyan().bold(), style(command).dim());
+        self.print_command_start(command);
         let status = Command::new("bash")
             .arg("-lc")
             .arg(command)

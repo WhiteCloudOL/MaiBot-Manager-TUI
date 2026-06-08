@@ -1,3 +1,4 @@
+use dialoguer::console::{Style, style};
 use dialoguer::theme::{ColorfulTheme, Theme};
 use std::fmt;
 
@@ -10,7 +11,26 @@ pub(crate) struct AppTheme {
 impl AppTheme {
     pub(crate) fn new() -> Self {
         Self {
-            inner: ColorfulTheme::default(),
+            inner: ColorfulTheme {
+                prompt_style: Style::new().for_stderr().cyan().bold(),
+                prompt_prefix: style("◆".to_string()).for_stderr().cyan().bold(),
+                prompt_suffix: style("›".to_string()).for_stderr().blue().bright(),
+                success_prefix: style("✓".to_string()).for_stderr().green().bold(),
+                success_suffix: style("·".to_string()).for_stderr().black().bright(),
+                error_prefix: style("×".to_string()).for_stderr().red().bold(),
+                error_style: Style::new().for_stderr().red().bold(),
+                hint_style: Style::new().for_stderr().black().bright(),
+                values_style: Style::new().for_stderr().green().bold(),
+                active_item_style: Style::new().for_stderr().cyan().bold(),
+                inactive_item_style: Style::new().for_stderr().white(),
+                active_item_prefix: style("▸".to_string()).for_stderr().cyan().bold(),
+                inactive_item_prefix: style(" ".to_string()).for_stderr(),
+                checked_item_prefix: style("●".to_string()).for_stderr().green(),
+                unchecked_item_prefix: style("○".to_string()).for_stderr().black().bright(),
+                picked_item_prefix: style("▸".to_string()).for_stderr().cyan().bold(),
+                unpicked_item_prefix: style(" ".to_string()).for_stderr(),
+                ..ColorfulTheme::default()
+            },
         }
     }
 }

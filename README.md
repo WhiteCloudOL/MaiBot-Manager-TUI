@@ -20,10 +20,10 @@
 ## 🌟 功能概览
 
 * **支持 CLI / TUI**：支持使用 `maibot` 或 `maibot tui` 进入 TUI 界面；也支持附加参数执行 CLI 命令，便于 AGENT 使用 MaiBot 管理程序。
-* **主菜单概览**：进入主菜单即可看到当前平台已支持服务的运行状态。
+* **控制台式 TUI**：首页提供工作区摘要、服务状态卡片和带说明的动作菜单，不需要在脚本式菜单里猜操作含义。
 * **安装向导**：单页式安装计划，方向键展开 / 折叠选项，所见即所得。
 * **Github 优选**：GitHub 官方线路与镜像源并行测速，自动选择最佳线路；全部失败时提供重试 / 直连 / 取消的回退选择。
-* **MaiBot 管理**：Linux 使用 `screen` 后台会话；Windows 使用独立进程 / 窗口启动；macOS 直接在当前 TUI / CLI 中创建子进程并显示日志。
+* **MaiBot 管理**：Linux 使用 `screen` 后台会话；Windows 使用独立进程 / 窗口启动；macOS 使用后台子进程，退出管理器后核心仍继续运行。首次启动需要确认 EULA 时，TUI 会提供交互终端选项，10 秒未选择则默认后台启动。
 * **LLBot / Napcat 安装**：Linux 使用 LLBot CLI + NapCat Docker；Windows 使用 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限；macOS 协议端暂未适配。
 * **依赖自检**：Linux 自动检测包管理器并补装基础工具；Windows 缺少 Git / uv / Python 时会优先下载便携工具到 MaiBot 安装目录；macOS 缺少 Homebrew 时会调用官方脚本安装，并通过 Homebrew 补齐 Git / uv / Python。
 * **配置访问**：集中查看当前平台已支持的 WebUI 地址与密钥；初始化访问配置带二次确认。
@@ -74,7 +74,7 @@ irm https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/main/scrip
 
 ### macOS
 
-macOS 版目前支持 MaiBot 核心安装 / 更新、前台子进程运行、访问配置与插件管理；NapCat / LLBot 协议端暂未适配，安装计划默认不安装协议端。
+macOS 版目前支持 MaiBot 核心安装 / 更新、后台子进程运行、访问配置与插件管理；NapCat / LLBot 协议端暂未适配，安装计划默认不安装协议端。
 
 ```bash
 # 国内安装
@@ -86,7 +86,7 @@ curl -fsSL https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/mai
 maibot install --protocol none
 ```
 
-> macOS 安装 MaiBot 时会优先使用本机原生命令；缺少 Homebrew 时会调用 Homebrew 官方安装脚本，缺少 Git / uv / Python 时会通过 Homebrew 补齐。启动核心时，管理器会直接创建子进程并把输出同步显示到当前终端与 `logs/maibot.log`。
+> macOS 安装 MaiBot 时会优先使用本机原生命令；缺少 Homebrew 时会调用 Homebrew 官方安装脚本，缺少 Git / uv / Python 时会通过 Homebrew 补齐。启动核心时，管理器默认创建后台子进程，退出管理器后 MaiBot 仍会继续运行；首次启动 / EULA 可选择打开交互 Terminal，输出写入 `logs/maibot.log`。
 
 ---
 
@@ -100,13 +100,13 @@ maibot install --protocol none
 │   ├── linux/        # Linux 专属安装、服务、访问、插件与命令执行
 │   ├── macos/        # macOS 专属安装、服务、访问、插件与命令执行
 │   ├── win/          # Windows 专属安装、服务、访问、插件与 BAT 执行
-│   ├── ui.rs         # 共享页眉、列宽对齐、提示与 prompt/raw mode 切换
+│   ├── ui.rs         # 共享页眉、状态卡片、动作菜单、提示与 prompt/raw mode 切换
 │   ├── model.rs      # 共享配置模型、安装计划、枚举与常量
 │   └── terminal.rs   # 终端 raw mode、光标恢复、Ctrl+C 清理
 ├── scripts/
 │   ├── install.sh    # Linux / macOS 一键安装脚本
 │   └── install.ps1   # Windows 一键安装脚本
-├── build-release.sh  # Linux / WSL 构建脚本
+├── build-release.sh  # Linux / WSL / macOS 构建脚本
 ├── build-release.ps1 # Windows 构建 exe，并调用 WSL 构建 Linux 产物
 └── output/           # 构建产物，默认被 .gitignore 忽略
 
@@ -197,9 +197,9 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ```
 
-默认会先在 Windows 本机尝试构建 `x86_64-pc-windows-msvc`，再调用 WSL Ubuntu 构建 Linux musl 双架构。可用 `-SkipWindows` 或 `-SkipLinux` 跳过其中一类产物。
+默认会先在 Windows 本机尝试构建 `x86_64-pc-windows-msvc`，再调用 WSL Ubuntu 构建 Linux musl 双架构。可用 `-SkipWindows` 或 `-SkipLinux` 跳过其中一类产物；macOS 产物需在 macOS 本机或 GitHub Actions 中构建。
 
-**在 Linux 或 WSL 内：**
+**在 Linux / WSL 或 macOS 本机：**
 
 ```bash
 chmod +x ./build-release.sh
@@ -207,27 +207,19 @@ chmod +x ./build-release.sh
 
 ```
 
-**在 macOS 本机：**
-
-```bash
-cargo build --release
-
-```
-
 构建完成后会在 `output/` 目录生成：
 
 ```text
+# Linux / WSL
 output/maibot-manager-linux-x86_64
 output/maibot-manager-linux-arm64
+
+# Windows build-release.ps1
 output/maibot-manager-windows-x86_64.exe
 
-```
-
-macOS 本机构建产物位于 `target/release/maibot-manager-tui`；GitHub Actions 会额外发布：
-
-```text
-maibot-manager-macos-x86_64
-maibot-manager-macos-arm64
+# macOS
+output/maibot-manager-macos-x86_64
+output/maibot-manager-macos-arm64
 
 ```
 
@@ -256,7 +248,7 @@ chmod +x ./maibot-manager-linux-arm64
 
 ```
 
-主菜单进入「安装 / 更新 MaiBot」后会进入单页安装计划：把光标停在配置项上按 `Enter` 展开选项，再次 `Enter` 应用所选。光标会留在你刚操作的位置，跨字段移动也不会跳。
+TUI 首页会先展示当前工作区和三端服务概览；每个入口都带有动作说明，危险操作会在菜单里单独标记。进入「部署与更新」后会进入单页安装计划：把光标停在配置项上按 `Enter` 展开选项，再次 `Enter` 应用所选。光标会留在你刚操作的位置，跨字段移动也不会跳。
 
 安装到 PATH 后，也可以直接执行 `maibot` 或 `maibot tui`。
 
@@ -347,8 +339,8 @@ maibot update --protocol llbot --llbot-update update \
 ### 2. MaiBot 核心管理
 
 ```bash
-maibot core start        # Linux: 后台 screen；Windows: 独立窗口；macOS: 当前终端子进程并显示日志
-maibot core start --exec # Linux: 启动后进入 screen；Windows/macOS: 等同于 start
+maibot core start        # Linux: 后台 screen；Windows: 独立窗口；macOS: 后台子进程
+maibot core start --exec # Linux: 启动后进入 screen；Windows: 等同于 start；macOS: 附加当前终端用于 EULA
 maibot core stop         # 停止 MaiBot 核心
 maibot core restart      # 重启 MaiBot 核心
 maibot core status       # 输出 running / stopped，适合脚本判断

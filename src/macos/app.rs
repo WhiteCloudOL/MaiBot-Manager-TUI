@@ -1,8 +1,9 @@
 use anyhow::{Error, Result, anyhow};
-use dialoguer::{Select, console::style};
+use dialoguer::console::style;
 use std::path::PathBuf;
 
 use crate::theme::AppTheme;
+use crate::ui::{ActionItem, StatusCard};
 use crate::utils::pid_running;
 
 pub(crate) struct App {
@@ -32,18 +33,14 @@ impl App {
             self.print_runtime_status();
             self.print_home_banner();
             let items = [
-                "安装 / 更新 MaiBot",
-                "管理 MaiBot 核心",
-                "管理 Bot 协议端服务",
-                "配置与访问",
-                "插件管理",
-                "退出",
+                ActionItem::primary("部署与更新", "安装、更新或调整 MaiBot 工作区"),
+                ActionItem::normal("核心服务", "管理后台子进程、日志和 PID 停止"),
+                ActionItem::normal("协议端服务", "查看 macOS 协议端适配状态"),
+                ActionItem::normal("访问配置", "查看 MaiBot WebUI 地址和密钥"),
+                ActionItem::normal("插件中心", "安装、卸载和修复插件依赖"),
+                ActionItem::back("退出管理器", "MaiBot 后台进程保持运行"),
             ];
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("主菜单")
-                .items(items)
-                .default(0)
-                .interact()?;
+            let choice = self.select_action("选择工作区", &items)?;
             let result = match choice {
                 0 => self.install_update_flow(),
                 1 => self.manage_maibot_menu(),
@@ -86,25 +83,34 @@ impl App {
         let cfg = match self.load_config() {
             Ok(cfg) if !cfg.mai_path.is_empty() => cfg,
             _ => {
-                self.print_hint("未检测到安装，进入「安装 / 更新 MaiBot」开始部署");
-                self.print_line();
+                self.print_empty_state(
+                    "未检测到 MaiBot 工作区",
+                    "从「部署与更新」开始，完成后这里会显示服务健康状态。",
+                );
                 return;
             }
         };
-        self.print_section("运行状态", "");
         let pid_path = PathBuf::from(&cfg.mai_path).join("logs").join("maibot.pid");
         let maibot_pid = pid_running(&pid_path).unwrap_or(None);
-        let maibot_running = maibot_pid.is_some();
-        self.print_status_dot(
-            "MaiBot",
-            &maibot_pid
-                .map(|pid| format!("运行中 (pid: {pid})"))
-                .unwrap_or_else(|| "未运行".into()),
-            maibot_running,
-        );
-        if !cfg.bot_protocols.is_empty() && cfg.bot_protocols != "none" {
-            self.print_hint("macOS 版暂未适配 NapCat / LLBot 协议端服务");
-        }
-        self.print_line();
+        let mut cards = Vec::new();
+        cards.push(if let Some(pid) = maibot_pid {
+            StatusCard::running(
+                "MaiBot",
+                format!("后台子进程 PID {pid} · 日志写入 logs/maibot.log"),
+            )
+        } else {
+            StatusCard::stopped("MaiBot", "核心后台进程未运行")
+        });
+        cards.push(StatusCard::warning(
+            "协议端服务",
+            "暂未适配",
+            "macOS 当前只管理 MaiBot 核心与插件；NapCat / LLBot 保留入口",
+        ));
+        cards.push(StatusCard::neutral(
+            "插件中心",
+            "可用",
+            "插件安装、卸载和依赖修复与核心工作区共用",
+        ));
+        self.print_status_cards("服务概览", &cards);
     }
 }

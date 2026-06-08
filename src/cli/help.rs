@@ -8,14 +8,14 @@ pub(crate) fn print_help() {
   core logs -f       每 2 秒刷新日志文件尾部
   core exec          Windows 下无法附着已打开控制台；请查看独立窗口或日志"#
     } else if cfg!(target_os = "macos") {
-        r#"  core start         在当前 TUI/CLI 中启动 MaiBot 子进程并实时显示日志
-  core start --exec  macOS 下等同于 start，保留参数兼容脚本
+        r#"  core start         在后台子进程中启动 MaiBot，并记录 logs/maibot.pid
+  core start --exec  附加当前终端启动，适合首次启动时确认 EULA
   core logs          读取安装目录 logs/maibot.log
   core logs -f       每 2 秒刷新日志文件尾部
   core exec          跟随 logs/maibot.log；macOS 不使用 screen 附着"#
     } else {
         r#"  core start         在 screen 会话 maibot 中后台启动 MaiBot
-  core start --exec  启动后立刻进入 screen 控制台，进入前会提示退出方式
+  core start --exec  启动后立刻进入 screen 控制台，底部显示快捷退出方式
   core logs          通过 screen hardcopy 读取日志缓冲，不会进入或抢占 screen
   core logs -f       每 2 秒刷新一次 hardcopy 输出
   core exec          执行 screen -r maibot，适合需要交互控制台时使用"#
@@ -51,7 +51,7 @@ pub(crate) fn print_help() {
         r#"macOS 提示:
   安装时若缺少 Homebrew，会调用 Homebrew 官方脚本安装；缺少 Git / uv / Python 时通过 Homebrew 补齐。
   当前 macOS 版只部署 MaiBot 核心与插件管理，NapCat / LLBot 协议端暂未适配。
-  MaiBot 核心由管理器直接创建子进程运行，日志会同时显示在当前终端并写入 logs/maibot.log。"#
+  MaiBot 核心默认由管理器创建后台子进程运行；首次启动/EULA 可用 --exec 附加当前终端。"#
     } else {
         r#"Screen 退出提示:
   进入 core exec 或 llbot exec 后，如需退出控制台但保持进程运行，请按 Ctrl+A，再按 D。"#

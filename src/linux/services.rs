@@ -1,7 +1,11 @@
-use crate::{app::App, utils::*};
+use crate::{
+    app::{App, napcat_running},
+    ui::{ActionItem, StatusCard},
+    utils::*,
+};
 use anyhow::{Result, bail};
 use dialoguer::console::style;
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, Input};
 use std::{fs, path::PathBuf};
 
 impl App {
@@ -24,6 +28,10 @@ impl App {
             "  退出请按 {}（分离会话，{}）",
             style("Ctrl + A  然后按 D").green().bold(),
             style("进程会继续在后台运行").green()
+        );
+        println!(
+            "  {}",
+            style("进入后底部状态栏会常驻显示快捷退出方式。").yellow()
         );
         println!(
             "  {}",
@@ -77,7 +85,13 @@ impl App {
 
     pub(crate) fn attach_screen(&self, session: &str) -> Result<()> {
         self.warn_before_screen_attach(session)?;
-        self.run_shell(&format!("screen -r {}", shell_escape_raw(session)))
+        let hint = "MaiBot Manager | 快捷退出: Ctrl+A 然后 D | Ctrl+C 会停止当前服务进程";
+        self.run_shell(&format!(
+            "screen -S {} -X hardstatus alwayslastline '{}' 2>/dev/null || true; screen -r {}",
+            shell_escape_raw(session),
+            shell_escape_raw(hint),
+            shell_escape_raw(session)
+        ))
     }
 
     pub(crate) fn print_screen_logs(&self, session: &str, tail: usize, follow: bool) -> Result<()> {
@@ -224,11 +238,13 @@ impl App {
         loop {
             self.clear();
             self.print_header(None);
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("Bot 协议端服务")
-                .items(["管理 NapCatQQ", "管理 LuckyLilliaBot", "返回"])
-                .default(0)
-                .interact()?;
+            self.print_section("协议端服务", "选择要维护的 Bot 协议端");
+            let actions = [
+                ActionItem::primary("NapCatQQ", "Docker Compose 协议端"),
+                ActionItem::normal("LuckyLilliaBot", "screen 托管的 CLI 协议端"),
+                ActionItem::back("返回", "回到主菜单"),
+            ];
+            let choice = self.select_action("选择协议端", &actions)?;
             let result = match choice {
                 0 => self.manage_napcat_menu(),
                 1 => self.manage_llbot_menu(),
@@ -249,23 +265,34 @@ impl App {
             self.print_section("MaiBot 核心", "管理主程序启动、停止与控制台进入");
             self.print_kv("目录", &maibot_dir.display().to_string());
             let running = screen_exists("maibot")?;
-            self.print_status_dot(
-                "运行状态",
-                if running { "运行中" } else { "未运行" },
-                running,
-            );
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("MaiBot 核心管理")
-                .items(["启动 MaiBot", "停止 MaiBot", "进入 Screen 控制台", "返回"])
-                .default(0)
-                .interact()?;
+            let cards = [if running {
+                StatusCard::running("MaiBot", "screen: maibot · 可分离控制台保持后台运行")
+            } else {
+                StatusCard::stopped("MaiBot", "screen 会话未启动")
+            }];
+            self.print_status_cards("核心状态", &cards);
+            let actions = [
+                ActionItem::primary("启动 MaiBot", "创建 screen: maibot 后台会话"),
+                ActionItem::destructive("停止 MaiBot", "结束 screen 会话和核心进程"),
+                ActionItem::normal("进入控制台", "screen -r maibot，使用 Ctrl+A D 分离"),
+                ActionItem::back("返回", "回到主菜单"),
+            ];
+            let choice = self.select_action("选择核心操作", &actions)?;
             let result = match choice {
                 0 => {
-                    let run_mode = Select::with_theme(&self.theme)
-                        .with_prompt("启动方式")
-                        .items(["正常后台启动", "启动并进入控制台（首次运行建议）"])
-                        .default(0)
-                        .interact()?;
+                    let modes = [
+                        ActionItem::primary("后台启动", "适合已完成 EULA，启动后立即返回管理器"),
+                        ActionItem::normal(
+                            "启动并进入终端",
+                            "首次启动/EULA，在 screen 中输入确认；Ctrl+A D 分离",
+                        ),
+                    ];
+                    let run_mode = self.select_action_timeout(
+                        "选择启动方式",
+                        &modes,
+                        0,
+                        std::time::Duration::from_secs(10),
+                    )?;
                     self.start_maibot_core(run_mode == 1)
                 }
                 1 => self.stop_maibot_core(),
@@ -287,20 +314,24 @@ impl App {
             self.print_header(None);
             self.print_section("NapCatQQ", "Docker 容器管理与日志查看");
             self.print_kv("目录", &napcat_dir.display().to_string());
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("NapCat 管理")
-                .items([
-                    "启动 NapCat",
-                    "停止 NapCat",
-                    "重启 NapCat",
-                    "查看实时日志",
-                    "重建容器",
-                    "移除现有 napcat 容器",
-                    "删除 NapCat 目录",
-                    "返回",
-                ])
-                .default(0)
-                .interact()?;
+            let running = napcat_running();
+            let cards = [if running {
+                StatusCard::running("NapCatQQ", "Docker 容器 napcat 正在运行")
+            } else {
+                StatusCard::stopped("NapCatQQ", "Docker 容器未运行")
+            }];
+            self.print_status_cards("服务状态", &cards);
+            let actions = [
+                ActionItem::primary("启动 NapCat", "docker compose up -d"),
+                ActionItem::destructive("停止 NapCat", "docker compose down"),
+                ActionItem::normal("重启 NapCat", "重新加载容器进程"),
+                ActionItem::normal("查看实时日志", "跟随 docker compose logs"),
+                ActionItem::normal("重建容器", "down + pull + up -d"),
+                ActionItem::destructive("移除容器", "删除现有 napcat 容器"),
+                ActionItem::destructive("删除目录", "删除 NapCat 工作目录及数据"),
+                ActionItem::back("返回", "回到协议端服务"),
+            ];
+            let choice = self.select_action("选择 NapCat 操作", &actions)?;
             let result = match choice {
                 0 => self.start_napcat(),
                 1 => self.stop_napcat(),
@@ -344,24 +375,22 @@ impl App {
             self.print_section("LuckyLilliaBot", "管理 CLI 协议端、密码和控制台");
             self.print_kv("目录", &llbot_dir.display().to_string());
             let running = screen_exists("llbot")?;
-            self.print_status_dot(
-                "运行状态",
-                if running { "运行中" } else { "未运行" },
-                running,
-            );
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("LuckyLilliaBot 管理")
-                .items([
-                    "启动 LuckyLilliaBot",
-                    "停止 LuckyLilliaBot",
-                    "重启 LuckyLilliaBot",
-                    "进入 Screen 控制台",
-                    "修改 WebUI 密码",
-                    "删除 LuckyLilliaBot 目录",
-                    "返回",
-                ])
-                .default(0)
-                .interact()?;
+            let cards = [if running {
+                StatusCard::running("LuckyLilliaBot", "screen: llbot · CLI 协议端运行中")
+            } else {
+                StatusCard::stopped("LuckyLilliaBot", "screen 会话未启动")
+            }];
+            self.print_status_cards("服务状态", &cards);
+            let actions = [
+                ActionItem::primary("启动 LLBot", "启动 screen: llbot 后台会话"),
+                ActionItem::destructive("停止 LLBot", "结束 screen 会话"),
+                ActionItem::normal("重启 LLBot", "重新拉起协议端进程"),
+                ActionItem::normal("进入控制台", "screen -r llbot，使用 Ctrl+A D 分离"),
+                ActionItem::normal("修改 WebUI 密码", "写入 webui_token.txt"),
+                ActionItem::destructive("删除目录", "删除 LuckyLilliaBot 工作目录及数据"),
+                ActionItem::back("返回", "回到协议端服务"),
+            ];
+            let choice = self.select_action("选择 LLBot 操作", &actions)?;
             let result = match choice {
                 0 => self.start_llbot(),
                 1 => self.stop_llbot(),

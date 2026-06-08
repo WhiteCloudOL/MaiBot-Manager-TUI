@@ -1,7 +1,7 @@
-use crate::app::App;
+use crate::{app::App, ui::ActionItem};
 use anyhow::{Result, bail};
+use dialoguer::Confirm;
 use dialoguer::console::style;
-use dialoguer::{Confirm, Select};
 use serde_json::Value;
 use std::{fs, path::PathBuf};
 use toml_edit::{DocumentMut, Item, value};
@@ -11,11 +11,13 @@ impl App {
         loop {
             self.clear();
             self.print_header(None);
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("配置与访问")
-                .items(["查看 WebUI 访问信息", "初始化 MaiBot 访问配置", "返回"])
-                .default(0)
-                .interact()?;
+            self.print_section("配置与访问", "维护 MaiBot WebUI 入口和访问密钥");
+            let actions = [
+                ActionItem::primary("查看访问信息", "显示 WebUI 地址和 token"),
+                ActionItem::normal("初始化访问配置", "将 WebUI 绑定到 0.0.0.0"),
+                ActionItem::back("返回", "回到主菜单"),
+            ];
+            let choice = self.select_action("选择访问操作", &actions)?;
             let result = match choice {
                 0 => self.show_access_info(),
                 1 => self.initialize_maibot_access_config(),

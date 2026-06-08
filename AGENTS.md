@@ -10,18 +10,19 @@ The binary supports Linux, Windows 10/11, and macOS. `main.rs` selects platform 
 # Quick check
 cargo check --target x86_64-unknown-linux-musl
 
-# Linux release build, both architectures (what build-release.sh does)
+# Linux release build, both architectures (what build-release.sh does on Linux/WSL)
 cargo build --release --target x86_64-unknown-linux-musl
 cargo build --release --target aarch64-unknown-linux-musl
 
 # Windows release build
 cargo build --release --target x86_64-pc-windows-msvc
 
-# macOS local release build
-cargo build --release
+# macOS local release build, both artifacts (what build-release.sh does on macOS)
+cargo build --release --target x86_64-apple-darwin
+cargo build --release --target aarch64-apple-darwin
 
 # Full local pipelines
-./build-release.sh                # inside Linux / WSL
+./build-release.sh                # inside Linux / WSL for Linux artifacts, or macOS for macOS artifacts
 .\build-release.ps1               # Windows host, builds Windows exe then Linux binaries via WSL
 ```
 
@@ -42,7 +43,7 @@ This is a single-binary TUI + CLI that orchestrates platform shell commands to i
 
 **Windows implementation.** Windows commands should prefer BAT/cmd syntax executed through `App::run_shell`, which writes a temporary `.bat` and invokes `cmd.exe /C`. Use PowerShell only when cmd has no good primitive, currently UAC elevation via `Start-Process -Verb RunAs`, log tailing, process-window fallbacks, and launching the MaiBot BAT wrapper with `Start-Process -PassThru` so the manager can record a PID. Do not use `winget` or install required tooling globally from the manager. If Git / uv / Python are missing, Windows install should prepare portable tooling under `<install>/tools` (`tools/git`, `tools/uv`, `tools/python`, `tools/uv-cache`) and prepend those paths only for manager-owned commands. MaiBot core writes `<install>/logs/start-maibot.bat`, opens it in an independent cmd window through PowerShell `Start-Process`, writes the returned cmd PID to `<install>/logs/maibot.pid`, and stops by `taskkill /PID <pid> /T /F`; do not reintroduce `Tee-Object` or direct child stdout inheritance because they broke PID tracking and UTF-8/colorama output. Windows NapCat must use GitHub API to fetch the latest `NapCat.Shell.zip` from `NapNeko/NapCatQQ`, not Docker. Windows LLBot must use GitHub API to fetch the latest `LLBot-Desktop-win-x64.zip` from `LLOneBot/LuckyLilliaBot`, not the CLI zip. Apply the selected GitHub proxy to both API URLs and release asset URLs.
 
-**macOS implementation.** macOS commands should use native shell commands through `/bin/zsh -lc` and Homebrew for dependency bootstrap. If Homebrew is missing, call the official Homebrew install script; if Git / uv / Python are missing, install them with `brew install` rather than portable Windows tooling or Linux package managers. Keep Homebrew path prefixes (`/opt/homebrew`, `/usr/local`) in manager-owned commands. macOS currently installs and manages MaiBot core only; NapCat and LLBot protocol endpoints are intentionally TODO and should return clear unsupported messages until implemented. macOS core start does not use `screen`: it creates a direct child process, streams stdout/stderr in the current TUI/CLI, appends the same output to `<install>/logs/maibot.log`, and records `<install>/logs/maibot.pid` for status/stop. `core exec` follows that log file rather than attaching to a terminal multiplexer. Do not add Docker, LinuxQQ, BAT/cmd, PowerShell, winget, apt/dnf/yum/pacman/zypper/apk, or `screen` process management logic to macOS modules.
+**macOS implementation.** macOS commands should use native shell commands through `/bin/zsh -lc` and Homebrew for dependency bootstrap. If Homebrew is missing, call the official Homebrew install script; if Git / uv / Python are missing, install them with `brew install` rather than portable Windows tooling or Linux package managers. Keep Homebrew path prefixes (`/opt/homebrew`, `/usr/local`) in manager-owned commands. macOS currently installs and manages MaiBot core only; NapCat and LLBot protocol endpoints are intentionally TODO and should return clear unsupported messages until implemented. macOS core start does not use `screen`: default start creates a background child process in its own process group, redirects stdout/stderr to `<install>/logs/maibot.log`, records `<install>/logs/maibot.pid` for status/stop, and returns immediately so MaiBot keeps running after the manager exits. TUI start must offer a timed launch-mode choice for first-run/EULA interaction; if the user does not choose within the timeout, default to background start. In TUI, the interactive option opens a Terminal.app launcher that writes the same pid/log files; in CLI, `core start --exec` attaches the current terminal for EULA. `core exec` follows the log file rather than attaching to a terminal multiplexer. Do not add Docker, LinuxQQ, BAT/cmd, PowerShell, winget, apt/dnf/yum/pacman/zypper/apk, or `screen` process management logic to macOS modules.
 
 **CLI contract.** CLI commands should reuse the same `App` action methods used by TUI menus rather than duplicating shell strings. `maibot install` / `maibot update` build an `InstallPlan` from existing config plus command-line overrides and then call `run_install`. CLI may ask for confirmation at risk points, but every install/update prompt that blocks scripting must have an explicit CLI strategy flag that bypasses the prompt: `--github-fallback`, `--git-dirty`, `--napcat-conflict`, `--llbot-update`. `maibot access init` prompts by default and `--yes` bypasses it. `maibot core|napcat|llbot ...` should remain script-friendly: status/log commands print and exit, while interactive commands (`core exec`, `llbot exec`, `napcat exec`) intentionally inherit stdio.
 
@@ -66,7 +67,7 @@ This is a single-binary TUI + CLI that orchestrates platform shell commands to i
 
 **GitHub speedtest.** `installer.rs::run_github_speedtest` fans out one thread per mirror, each running `curl -sL -o /dev/null -w '%{time_total}'`. If every mirror fails, interactive mode offers retry/direct/cancel; CLI can bypass that prompt with `--github-fallback direct` or `--github-fallback cancel`.
 
-**UI alignment.** CJK characters occupy 2 terminal columns, ASCII 1. Don't use `{key:>10}` style formatting — it counts chars, not columns, and produces ragged tables. Use `utils::{display_width, pad_left}` and the helpers in `ui.rs` (`print_kv`, `print_status_dot`, `print_section`, `print_line`).
+**UI alignment.** CJK characters occupy 2 terminal columns, ASCII 1. Don't use `{key:>10}` style formatting — it counts chars, not columns, and produces ragged tables. Use `utils::{display_width, pad_left}` and the helpers in `ui.rs` (`print_kv`, `print_status_cards`, `select_action`, `select_action_timeout`, `print_section`, `print_line`). New top-level TUI menus should use `ActionItem` with short labels plus concrete descriptions instead of plain string arrays. Service overview pages should use `StatusCard` so Linux, Windows, and macOS keep the same dashboard language while preserving platform-specific details. Interactive terminal attach flows must show an obvious shortcut hint near the bottom of the terminal view; Linux screen attach also sets a persistent hardstatus line with `Ctrl+A` then `D`.
 
 **Shell-string safety.** All paths interpolated into command strings go through `utils::shell_escape` / `shell_escape_raw` (single-quote escape). When extending shell commands, keep this contract — direct `format!("'{}'", path.display())` will break on apostrophes.
 
