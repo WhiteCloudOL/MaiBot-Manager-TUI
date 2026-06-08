@@ -66,7 +66,7 @@ impl App {
                  set PYTHONUNBUFFERED=1\r\n\
                  title {MAIBOT_TITLE}\r\n\
                  cd /d {}\r\n\
-                 echo MaiBot Manager launcher v2\r\n\
+                 echo MaiBot Manager\r\n\
                  echo Workdir: {}\r\n\
                  echo Manager logs: {}\r\n\
                  echo ------------------------------------------------------------\r\n\

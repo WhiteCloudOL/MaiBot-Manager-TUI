@@ -74,3 +74,53 @@ This is a single-binary TUI + CLI that orchestrates platform shell commands to i
 **Shell-string safety.** All paths interpolated into command strings go through `utils::shell_escape` / `shell_escape_raw` (single-quote escape). When extending shell commands, keep this contract — direct `format!("'{}'", path.display())` will break on apostrophes.
 
 **Side-effect surface area.** A few operations write outside the install dir and deserve extra care when modified: Docker daemon `/etc/docker/daemon.json` (`configure_docker_daemon`), LinuxQQ apt/pacman install (`install_linuxqq_for_llbot`), and writing `pip.conf` — which intentionally lives at `<venv>/pip.conf` (NOT `~/.pip/pip.conf`) to avoid polluting the user's global pip config.
+
+## Modern TUI roadmap
+
+The current direction for the desktop experience is a full modernization of the legacy retro TUI while keeping the existing CLI contract, platform shell-command behavior, and install/service logic intact.
+
+**Target experience.**
+
+- Replace the single vertical main menu with a top tab bar under the build-time header.
+- Use a wide-screen two-column workspace by default: navigation/cards on the left, detail/actions on the right.
+- Add a contextual bottom status bar: left side for global state messages, right side for panel-specific key hints.
+- Adopt a richer semantic theme inspired by modern TUIs (for example Gruvbox / Nord / Monokai families), with clear running/warning/error/info colors.
+- Introduce Nerd Font friendly icons for tabs, status chips, actions, and cards. Keep graceful text fallback behavior when icons render poorly.
+- Shorten copy throughout the TUI so titles, subtitles, labels, and body text form a clear visual hierarchy.
+
+**Information architecture.**
+
+- Tabs: `概览`, `部署与更新`, `核心服务管理`, `协议端服务`, `访问配置`, `插件中心`, `关于`.
+- `概览`: service cards on the left, selected service detail/log/actions on the right.
+- `部署与更新`: step rail on the left, editable choice/detail panel on the right, with contextual action buttons near the selected step.
+- `核心服务管理`: focused control dashboard with large status indicator plus action blocks navigated by `Tab`.
+- `协议端服务`: keep platform-specific behavior, but present NapCat / LLBot panels with the same shared layout language; unsupported macOS entries must stay explicit.
+- `访问配置`: compact info cards plus direct actions for init/copy/view style tasks where supported.
+- `插件中心`: searchable plugin cards on the left, manifest/details/actions on the right.
+- `关于`: build metadata, documentation links, runtime environment, and troubleshooting hints.
+
+**Implementation phases.**
+
+1. Introduce a shared modern TUI layout layer in `src/ui.rs`:
+   top tabs, panel frames, card rows, section headers, search field rendering, action chips, and bottom status bar.
+2. Add shared view-state models in `model.rs` for tabs, focus zones, filters, selected cards, contextual status text, and action groups.
+3. Refactor each platform `app.rs` main loop to drive the new tab shell instead of the legacy top-level `select_action` menu.
+4. Migrate overview/service/plugin/access pages to the new split-pane renderer while reusing existing action methods.
+5. Rebuild the install planner into the same visual system without changing its existing keyboard contract or risk-prompt behavior.
+6. Apply semantic theming and iconography consistently across Linux, Windows, and macOS, preserving unsupported-state messaging where features are intentionally TODO.
+7. Add subtle motion/polish only where it does not interfere with raw-mode input reliability or readability.
+
+**Non-negotiable constraints.**
+
+- Do not duplicate business logic: new TUI pages must call the same `App` action methods already used by CLI / current menus.
+- Keep platform isolation rules intact; shared code must not pull in non-current-platform modules.
+- Preserve `TerminalUiGuard`, `with_prompt_mode`, and prompt safety when mixing raw-mode panels with `dialoguer`.
+- Keep CJK-aware alignment via `display_width` and related helpers; new layout code must not assume ASCII-only widths.
+- Keep unsupported macOS NapCat / LLBot flows explicit instead of faking parity.
+- When Nerd Font icons are added, surrounding labels must remain understandable even if the terminal lacks glyph support.
+
+**Validation expectations.**
+
+- At minimum, run `cargo check` for the active host target after meaningful TUI refactors.
+- Manually sanity-check raw-mode navigation paths for tabs, split panes, install planner, and service action focus.
+- Treat readability regressions in narrow terminals as bugs even though the optimized target is a modern wide terminal.

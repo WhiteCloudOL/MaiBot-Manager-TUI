@@ -6,15 +6,17 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use crossterm::{
-    cursor::{Hide, RestorePosition, SavePosition, Show},
-    event::{Event, KeyCode, KeyModifiers, poll, read},
-    execute,
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+    cursor::{Hide, MoveTo, Show},
+    event::{Event, KeyCode, KeyEventKind, KeyModifiers, poll, read},
+    execute, queue,
+    style::Print,
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
 };
 use dialoguer::Input;
 use dialoguer::console::style;
 use std::{
     io::{self, Write},
+    sync::atomic::{AtomicU16, Ordering},
     time::{Duration, Instant},
 };
 
@@ -22,9 +24,17 @@ const PANEL_WIDTH: usize = 78;
 const KEY_WIDTH: usize = 14;
 
 macro_rules! wln {
-    () => { print!("\r\n") };
-    ($($arg:tt)*) => { print!("{}\r\n", format_args!($($arg)*)) };
+    () => {{
+        print!("\r\n");
+        record_printed_line();
+    }};
+    ($($arg:tt)*) => {{
+        print!("{}\r\n", format_args!($($arg)*));
+        record_printed_line();
+    }};
 }
+
+static PRINTED_ROWS: AtomicU16 = AtomicU16::new(0);
 
 #[derive(Clone, Copy)]
 pub(crate) enum ActionKind {
@@ -147,12 +157,12 @@ impl StatusCard {
 impl App {
     pub(crate) fn print_header(&self, plan: Option<&InstallPlan>) {
         let rule = "━".repeat(PANEL_WIDTH);
-        wln!("{}", style(&rule).blue());
+        wln!("{}", style(&rule).cyan().bright().bold());
         print_centered_line(&format!("{}  v{}", APP_HEADER_TITLE, APP_VERSION), true);
         print_centered_line(APP_HEADER_SUBTITLE, false);
         print_centered_line(APP_HEADER_CREDIT, false);
         print_centered_line(APP_HEADER_DOCS, false);
-        wln!("{}", style(&rule).blue());
+        wln!("{}", style(&rule).cyan().bright().bold());
 
         if let Some(plan) = plan {
             self.print_section("部署计划", "执行前请确认路径、分支和镜像策略");
@@ -192,25 +202,21 @@ impl App {
             self.print_kv("协议端", &protocol);
             self.print_kv("Docker", plan.docker_mirror.label());
             self.print_line();
-        } else if let Ok(cfg) = self.load_config() {
-            if !cfg.mai_path.is_empty() {
-                self.print_section("工作区", "当前管理器配置");
-                self.print_kv("安装目录", &cfg.mai_path);
-                self.print_kv("Python", &cfg.mai_python_env);
-                self.print_line();
-            }
         }
     }
 
     pub(crate) fn clear(&self) {
         print!("\x1B[2J\x1B[1;1H");
+        reset_printed_rows();
         let _ = io::stdout().flush();
     }
 
     pub(crate) fn print_home_banner(&self) {
         wln!(
             "  {}",
-            style("↑/↓ 选择 · Enter 执行 · Esc 返回 · Ctrl+C 中断当前系统步骤").dim()
+            style("↑/↓ 选择 · Enter 执行 · Esc 返回 · Ctrl+C 中断当前系统步骤")
+                .yellow()
+                .bright()
         );
         self.print_line();
     }
@@ -219,11 +225,11 @@ impl App {
         wln!();
         wln!(
             "  {} {}",
-            style("▌").cyan().bold(),
-            style(title).cyan().bold()
+            style("▌").green().bright().bold(),
+            style(title).cyan().bright().bold()
         );
         if !subtitle.is_empty() {
-            wln!("    {}", style(subtitle).dim());
+            wln!("    {}", style(subtitle).white().bright());
         }
         self.print_line();
     }
@@ -231,62 +237,77 @@ impl App {
     pub(crate) fn print_kv(&self, key: &str, value: &str) {
         wln!(
             "  {} {}",
-            style(pad_left(key, KEY_WIDTH)).blue(),
-            style(value).white()
+            style(pad_left(key, KEY_WIDTH)).magenta().bright().bold(),
+            style(value).white().bright()
         );
     }
 
     pub(crate) fn print_line(&self) {
-        wln!("  {}", style("─".repeat(PANEL_WIDTH - 4)).dim());
+        wln!("  {}", style("─".repeat(PANEL_WIDTH - 4)).blue().bright());
     }
 
     pub(crate) fn print_hint(&self, msg: &str) {
-        wln!("  {}", style(msg).dim());
+        wln!("  {}", style(msg).yellow().bright());
     }
 
     pub(crate) fn print_empty_state(&self, title: &str, detail: &str) {
-        wln!("  {}", style("╭─ 当前状态").blue().dim());
+        wln!("  {}", style("╭─ 当前状态").cyan().bright().bold());
         wln!(
             "  {} {}",
-            style("│").blue().dim(),
-            style(title).white().bold()
+            style("│").cyan().bright(),
+            style(title).yellow().bright().bold()
         );
-        wln!("  {} {}", style("│").blue().dim(), style(detail).dim());
+        wln!(
+            "  {} {}",
+            style("│").cyan().bright(),
+            style(detail).white().bright()
+        );
         wln!(
             "  {}",
             style("╰────────────────────────────────────────────────────────")
-                .blue()
-                .dim()
+                .cyan()
+                .bright()
         );
     }
 
     pub(crate) fn print_status_cards(&self, title: &str, cards: &[StatusCard]) {
-        self.print_section(title, "");
+        wln!(
+            "  {} {}",
+            style("▌").green().bright().bold(),
+            style(title).cyan().bright().bold()
+        );
+        self.print_line();
         for card in cards {
             let marker = match card.kind {
-                StatusKind::Running => style("●").green().bold(),
-                StatusKind::Stopped => style("●").red().dim(),
-                StatusKind::Warning => style("●").yellow().bold(),
-                StatusKind::Neutral => style("●").blue().dim(),
+                StatusKind::Running => style("●").green().bright().bold(),
+                StatusKind::Stopped => style("●").red().bright().bold(),
+                StatusKind::Warning => style("●").yellow().bright().bold(),
+                StatusKind::Neutral => style("●").magenta().bright().bold(),
             };
             let state = match card.kind {
-                StatusKind::Running => style(&card.state).green().bold(),
-                StatusKind::Stopped => style(&card.state).dim(),
-                StatusKind::Warning => style(&card.state).yellow().bold(),
-                StatusKind::Neutral => style(&card.state).blue().dim(),
+                StatusKind::Running => style(&card.state).green().bright().bold(),
+                StatusKind::Stopped => style(&card.state).red().bright(),
+                StatusKind::Warning => style(&card.state).yellow().bright().bold(),
+                StatusKind::Neutral => style(&card.state).magenta().bright(),
+            };
+            let detail = if card.detail.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "  {} {}",
+                    style("·").cyan().bright(),
+                    style(truncate_display(&card.detail, PANEL_WIDTH - 34))
+                        .white()
+                        .bright()
+                )
             };
             wln!(
-                "  {}  {}  {}",
+                "  {}  {}  {}{}",
                 marker,
-                style(pad_right(&card.title, 18)).white().bold(),
-                state
+                style(pad_right(&card.title, 18)).white().bright().bold(),
+                state,
+                detail
             );
-            if !card.detail.is_empty() {
-                wln!(
-                    "      {}",
-                    style(truncate_display(&card.detail, PANEL_WIDTH - 10)).dim()
-                );
-            }
         }
         self.print_line();
     }
@@ -325,15 +346,12 @@ impl App {
         let mut stdout = io::stdout();
         execute!(stdout, Hide).context("隐藏终端光标失败")?;
         let _guard = ActionMenuGuard;
-        execute!(stdout, SavePosition).context("保存动作菜单光标位置失败")?;
+        stdout.flush().context("刷新动作菜单前置内容失败")?;
+        let menu_origin = (0, printed_rows());
+        let mut last_drawn_rows = 0_usize;
+        let mut last_start_row = menu_origin.1;
 
         loop {
-            execute!(
-                io::stdout(),
-                RestorePosition,
-                Clear(ClearType::FromCursorDown)
-            )
-            .context("刷新动作菜单失败")?;
             let timeout_hint = timeout.map(|(default, duration)| {
                 let elapsed = started.elapsed();
                 let remaining = duration.saturating_sub(elapsed);
@@ -344,20 +362,28 @@ impl App {
                         .saturating_add(if remaining.subsec_millis() > 0 { 1 } else { 0 }),
                 )
             });
-            draw_action_menu(prompt, actions, selected, timeout_hint);
-            io::stdout().flush()?;
+            let draw_state = draw_action_menu(
+                &mut stdout,
+                menu_origin,
+                last_start_row,
+                last_drawn_rows,
+                prompt,
+                actions,
+                selected,
+                timeout_hint,
+            )?;
+            last_start_row = draw_state.start_row;
+            last_drawn_rows = draw_state.rows;
+            stdout.flush()?;
 
             let event = if let Some((default, duration)) = timeout {
                 let remaining = duration.saturating_sub(started.elapsed());
                 if remaining.is_zero() || !poll(remaining).context("等待动作菜单按键失败")?
                 {
-                    execute!(
-                        io::stdout(),
-                        RestorePosition,
-                        Clear(ClearType::FromCursorDown)
-                    )
-                    .context("清理动作菜单失败")?;
-                    io::stdout().flush()?;
+                    clear_action_menu(&mut stdout, last_start_row, last_drawn_rows)
+                        .context("清理动作菜单失败")?;
+                    set_printed_rows(menu_origin.1);
+                    stdout.flush()?;
                     return Ok(default);
                 }
                 read().context("读取动作菜单按键失败")?
@@ -366,7 +392,7 @@ impl App {
             };
 
             match event {
-                Event::Key(key) => match key.code {
+                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         restore_terminal_state();
                         println!("\r\n操作已被用户中断 (Ctrl+C)");
@@ -383,27 +409,22 @@ impl App {
                         selected = (selected + 1) % actions.len();
                     }
                     KeyCode::Enter => {
-                        execute!(
-                            io::stdout(),
-                            RestorePosition,
-                            Clear(ClearType::FromCursorDown)
-                        )
-                        .context("清理动作菜单失败")?;
-                        io::stdout().flush()?;
+                        clear_action_menu(&mut stdout, last_start_row, last_drawn_rows)
+                            .context("清理动作菜单失败")?;
+                        set_printed_rows(menu_origin.1);
+                        stdout.flush()?;
                         return Ok(selected);
                     }
                     KeyCode::Esc => {
-                        execute!(
-                            io::stdout(),
-                            RestorePosition,
-                            Clear(ClearType::FromCursorDown)
-                        )
-                        .context("清理动作菜单失败")?;
-                        io::stdout().flush()?;
+                        clear_action_menu(&mut stdout, last_start_row, last_drawn_rows)
+                            .context("清理动作菜单失败")?;
+                        set_printed_rows(menu_origin.1);
+                        stdout.flush()?;
                         return Ok(back_index);
                     }
                     _ => {}
                 },
+                Event::Key(_) => {}
                 Event::Resize(_, _) => {}
                 _ => {}
             }
@@ -414,12 +435,14 @@ impl App {
         wln!();
         wln!(
             "  {} {}",
-            style("RUN").cyan().bold(),
-            style("正在执行系统步骤").white().bold()
+            style("RUN").green().bright().bold(),
+            style("正在执行系统步骤").yellow().bright().bold()
         );
         wln!(
             "  {}",
-            style(truncate_display(command, PANEL_WIDTH - 4)).dim()
+            style(truncate_display(command, PANEL_WIDTH - 4))
+                .white()
+                .bright()
         );
         self.print_line();
     }
@@ -457,49 +480,141 @@ impl Drop for ActionMenuGuard {
     }
 }
 
+struct ActionMenuDrawState {
+    start_row: u16,
+    rows: usize,
+}
+
+fn record_printed_line() {
+    PRINTED_ROWS
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |rows| {
+            Some(rows.saturating_add(1))
+        })
+        .ok();
+}
+
+fn reset_printed_rows() {
+    PRINTED_ROWS.store(0, Ordering::Relaxed);
+}
+
+fn set_printed_rows(rows: u16) {
+    PRINTED_ROWS.store(rows, Ordering::Relaxed);
+}
+
+fn printed_rows() -> u16 {
+    PRINTED_ROWS.load(Ordering::Relaxed)
+}
+
 fn draw_action_menu(
+    stdout: &mut io::Stdout,
+    origin: (u16, u16),
+    previous_start_row: u16,
+    last_drawn_rows: usize,
     prompt: &str,
     actions: &[ActionItem<'_>],
     selected: usize,
     timeout_hint: Option<(usize, u64)>,
-) {
-    wln!();
-    wln!(
+) -> Result<ActionMenuDrawState> {
+    let (term_width, term_height) = size().unwrap_or((80, 24));
+    let term_height = term_height.max(1);
+    let term_width = term_width.max(20);
+    let max_width = usize::from(term_width).min(PANEL_WIDTH);
+    let content_width = max_width.saturating_sub(4).max(10);
+    let detail_width = max_width.saturating_sub(30).max(8);
+    let mut lines = Vec::with_capacity(actions.len() + 4);
+
+    lines.push(String::new());
+    lines.push(format!(
         "  {} {}",
-        style("▌").cyan().bold(),
-        style(prompt).cyan().bold()
-    );
-    wln!("  {}", style("─".repeat(PANEL_WIDTH - 4)).dim());
+        style("▌").green().bright().bold(),
+        style(truncate_display(prompt, content_width))
+            .cyan()
+            .bright()
+            .bold()
+    ));
+    lines.push(format!(
+        "  {}",
+        style("─".repeat(content_width)).blue().bright()
+    ));
     for (index, action) in actions.iter().enumerate() {
         let active = index == selected;
         let cursor = if active { "▸" } else { " " };
         let title = format!("{} {}", action.marker(), pad_right(action.label, 16));
-        let detail = truncate_display(action.detail, PANEL_WIDTH - 30);
+        let detail = truncate_display(action.detail, detail_width);
         if active {
-            wln!(
+            lines.push(format!(
                 "  {} {} {}",
-                style(cursor).cyan().bold(),
-                style(&title).cyan().bold(),
-                style(detail).white()
-            );
+                style(cursor).green().bright().bold(),
+                style(&title).yellow().bright().bold(),
+                style(detail).white().bright().bold()
+            ));
         } else {
-            wln!(
+            lines.push(format!(
                 "  {} {} {}",
-                style(cursor).dim(),
-                style(&title).white(),
-                style(detail).dim()
-            );
+                style(cursor).blue().bright(),
+                style(&title).cyan().bright(),
+                style(detail).white().bright()
+            ));
         }
     }
     let footer = if let Some((default, remaining)) = timeout_hint {
         format!(
-            "左下角提示  ↑/↓ 或 j/k 移动  Enter 执行  Esc 返回  ·  {remaining}s 后默认：{}",
+            "↑/↓ 或 j/k 移动  Enter 执行  Esc 返回  ·  {remaining}s 后默认：{}",
             actions[default].label
         )
     } else {
-        "左下角提示  ↑/↓ 或 j/k 移动  Enter 执行  Esc 返回".to_string()
+        "↑/↓ 或 j/k 移动  Enter 执行  Esc 返回".to_string()
     };
-    wln!("  {}", style(footer).blue().dim());
+    lines.push(format!(
+        "  {}",
+        style(truncate_display(&footer, content_width))
+            .blue()
+            .bright()
+            .bold()
+    ));
+
+    let rows_needed = lines.len().max(last_drawn_rows).max(1);
+    let available_from_origin = usize::from(term_height.saturating_sub(origin.1));
+    let start_row = if rows_needed <= available_from_origin {
+        origin.1
+    } else {
+        term_height.saturating_sub(rows_needed as u16)
+    };
+    let clear_rows = rows_needed.min(usize::from(term_height));
+    let clear_start_row = previous_start_row.min(start_row);
+    let clear_end_row = previous_start_row
+        .saturating_add(last_drawn_rows as u16)
+        .max(start_row.saturating_add(clear_rows as u16))
+        .min(term_height);
+    for row in clear_start_row..clear_end_row {
+        queue!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
+            .context("清理动作菜单行失败")?;
+    }
+    let printable_rows = lines.len().min(usize::from(term_height));
+    for (row, line) in lines.iter().take(printable_rows).enumerate() {
+        queue!(
+            stdout,
+            MoveTo(0, start_row.saturating_add(row as u16)),
+            Print(line)
+        )
+        .context("绘制动作菜单行失败")?;
+    }
+    Ok(ActionMenuDrawState {
+        start_row,
+        rows: lines.len(),
+    })
+}
+
+fn clear_action_menu(stdout: &mut io::Stdout, start_row: u16, rows: usize) -> Result<()> {
+    let (_, term_height) = size().unwrap_or((80, 24));
+    let clear_end_row = start_row
+        .saturating_add(rows as u16)
+        .min(term_height.max(1));
+    for row in start_row..clear_end_row {
+        queue!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
+            .context("清理动作菜单行失败")?;
+    }
+    Ok(())
 }
 
 fn print_centered_line(text: &str, primary: bool) {
@@ -507,9 +622,9 @@ fn print_centered_line(text: &str, primary: bool) {
     let width = display_width(&text);
     let left = (PANEL_WIDTH.saturating_sub(width)) / 2;
     let text = if primary {
-        style(text).cyan().bold()
+        style(text).cyan().bright().bold()
     } else {
-        style(text).dim()
+        style(text).white().bright()
     };
     wln!("{}{}", " ".repeat(left), text);
 }

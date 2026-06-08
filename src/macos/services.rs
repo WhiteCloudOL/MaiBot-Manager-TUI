@@ -171,7 +171,7 @@ cat <<'MAIBOT_MANAGER_HINT'
 │ 返回管理器：直接切回原 MaiBot Manager 窗口即可。│
 │ 退出终端：Ctrl+C 或关闭窗口，会停止当前进程。   │
 │ 后台运行：完成 EULA 后，回管理器选择后台启动。  │
-╰─ 左下角提示：管理器未被占用，可直接切回原窗口 ─╯
+╰─ 管理器未被占用，可直接切回原窗口继续操作 ─╯
 
 MAIBOT_MANAGER_HINT
 ({run}) 2>&1 | tee -a '{log}'
@@ -240,7 +240,7 @@ exit "$status"
              printf '│ 首次启动 / EULA：请在此终端中按提示输入确认。   │\\n'; \
              printf '│ 快捷退出：Ctrl+C 会停止当前 MaiBot 进程。       │\\n'; \
              printf '│ 后台运行：完成 EULA 后重新执行后台启动。        │\\n'; \
-             printf '╰─ 左下角提示：当前为交互模式，不是后台托管模式 ─╯\\n\\n'; \
+             printf '╰─ 当前为交互模式，不是后台托管模式 ─╯\\n\\n'; \
              ({run}) 2>&1 | tee -a '{log}'; \
              status=${{pipestatus[1]}}; \
              printf '\\n===== MaiBot exited with status: %s =====\\n' \"$status\" >> '{log}'; \
