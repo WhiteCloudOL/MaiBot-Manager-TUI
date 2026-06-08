@@ -25,7 +25,11 @@ impl App {
     pub(crate) fn print_header(&self, plan: Option<&InstallPlan>) {
         let rule = "━".repeat(PANEL_WIDTH);
         wln!("{}", style(&rule).blue());
-        let title = format!("MaiBot Manager TUI  v{}", APP_VERSION);
+        let title = format!(
+            "MaiBot Manager TUI  v{} · {}",
+            APP_VERSION,
+            platform_label()
+        );
         let subtitle = APP_BUILD_LABEL;
         let credit = "作者：清蒸云鸭 · LICENSE：AGPL-3.0";
         let docs = "文档站: https://docs.meowyun.cn/index.html";
@@ -96,7 +100,7 @@ impl App {
     pub(crate) fn print_home_banner(&self) {
         wln!(
             "  {}",
-            style("方向键移动 · Enter 确认 · Space 多选 · Ctrl+C 退出当前输入").dim()
+            style("↑/↓ 移动 · Enter 确认 · Esc 返回 · Ctrl+C 中断当前操作").dim()
         );
         self.print_line();
     }
@@ -164,5 +168,15 @@ impl App {
         let mut stdout = io::stdout();
         execute!(stdout, Hide).context("重新隐藏终端光标失败")?;
         result
+    }
+}
+
+fn platform_label() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else {
+        "Linux"
     }
 }

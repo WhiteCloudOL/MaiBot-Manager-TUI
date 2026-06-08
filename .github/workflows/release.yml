@@ -2,7 +2,7 @@ name: Build and Release
 
 on:
   push:
-    branches: [main, win]
+    branches: [main, dev]
     paths-ignore:
       - "README.md"
       - "CLAUDE.md"
@@ -36,6 +36,14 @@ jobs:
             target: x86_64-pc-windows-msvc
             output_name: maibot-manager-windows-x86_64.exe
             binary_path: target/x86_64-pc-windows-msvc/release/maibot-manager-tui.exe
+          - os: macos-13
+            target: x86_64-apple-darwin
+            output_name: maibot-manager-macos-x86_64
+            binary_path: target/x86_64-apple-darwin/release/maibot-manager-tui
+          - os: macos-14
+            target: aarch64-apple-darwin
+            output_name: maibot-manager-macos-arm64
+            binary_path: target/aarch64-apple-darwin/release/maibot-manager-tui
 
     steps:
       - uses: actions/checkout@v4
@@ -115,6 +123,8 @@ jobs:
           test -f dist/maibot-manager-linux-x86_64
           test -f dist/maibot-manager-linux-arm64
           test -f dist/maibot-manager-windows-x86_64.exe
+          test -f dist/maibot-manager-macos-x86_64
+          test -f dist/maibot-manager-macos-arm64
 
       - name: Build prerelease metadata
         id: meta
@@ -206,6 +216,8 @@ jobs:
             echo "- \`maibot-manager-linux-x86_64\`: Linux x86_64"
             echo "- \`maibot-manager-linux-arm64\`: Linux aarch64"
             echo "- \`maibot-manager-windows-x86_64.exe\`: Windows 10/11 x86_64"
+            echo "- \`maibot-manager-macos-x86_64\`: macOS x86_64"
+            echo "- \`maibot-manager-macos-arm64\`: macOS Apple Silicon"
           } > dist/release-notes.md
 
       - name: Create or update release
@@ -215,7 +227,13 @@ jobs:
           TAG="${{ steps.meta.outputs.tag }}"
           TITLE="${{ steps.meta.outputs.title }}"
 
-          ASSETS=(dist/maibot-manager-linux-x86_64 dist/maibot-manager-linux-arm64 dist/maibot-manager-windows-x86_64.exe)
+          ASSETS=(
+            dist/maibot-manager-linux-x86_64
+            dist/maibot-manager-linux-arm64
+            dist/maibot-manager-windows-x86_64.exe
+            dist/maibot-manager-macos-x86_64
+            dist/maibot-manager-macos-arm64
+          )
 
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release edit "${TAG}" \

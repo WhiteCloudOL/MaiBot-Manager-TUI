@@ -55,13 +55,16 @@ require_cmd() {
 }
 
 detect_asset() {
-    local arch
+    local system arch
+    system="$(uname -s)"
     arch="$(uname -m)"
-    case "$arch" in
-        x86_64|amd64)   echo "maibot-manager-linux-x86_64" ;;
-        aarch64|arm64)  echo "maibot-manager-linux-arm64"  ;;
+    case "${system}:${arch}" in
+        Linux:x86_64|Linux:amd64)    echo "maibot-manager-linux-x86_64" ;;
+        Linux:aarch64|Linux:arm64)   echo "maibot-manager-linux-arm64"  ;;
+        Darwin:x86_64|Darwin:amd64)  echo "maibot-manager-macos-x86_64" ;;
+        Darwin:aarch64|Darwin:arm64) echo "maibot-manager-macos-arm64"  ;;
         *)
-            err "当前架构暂不支持: $arch"
+            err "当前系统 / 架构暂不支持: ${system}/${arch}"
             exit 1
             ;;
     esac
@@ -219,6 +222,32 @@ download() {
     fi
 }
 
+validate_download() {
+    local path="$1" system="$2"
+    if ! command -v file >/dev/null 2>&1; then
+        warn "未找到 file 命令，跳过二进制格式校验"
+        return
+    fi
+    local desc
+    desc="$(file -b "$path" 2>/dev/null || true)"
+    case "$system" in
+        Linux)
+            if ! printf '%s' "$desc" | grep -q 'ELF'; then
+                err "下载文件不是有效的 Linux 可执行文件（可能是 HTML 错误页）"
+                head -c 200 "$path" >&2 || true
+                exit 1
+            fi
+            ;;
+        Darwin)
+            if ! printf '%s' "$desc" | grep -q 'Mach-O'; then
+                err "下载文件不是有效的 macOS 可执行文件（可能是 HTML 错误页）"
+                head -c 200 "$path" >&2 || true
+                exit 1
+            fi
+            ;;
+    esac
+}
+
 # 把 PATH 写入 rc 文件（幂等，按整行匹配跳过）
 add_line_idempotent() {
     local rcfile="$1" line="$2"
@@ -273,8 +302,10 @@ setup_path() {
 main() {
     require_cmd curl uname grep sed mkdir mv chmod mktemp
 
-    if [ "$(uname -s)" != "Linux" ]; then
-        err "仅支持 Linux（当前: $(uname -s)）。Windows 请在 WSL 中运行。"
+    local system
+    system="$(uname -s)"
+    if [ "$system" != "Linux" ] && [ "$system" != "Darwin" ]; then
+        err "仅支持 Linux 与 macOS（当前: $system）。Windows 请使用 scripts/install.ps1。"
         exit 1
     fi
 
@@ -323,11 +354,7 @@ main() {
         fi
     fi
 
-    if ! head -c 4 "$tmpfile" | grep -q $'\x7fELF'; then
-        err "下载文件不是有效的 Linux 可执行文件（可能是 HTML 错误页）"
-        head -c 200 "$tmpfile" >&2 || true
-        exit 1
-    fi
+    validate_download "$tmpfile" "$system"
 
     mkdir -p "$INSTALL_DIR"
     local dst="${INSTALL_DIR}/${BINARY_NAME}"

@@ -1,4 +1,4 @@
-#![cfg_attr(target_os = "windows", allow(dead_code))]
+#![cfg_attr(any(target_os = "windows", target_os = "macos"), allow(dead_code))]
 
 mod cli;
 mod model;
@@ -50,6 +50,28 @@ mod services;
 #[path = "win/utils.rs"]
 mod utils;
 
+#[cfg(target_os = "macos")]
+#[path = "macos/access.rs"]
+mod access;
+#[cfg(target_os = "macos")]
+#[path = "macos/app.rs"]
+mod app;
+#[cfg(target_os = "macos")]
+#[path = "macos/installer.rs"]
+mod installer;
+#[cfg(target_os = "macos")]
+#[path = "macos/plugins.rs"]
+mod plugins;
+#[cfg(target_os = "macos")]
+#[path = "macos/runtime.rs"]
+mod runtime;
+#[cfg(target_os = "macos")]
+#[path = "macos/services.rs"]
+mod services;
+#[cfg(target_os = "macos")]
+#[path = "macos/utils.rs"]
+mod utils;
+
 use anyhow::{Result, bail};
 use app::App;
 use terminal::{install_terminal_cleanup_handler, restore_terminal_state};
@@ -80,8 +102,8 @@ fn main() -> Result<()> {
 }
 
 fn ensure_supported_platform() -> Result<()> {
-    if !matches!(std::env::consts::OS, "linux" | "windows") {
-        bail!("该程序仅支持 Linux 与 Windows 10/11 环境。");
+    if !matches!(std::env::consts::OS, "linux" | "windows" | "macos") {
+        bail!("该程序仅支持 Linux、Windows 10/11 与 macOS 环境。");
     }
     Ok(())
 }

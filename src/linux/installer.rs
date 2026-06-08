@@ -241,6 +241,29 @@ impl App {
                     KeyCode::End => {
                         target = entries.last().cloned();
                     }
+                    KeyCode::Left => {
+                        if let Some(field) = entries.get(selected).and_then(|entry| entry.field()) {
+                            expanded = None;
+                            target = Some(PlannerEntry::Field(field));
+                        }
+                    }
+                    KeyCode::Right => {
+                        if let Some(field) = entries.get(selected).and_then(|entry| entry.field()) {
+                            expanded = Some(field);
+                            target = Some(PlannerEntry::Field(field));
+                        }
+                    }
+                    KeyCode::Char(' ') => match entries.get(selected).cloned() {
+                        Some(PlannerEntry::Choice(field, choice_idx)) => {
+                            self.apply_planner_choice(current, plan, field, choice_idx)?;
+                            target = Some(PlannerEntry::Choice(field, choice_idx));
+                        }
+                        Some(PlannerEntry::Field(field)) if field != PlanField::InstallPath => {
+                            expanded = Some(field);
+                            target = Some(PlannerEntry::Field(field));
+                        }
+                        _ => {}
+                    },
                     KeyCode::Enter => match entries.get(selected).cloned() {
                         Some(PlannerEntry::Field(field)) => {
                             if field == PlanField::InstallPath {
@@ -491,7 +514,10 @@ impl App {
         selected: usize,
         expanded: Option<PlanField>,
     ) {
-        self.print_section("安装计划", "↑/↓ 移动 · Enter 展开/收起 · Esc 返回");
+        self.print_section(
+            "安装计划",
+            "↑/↓ 移动 · ←/→ 展开收起 · Enter/Space 应用 · Esc 返回",
+        );
         let mut printed_actions = false;
         for (idx, entry) in entries.iter().enumerate() {
             let active = idx == selected;

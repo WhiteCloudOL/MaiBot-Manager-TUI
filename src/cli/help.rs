@@ -7,6 +7,12 @@ pub(crate) fn print_help() {
   core logs          读取安装目录 logs/maibot.log，若上游未写入则提示不存在
   core logs -f       每 2 秒刷新日志文件尾部
   core exec          Windows 下无法附着已打开控制台；请查看独立窗口或日志"#
+    } else if cfg!(target_os = "macos") {
+        r#"  core start         在当前 TUI/CLI 中启动 MaiBot 子进程并实时显示日志
+  core start --exec  macOS 下等同于 start，保留参数兼容脚本
+  core logs          读取安装目录 logs/maibot.log
+  core logs -f       每 2 秒刷新日志文件尾部
+  core exec          跟随 logs/maibot.log；macOS 不使用 screen 附着"#
     } else {
         r#"  core start         在 screen 会话 maibot 中后台启动 MaiBot
   core start --exec  启动后立刻进入 screen 控制台，进入前会提示退出方式
@@ -22,6 +28,10 @@ pub(crate) fn print_help() {
   llbot logs         读取 LLBot 目录下的 llbot.log
   llbot exec         Windows 下无法附着 Desktop 窗口；请查看已打开窗口
   protocol           也可作为聚合入口，例如 maibot protocol napcat restart"#
+    } else if cfg!(target_os = "macos") {
+        r#"  napcat             macOS 暂未适配 NapCat 协议端，相关命令会提示 TODO
+  llbot              macOS 暂未适配 LuckyLilliaBot 协议端，相关命令会提示 TODO
+  protocol           聚合入口保留，后续接入 macOS 原生协议端管理"#
     } else {
         r#"  napcat             管理 NapCat Docker Compose
   napcat logs        使用 docker compose logs
@@ -37,14 +47,44 @@ pub(crate) fn print_help() {
   MaiBot 会在独立控制台窗口中运行，停止命令会优先读取 logs/maibot.pid 并结束完整进程树。
   安装时若缺少 Git / uv / Python，会优先在安装目录 tools 下准备便携工具链；
   uv 的缓存和托管 Python 也会固定在安装目录内，避免写到随机用户目录。"#
+    } else if cfg!(target_os = "macos") {
+        r#"macOS 提示:
+  安装时若缺少 Homebrew，会调用 Homebrew 官方脚本安装；缺少 Git / uv / Python 时通过 Homebrew 补齐。
+  当前 macOS 版只部署 MaiBot 核心与插件管理，NapCat / LLBot 协议端暂未适配。
+  MaiBot 核心由管理器直接创建子进程运行，日志会同时显示在当前终端并写入 logs/maibot.log。"#
     } else {
         r#"Screen 退出提示:
   进入 core exec 或 llbot exec 后，如需退出控制台但保持进程运行，请按 Ctrl+A，再按 D。"#
     };
+    let install_examples = if cfg!(target_os = "macos") {
+        r#"  maibot install --path ~/maimai --python uv --protocol none
+  maibot update --branch main --github auto --protocol none
+  maibot update --git-dirty stash --protocol none"#
+    } else {
+        r#"  maibot install --path ~/maimai --python uv --protocol napcat
+  maibot update --branch main --github auto
+  maibot update --protocol llbot --llbot-update update
+  maibot update --git-dirty stash --napcat-conflict recreate"#
+    };
+    let default_note = if cfg!(target_os = "macos") {
+        "推荐默认值为当前用户 HOME 下的 maimai 目录、uv Python 环境，并暂不安装 NapCat / LLBot 协议端。"
+    } else {
+        "推荐默认值为当前用户 HOME 下的 maimai 目录、uv Python 环境和 NapCatQQ 协议端。"
+    };
+    let access_init_note = if cfg!(target_os = "macos") {
+        "将 MaiBot WebUI 绑定到 0.0.0.0；默认会询问确认"
+    } else {
+        "将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter；默认会询问确认"
+    };
+    let access_show_note = if cfg!(target_os = "macos") {
+        "显示 MaiBot WebUI 地址和密钥"
+    } else {
+        "显示 MaiBot、NapCat、LLBot 的 WebUI 地址和密钥/密码"
+    };
     println!(
         r#"MaiBot Manager {APP_VERSION}
 
-这是 MaiBot 的 Linux / Windows 部署与运维工具。
+这是 MaiBot 的 Linux / Windows / macOS 部署与运维工具。
 不加参数时进入交互式 TUI；带参数时直接执行对应 CLI 命令，适合脚本、SSH 快速操作和日常维护。
 
 用法:
@@ -53,10 +93,7 @@ pub(crate) fn print_help() {
   maibot help | -h | --help      查看帮助
 
 常用示例:
-  maibot install --path ~/maimai --python uv --protocol napcat
-  maibot update --branch main --github auto
-  maibot update --protocol llbot --llbot-update update
-  maibot update --git-dirty stash --napcat-conflict recreate
+{install_examples}
   maibot core restart
   maibot core logs --tail 200
   maibot core exec
@@ -73,7 +110,7 @@ pub(crate) fn print_help() {
   install 和 update 使用同一套安装计划。未指定的选项会优先读取 ~/.maibot_config，
   没有配置时使用推荐默认值。CLI 允许必要的交互确认；如果用于脚本或 Agent，
   可通过下面的策略参数跳过对应询问并直接选择处理方式。
-  推荐默认值为当前用户 HOME 下的 maimai 目录、uv Python 环境和 NapCatQQ 协议端。
+  {default_note}
 
 安装选项:
   --path <目录>                  安装目录，默认读取配置或 ~/maimai
@@ -84,7 +121,7 @@ pub(crate) fn print_help() {
   --github <auto|direct|URL>     GitHub 线路
   --pip <system|aliyun|tencent|tsinghua|ustc|official|URL>
   --protocol <napcat|llbot|none> 协议端
-  --docker <one-ms|xuanyuan|official|keep>  Linux NapCat Docker 部署使用；Windows Shell 版会忽略
+  --docker <one-ms|xuanyuan|official|keep>  Linux NapCat Docker 部署使用；Windows/macOS 会忽略
   --github-fallback <direct|cancel>
   --git-dirty <stash|discard|cancel>
   --napcat-conflict <recreate|cancel>
@@ -98,8 +135,8 @@ pub(crate) fn print_help() {
   --github URL       使用自定义 GitHub 代理前缀
   --pip system       不写 pip.conf，使用系统默认 PyPI 配置
   --pip URL          使用自定义 PyPI 镜像；仅写入当前 venv，不污染全局 pip 配置
-  --protocol none    只部署 MaiBot 核心和 Adapter，不安装额外协议端
-  --docker keep      Linux 下不修改 /etc/docker/daemon.json；Windows 下 NapCat 不使用 Docker
+  --protocol none    只部署 MaiBot 核心，不安装额外协议端
+  --docker keep      Linux 下不修改 /etc/docker/daemon.json；Windows/macOS 下 NapCat 不使用 Docker
   --github-fallback direct
                     GitHub auto 测速全部失败时不再询问，改用官方直连继续
   --github-fallback cancel
@@ -163,8 +200,8 @@ MaiBot 核心:
   maibot access adapter ban-remove <QQ>
 
 说明:
-  access show        显示 MaiBot、NapCat、LLBot 的 WebUI 地址和密钥/密码
-  access init        将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter；默认会询问确认
+  access show        {access_show_note}
+  access init        {access_init_note}
   access init --yes  跳过确认，直接应用访问配置，适合脚本中使用
   adapter show       查看 Adapter 群聊、私聊、封禁 QQ 配置
   group-mode         设置群聊名单模式，取值 whitelist 或 blacklist

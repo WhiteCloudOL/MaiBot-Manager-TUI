@@ -152,6 +152,15 @@ pub enum PlannerEntry {
     Action(PlanAction),
 }
 
+impl PlannerEntry {
+    pub fn field(&self) -> Option<PlanField> {
+        match self {
+            Self::Field(field) | Self::Choice(field, _) => Some(*field),
+            Self::Action(_) => None,
+        }
+    }
+}
+
 impl InstallMode {
     pub fn label(self) -> &'static str {
         match self {
