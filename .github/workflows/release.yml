@@ -36,11 +36,11 @@ jobs:
             target: x86_64-pc-windows-msvc
             output_name: maibot-manager-windows-x86_64.exe
             binary_path: target/x86_64-pc-windows-msvc/release/maibot-manager-tui.exe
-          - os: macos-13
+          - os: macos-15
             target: x86_64-apple-darwin
             output_name: maibot-manager-macos-x86_64
             binary_path: target/x86_64-apple-darwin/release/maibot-manager-tui
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             output_name: maibot-manager-macos-arm64
             binary_path: target/aarch64-apple-darwin/release/maibot-manager-tui
