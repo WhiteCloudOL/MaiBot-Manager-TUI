@@ -1,12 +1,13 @@
 use crate::{
     app::App,
     model::*,
+    terminal::restore_terminal_state,
     utils::{display_width, pad_left},
 };
 use anyhow::{Context, Result};
 use crossterm::{
     cursor::{Hide, RestorePosition, SavePosition, Show},
-    event::{Event, KeyCode, poll, read},
+    event::{Event, KeyCode, KeyModifiers, poll, read},
     execute,
     terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
@@ -366,6 +367,11 @@ impl App {
 
             match event {
                 Event::Key(key) => match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        restore_terminal_state();
+                        println!("\r\n操作已被用户中断 (Ctrl+C)");
+                        std::process::exit(130);
+                    }
                     KeyCode::Up | KeyCode::Char('k') => {
                         selected = if selected == 0 {
                             actions.len() - 1

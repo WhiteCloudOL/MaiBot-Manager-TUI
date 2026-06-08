@@ -168,9 +168,10 @@ clear
 cat <<'MAIBOT_MANAGER_HINT'
 ╭──────────────── MaiBot 交互终端 ────────────────╮
 │ 首次启动 / EULA：请在此窗口中按提示输入确认。   │
-│ 快捷退出：Ctrl+C 会停止当前 MaiBot 进程。       │
+│ 返回管理器：直接切回原 MaiBot Manager 窗口即可。│
+│ 退出终端：Ctrl+C 或关闭窗口，会停止当前进程。   │
 │ 后台运行：完成 EULA 后，回管理器选择后台启动。  │
-╰─ 左下角提示：此窗口用于交互，关闭窗口会停止服务 ─╯
+╰─ 左下角提示：管理器未被占用，可直接切回原窗口 ─╯
 
 MAIBOT_MANAGER_HINT
 ({run}) 2>&1 | tee -a '{log}'
@@ -178,9 +179,8 @@ status=${{pipestatus[1]}}
 printf '\n===== MaiBot exited with status: %s =====\n' "$status" >> '{log}'
 rm -f '{pid}'
 echo
-echo "MaiBot 已退出，状态: $status"
-echo "按任意键关闭此窗口..."
-read -k 1
+echo "MaiBot 已退出，状态: $status，窗口即将关闭..."
+sleep 1
 exit "$status"
 "#,
             workdir = shell_escape(maibot_dir),
@@ -190,7 +190,7 @@ exit "$status"
         );
         fs::write(&launcher_path, script)
             .with_context(|| format!("写入 macOS 交互启动脚本失败: {}", launcher_path.display()))?;
-        let terminal_command = format!("/bin/zsh '{}'", shell_escape(&launcher_path));
+        let terminal_command = format!("/bin/zsh '{}'; exit 0", shell_escape(&launcher_path));
         let osa = format!(
             "tell application \"Terminal\" to do script \"{}\"",
             applescript_escape(&terminal_command)
@@ -212,6 +212,11 @@ exit "$status"
         println!(
             "  {}",
             style("首次启动/EULA 请在新 Terminal 窗口完成；管理器可继续使用。").dim()
+        );
+        println!(
+            "  {}",
+            style("返回管理器：切回原 MaiBot Manager 窗口；退出交互终端：Ctrl+C 或关闭窗口。")
+                .dim()
         );
         println!("  {}", style(log_path.display().to_string()).dim());
         println!();
