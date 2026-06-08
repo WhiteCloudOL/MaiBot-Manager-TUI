@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 pub const APP_VERSION: &str = env!("APP_VERSION");
-pub const APP_BUILD_LABEL: &str = env!("APP_BUILD_LABEL");
+pub const APP_HEADER_TITLE: &str = env!("APP_HEADER_TITLE");
+pub const APP_HEADER_SUBTITLE: &str = env!("APP_HEADER_SUBTITLE");
+pub const APP_HEADER_CREDIT: &str = env!("APP_HEADER_CREDIT");
+pub const APP_HEADER_DOCS: &str = env!("APP_HEADER_DOCS");
 pub const TEST_FILE_PATH: &str = env!("APP_GITHUB_TEST_PATH");
 pub const DOCKER_ONELINER: &str = env!("APP_DOCKER_ONELINER");
 

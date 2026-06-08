@@ -19,6 +19,27 @@ fn main() {
         .and_then(|v| v.as_str())
         .unwrap_or("Rust · MaiBot管理面板")
         .to_string();
+    let header_title = doc
+        .get("header_title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("MaiBot Manager TUI")
+        .to_string();
+    let header_subtitle = doc
+        .get("header_subtitle")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or(&build_label)
+        .to_string();
+    let header_credit = doc
+        .get("header_credit")
+        .and_then(|v| v.as_str())
+        .unwrap_or("作者：清蒸云鸭 · LICENSE：AGPL-3.0")
+        .to_string();
+    let header_docs = doc
+        .get("header_docs")
+        .and_then(|v| v.as_str())
+        .unwrap_or("文档站: https://docs.meowyun.cn/index.html")
+        .to_string();
     let github_test_path = doc
         .get("github_test_path")
         .and_then(|v| v.as_str())
@@ -45,6 +66,10 @@ fn main() {
 
     println!("cargo:rustc-env=APP_VERSION={}", version);
     println!("cargo:rustc-env=APP_BUILD_LABEL={}", build_label);
+    println!("cargo:rustc-env=APP_HEADER_TITLE={}", header_title);
+    println!("cargo:rustc-env=APP_HEADER_SUBTITLE={}", header_subtitle);
+    println!("cargo:rustc-env=APP_HEADER_CREDIT={}", header_credit);
+    println!("cargo:rustc-env=APP_HEADER_DOCS={}", header_docs);
     println!("cargo:rustc-env=APP_GITHUB_TEST_PATH={}", github_test_path);
     println!("cargo:rustc-env=APP_DOCKER_ONELINER={}", docker_oneliner);
     println!("cargo:rustc-env=APP_GITHUB_MIRRORS={}", mirrors_joined);

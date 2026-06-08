@@ -5,10 +5,10 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use crossterm::{
-    cursor::{Hide, Show},
+    cursor::{Hide, RestorePosition, SavePosition, Show},
     event::{Event, KeyCode, poll, read},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
 use dialoguer::Input;
 use dialoguer::console::style;
@@ -145,22 +145,13 @@ impl StatusCard {
 
 impl App {
     pub(crate) fn print_header(&self, plan: Option<&InstallPlan>) {
-        let top = format!("╭{}╮", "─".repeat(PANEL_WIDTH - 2));
-        let mid = format!("├{}┤", "─".repeat(PANEL_WIDTH - 2));
-        let bottom = format!("╰{}╯", "─".repeat(PANEL_WIDTH - 2));
-        wln!("{}", style(&top).blue().dim());
-        print_centered_box_line("MaiBot Manager", true);
-        print_centered_box_line(
-            &format!("TUI v{} · {} 运维控制台", APP_VERSION, platform_label()),
-            false,
-        );
-        if !APP_BUILD_LABEL.is_empty() {
-            print_centered_box_line(APP_BUILD_LABEL, false);
-        }
-        print_centered_box_line("docs.meowyun.cn · AGPL-3.0", false);
-        wln!("{}", style(&mid).blue().dim());
-        print_box_line("部署、服务、访问与插件集中管理");
-        wln!("{}", style(&bottom).blue().dim());
+        let rule = "━".repeat(PANEL_WIDTH);
+        wln!("{}", style(&rule).blue());
+        print_centered_line(&format!("{}  v{}", APP_HEADER_TITLE, APP_VERSION), true);
+        print_centered_line(APP_HEADER_SUBTITLE, false);
+        print_centered_line(APP_HEADER_CREDIT, false);
+        print_centered_line(APP_HEADER_DOCS, false);
+        wln!("{}", style(&rule).blue());
 
         if let Some(plan) = plan {
             self.print_section("部署计划", "执行前请确认路径、分支和镜像策略");
@@ -333,10 +324,15 @@ impl App {
         let mut stdout = io::stdout();
         execute!(stdout, Hide).context("隐藏终端光标失败")?;
         let _guard = ActionMenuGuard;
-        print!("\x1B[s");
+        execute!(stdout, SavePosition).context("保存动作菜单光标位置失败")?;
 
         loop {
-            print!("\x1B[u\x1B[J");
+            execute!(
+                io::stdout(),
+                RestorePosition,
+                Clear(ClearType::FromCursorDown)
+            )
+            .context("刷新动作菜单失败")?;
             let timeout_hint = timeout.map(|(default, duration)| {
                 let elapsed = started.elapsed();
                 let remaining = duration.saturating_sub(elapsed);
@@ -354,7 +350,12 @@ impl App {
                 let remaining = duration.saturating_sub(started.elapsed());
                 if remaining.is_zero() || !poll(remaining).context("等待动作菜单按键失败")?
                 {
-                    print!("\x1B[u\x1B[J");
+                    execute!(
+                        io::stdout(),
+                        RestorePosition,
+                        Clear(ClearType::FromCursorDown)
+                    )
+                    .context("清理动作菜单失败")?;
                     io::stdout().flush()?;
                     return Ok(default);
                 }
@@ -376,12 +377,22 @@ impl App {
                         selected = (selected + 1) % actions.len();
                     }
                     KeyCode::Enter => {
-                        print!("\x1B[u\x1B[J");
+                        execute!(
+                            io::stdout(),
+                            RestorePosition,
+                            Clear(ClearType::FromCursorDown)
+                        )
+                        .context("清理动作菜单失败")?;
                         io::stdout().flush()?;
                         return Ok(selected);
                     }
                     KeyCode::Esc => {
-                        print!("\x1B[u\x1B[J");
+                        execute!(
+                            io::stdout(),
+                            RestorePosition,
+                            Clear(ClearType::FromCursorDown)
+                        )
+                        .context("清理动作菜单失败")?;
                         io::stdout().flush()?;
                         return Ok(back_index);
                     }
@@ -456,29 +467,24 @@ fn draw_action_menu(
     for (index, action) in actions.iter().enumerate() {
         let active = index == selected;
         let cursor = if active { "▸" } else { " " };
-        let title = format!("{} {}", action.marker(), action.label);
+        let title = format!("{} {}", action.marker(), pad_right(action.label, 16));
+        let detail = truncate_display(action.detail, PANEL_WIDTH - 30);
         if active {
             wln!(
-                "  {} {}",
+                "  {} {} {}",
                 style(cursor).cyan().bold(),
-                style(&title).cyan().bold()
-            );
-            wln!(
-                "    {}",
-                style(truncate_display(action.detail, PANEL_WIDTH - 8)).white()
+                style(&title).cyan().bold(),
+                style(detail).white()
             );
         } else {
-            wln!("  {} {}", style(cursor).dim(), style(&title).white());
             wln!(
-                "    {}",
-                style(truncate_display(action.detail, PANEL_WIDTH - 8)).dim()
+                "  {} {} {}",
+                style(cursor).dim(),
+                style(&title).white(),
+                style(detail).dim()
             );
         }
-        if index + 1 < actions.len() {
-            wln!();
-        }
     }
-    wln!();
     let footer = if let Some((default, remaining)) = timeout_hint {
         format!(
             "左下角提示  ↑/↓ 或 j/k 移动  Enter 执行  Esc 返回  ·  {remaining}s 后默认：{}",
@@ -490,39 +496,16 @@ fn draw_action_menu(
     wln!("  {}", style(footer).blue().dim());
 }
 
-fn print_centered_box_line(text: &str, primary: bool) {
-    let inner_width = PANEL_WIDTH - 2;
-    let text = truncate_display(text, inner_width);
+fn print_centered_line(text: &str, primary: bool) {
+    let text = truncate_display(text, PANEL_WIDTH);
     let width = display_width(&text);
-    let left = (inner_width.saturating_sub(width)) / 2;
-    let right = inner_width.saturating_sub(width + left);
+    let left = (PANEL_WIDTH.saturating_sub(width)) / 2;
     let text = if primary {
         style(text).cyan().bold()
     } else {
-        style(text).blue().dim()
+        style(text).dim()
     };
-    wln!(
-        "{}{}{}{}{}",
-        style("│").blue().dim(),
-        " ".repeat(left),
-        text,
-        " ".repeat(right),
-        style("│").blue().dim()
-    );
-}
-
-fn print_box_line(text: &str) {
-    let inner_width = PANEL_WIDTH - 2;
-    let text = truncate_display(text, inner_width.saturating_sub(4));
-    let width = display_width(&text);
-    let right = inner_width.saturating_sub(width + 1);
-    wln!(
-        "{} {}{}{}",
-        style("│").blue().dim(),
-        style(text).white(),
-        " ".repeat(right),
-        style("│").blue().dim()
-    );
+    wln!("{}{}", " ".repeat(left), text);
 }
 
 fn pad_right(input: &str, width: usize) -> String {
@@ -559,14 +542,4 @@ fn truncate_display(input: &str, max_width: usize) -> String {
     }
     out.push('…');
     out
-}
-
-fn platform_label() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "Windows"
-    } else if cfg!(target_os = "macos") {
-        "macOS"
-    } else {
-        "Linux"
-    }
 }

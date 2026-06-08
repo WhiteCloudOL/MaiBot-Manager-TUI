@@ -4,7 +4,13 @@
 # 程序版本号（同时会同步到 Cargo.toml 的 [package].version 时由人工保持一致）
 version = "0.3.0"
 
-# 标题栏副标题，留空则使用默认 "Rust · MaiBot管理面板"
+# 标头显示内容，修改后会被烘焙进二进制。
+header_title = "MaiBot Manager TUI"
+header_subtitle = "Rust · MaiBot管理面板"
+header_credit = "作者：清蒸云鸭 · LICENSE：AGPL-3.0"
+header_docs = "文档站: https://docs.meowyun.cn/index.html"
+
+# 兼容旧字段：header_subtitle 为空时使用 build_label
 build_label = "Rust · MaiBot管理面板"
 
 # 测速时使用的目标文件，用于评估各镜像的真实下载延迟

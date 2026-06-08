@@ -55,6 +55,8 @@ This is a single-binary TUI + CLI that orchestrates platform shell commands to i
 
 **Help text.** `src/cli/help.rs` must use `model::APP_VERSION` instead of hardcoding versions. `APP_VERSION` comes from `app.toml` through `build.rs`.
 
+**Build-time branding.** TUI header text is build-time branding from `app.toml` through `build.rs`: `header_title`, `header_subtitle`, `header_credit`, and `header_docs`. Keep `build_label` only as the legacy fallback for an empty `header_subtitle`; do not hardcode these header lines in `ui.rs`.
+
 **Config.** `~/.maibot_config` is a shell-style `KEY="value"` file (NOT TOML), read/written by `runtime.rs::{load_config,save_config}`. `require_config()` is the gate every management menu uses to refuse to run before installation.
 
 **Install planner.** `installer.rs::install_planner` is a hand-rolled TUI list (crossterm raw mode) — not a `dialoguer::Select`. Cursor position is tracked as `Option<PlannerEntry>` (a logical target), not as a row index, because expand/collapse reflows the list. The planner supports Up/Down navigation, Left/Right collapse/expand, Enter for the primary action, and Space to apply the current choice. Adding a new `PlanField` means touching: the field enum (`model.rs`), `build_planner_entries`, `planner_choices`, `planner_field_label`, `planner_field_value`, `planner_choice_active`, and `apply_planner_choice`.

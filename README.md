@@ -176,7 +176,11 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
 ```toml
 version          = "0.3.0"   # 标题栏显示的版本号
-build_label      = "..."     # 标题栏副标题
+header_title     = "..."     # 标头第一行标题
+header_subtitle  = "..."     # 标头第二行副标题
+header_credit    = "..."     # 作者 / License 行
+header_docs      = "..."     # 文档站行
+build_label      = "..."     # 兼容旧字段：header_subtitle 为空时使用
 github_test_path = "..."     # 测速参考文件
 github_mirrors   = [...]     # 镜像源候选清单
 docker_oneliner  = "..."     # 装 Docker 的一键脚本
