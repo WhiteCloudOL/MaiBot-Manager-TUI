@@ -166,7 +166,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 ```
 
 > 发布脚本默认使用 musl 静态目标，产物不依赖目标服务器的 GLIBC 版本。
-> GitHub Actions 自动构建在 `main` 与 `dev` 分支触发，并发布 prerelease 产物。
+> GitHub Actions 自动构建在 `main` 与 `dev` 分支触发：`main` 发布 latest 稳定 release，`dev` 发布 `<version>-dev-<SHA>` prerelease。
 
 ---
 

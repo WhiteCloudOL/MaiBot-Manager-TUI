@@ -126,15 +126,35 @@ jobs:
           test -f dist/maibot-manager-macos-x86_64
           test -f dist/maibot-manager-macos-arm64
 
-      - name: Build prerelease metadata
+      - name: Build release metadata
         id: meta
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           SHORT_SHA="${{ steps.version.outputs.short_sha }}"
-          TAG="v${VERSION}-nextdev-${SHORT_SHA}"
-          TITLE="MaiBot Manager TUI v${VERSION} nextdev ${SHORT_SHA}"
+          BRANCH="${{ github.ref_name }}"
+
+          if [ "${BRANCH}" = "main" ]; then
+            TAG="v${VERSION}"
+            TITLE="MaiBot Manager TUI v${VERSION}"
+            PRERELEASE="false"
+            RELEASE_KIND="stable release"
+          elif [ "${BRANCH}" = "dev" ]; then
+            TAG="${VERSION}-dev-${SHORT_SHA}"
+            TITLE="MaiBot Manager TUI ${VERSION}-dev-${SHORT_SHA}"
+            PRERELEASE="true"
+            RELEASE_KIND="dev prerelease"
+          else
+            SAFE_BRANCH="${BRANCH//[^A-Za-z0-9._-]/-}"
+            TAG="${VERSION}-${SAFE_BRANCH}-${SHORT_SHA}"
+            TITLE="MaiBot Manager TUI ${TAG}"
+            PRERELEASE="true"
+            RELEASE_KIND="manual prerelease"
+          fi
+
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "release_kind=${RELEASE_KIND}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         env:
@@ -188,7 +208,7 @@ jobs:
           done < <(git log "${LOG_RANGE}" --no-merges --pretty=format:'%h|%s')
 
           {
-            echo "Automated prerelease build from commit ${{ github.sha }}."
+            echo "Automated ${{ steps.meta.outputs.release_kind }} from commit ${{ github.sha }}."
             echo "Branch: ${{ github.ref_name }}"
             echo
             echo "## ${COMPARE_TEXT}"
@@ -226,6 +246,17 @@ jobs:
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
           TITLE="${{ steps.meta.outputs.title }}"
+          PRERELEASE="${{ steps.meta.outputs.prerelease }}"
+
+          CREATE_FLAGS=()
+          EDIT_FLAGS=()
+          if [ "${PRERELEASE}" = "true" ]; then
+            CREATE_FLAGS+=(--prerelease --latest=false)
+            EDIT_FLAGS+=(--prerelease)
+          else
+            CREATE_FLAGS+=(--latest)
+            EDIT_FLAGS+=(--prerelease=false --latest)
+          fi
 
           ASSETS=(
             dist/maibot-manager-linux-x86_64
@@ -239,15 +270,16 @@ jobs:
             gh release edit "${TAG}" \
               --title "${TITLE}" \
               --notes-file dist/release-notes.md \
-              --prerelease \
-              --repo "${GITHUB_REPOSITORY}"
+              --target "${{ github.sha }}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              "${EDIT_FLAGS[@]}"
             gh release upload "${TAG}" "${ASSETS[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
           else
             gh release create "${TAG}" \
               --title "${TITLE}" \
               --notes-file dist/release-notes.md \
               --target "${{ github.sha }}" \
-              --prerelease \
               --repo "${GITHUB_REPOSITORY}" \
+              "${CREATE_FLAGS[@]}" \
               "${ASSETS[@]}"
           fi
