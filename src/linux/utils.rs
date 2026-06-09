@@ -184,9 +184,14 @@ pub fn detect_arch() -> Result<&'static str> {
 }
 
 pub fn screen_exists(name: &str) -> Result<bool> {
+    if !command_exists("screen")? {
+        return Ok(false);
+    }
     Ok(Command::new("bash")
         .arg("-lc")
-        .arg(format!("screen -list | grep -q '\\.{name}[[:space:]]'"))
+        .arg(format!(
+            "screen -list 2>/dev/null | grep -q '\\.{name}[[:space:]]'"
+        ))
         .status()?
         .success())
 }

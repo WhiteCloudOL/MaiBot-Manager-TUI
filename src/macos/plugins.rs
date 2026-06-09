@@ -12,6 +12,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(crate) struct PluginSummary {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) author: String,
+    pub(crate) version: String,
+    pub(crate) description: String,
+    pub(crate) has_requirements: bool,
+    pub(crate) dir_name: String,
+}
+
 pub(crate) const NAPCAT_ADAPTER_REPO_NAME: &str = "MaiBot-Napcat-Adapter";
 pub(crate) const NAPCAT_ADAPTER_PLUGIN_ID: &str = "maibot-team.napcat-adapter";
 
@@ -41,6 +51,51 @@ impl App {
             .map(str::to_string)
             .filter(|id| !id.trim().is_empty())
             .ok_or_else(|| anyhow::anyhow!("插件清单缺少有效 id: {}", manifest_path.display()))
+    }
+
+    pub(crate) fn read_plugin_summary(&self, dir: &Path) -> Result<PluginSummary> {
+        let manifest_path = dir.join("_manifest.json");
+        let manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)
+            .with_context(|| format!("解析插件清单失败: {}", manifest_path.display()))?;
+        let id = manifest["id"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let name = manifest["name"]
+            .as_str()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| {
+                if id.is_empty() {
+                    "未命名插件"
+                } else {
+                    &id
+                }
+            })
+            .to_string();
+        let author = manifest["author"]
+            .as_str()
+            .unwrap_or("未知作者")
+            .to_string();
+        let version = manifest["version"].as_str().unwrap_or("未标注").to_string();
+        let description = manifest["description"]
+            .as_str()
+            .or_else(|| manifest["desc"].as_str())
+            .unwrap_or("未提供描述")
+            .to_string();
+        Ok(PluginSummary {
+            id,
+            name,
+            author,
+            version,
+            description,
+            has_requirements: dir.join("requirements.txt").exists(),
+            dir_name: dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string(),
+        })
     }
 
     fn plugin_backup_path(&self, path: &Path) -> PathBuf {

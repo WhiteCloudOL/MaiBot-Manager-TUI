@@ -129,6 +129,211 @@ pub enum LlbotUpdateMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusKind {
+    Running,
+    Stopped,
+    Warning,
+    Neutral,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DashboardTab {
+    #[default]
+    Overview,
+    Deploy,
+    Core,
+    Protocol,
+    Access,
+    Plugins,
+    About,
+}
+
+impl DashboardTab {
+    pub const ALL: [Self; 7] = [
+        Self::Overview,
+        Self::Deploy,
+        Self::Core,
+        Self::Protocol,
+        Self::Access,
+        Self::Plugins,
+        Self::About,
+    ];
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Overview => 0,
+            Self::Deploy => 1,
+            Self::Core => 2,
+            Self::Protocol => 3,
+            Self::Access => 4,
+            Self::Plugins => 5,
+            Self::About => 6,
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Overview => "󰄛",
+            Self::Deploy => "󱑑",
+            Self::Core => "󰀧",
+            Self::Protocol => "󰘵",
+            Self::Access => "󰢹",
+            Self::Plugins => "󰏗",
+            Self::About => "󰋽",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "概览",
+            Self::Deploy => "部署与更新",
+            Self::Core => "核心服务管理",
+            Self::Protocol => "协议端服务",
+            Self::Access => "访问配置",
+            Self::Plugins => "插件中心",
+            Self::About => "关于",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DashboardFocus {
+    #[default]
+    Tabs,
+    List,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DashboardState {
+    pub active_tab: DashboardTab,
+    pub focus: DashboardFocus,
+    pub search_query: String,
+    pub status_message_override: Option<String>,
+    pub deploy_plan: Option<InstallPlan>,
+    selections: [usize; 7],
+}
+
+impl DashboardState {
+    pub fn selected(&self) -> usize {
+        self.selections[self.active_tab.index()]
+    }
+
+    pub fn selected_for_len(&self, len: usize) -> usize {
+        if len == 0 {
+            0
+        } else {
+            self.selected().min(len - 1)
+        }
+    }
+
+    pub fn set_selected(&mut self, value: usize) {
+        self.selections[self.active_tab.index()] = value;
+    }
+
+    pub fn clamp_selected(&mut self, len: usize) {
+        if len == 0 {
+            self.set_selected(0);
+        } else if self.selected() >= len {
+            self.set_selected(len - 1);
+        }
+    }
+
+    pub fn move_selection(&mut self, len: usize, delta: isize) {
+        if len == 0 {
+            self.set_selected(0);
+            return;
+        }
+        let current = self.selected() as isize;
+        let next = (current + delta).rem_euclid(len as isize) as usize;
+        self.set_selected(next);
+    }
+
+    pub fn next_tab(&mut self) {
+        let idx = (self.active_tab.index() + 1) % DashboardTab::ALL.len();
+        self.active_tab = DashboardTab::ALL[idx];
+    }
+
+    pub fn prev_tab(&mut self) {
+        let idx = if self.active_tab.index() == 0 {
+            DashboardTab::ALL.len() - 1
+        } else {
+            self.active_tab.index() - 1
+        };
+        self.active_tab = DashboardTab::ALL[idx];
+    }
+
+    pub fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            DashboardFocus::Tabs => DashboardFocus::List,
+            DashboardFocus::List => DashboardFocus::Tabs,
+        };
+    }
+
+    pub fn set_status_message(&mut self, message: impl Into<String>) {
+        self.status_message_override = Some(message.into());
+    }
+
+    pub fn clear_status_message(&mut self) {
+        self.status_message_override = None;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DashboardCard {
+    pub id: &'static str,
+    pub icon: &'static str,
+    pub title: String,
+    pub subtitle: String,
+    pub badge: String,
+    pub detail: String,
+    pub kind: StatusKind,
+}
+
+#[derive(Clone, Debug)]
+pub struct DashboardChoice {
+    pub label: String,
+    pub detail: String,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct DashboardView {
+    pub active_tab: DashboardTab,
+    pub focus: DashboardFocus,
+    pub page_title: String,
+    pub page_subtitle: String,
+    pub list_title: String,
+    pub list_subtitle: String,
+    pub detail_title: String,
+    pub detail_subtitle: String,
+    pub detail_lines: Vec<String>,
+    pub detail_choices: Vec<DashboardChoice>,
+    pub action_lines: Vec<String>,
+    pub cards: Vec<DashboardCard>,
+    pub selected: usize,
+    pub search_query: String,
+    pub status_message: String,
+    pub context_hint: String,
+    pub empty_title: String,
+    pub empty_detail: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardEvent {
+    PrevTab,
+    NextTab,
+    AdjustLeft,
+    AdjustRight,
+    MoveUp,
+    MoveDown,
+    ToggleFocus,
+    Activate,
+    EditSearch,
+    ClearSearch,
+    Exit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlanField {
     InstallPath,
     InstallMode,
@@ -146,6 +351,30 @@ pub enum PlanAction {
     StartInstall,
     ResetDefaults,
     BackToMenu,
+}
+
+pub fn deploy_card_field(id: &str) -> Option<PlanField> {
+    match id {
+        "deploy-path" => Some(PlanField::InstallPath),
+        "deploy-branch" => Some(PlanField::MaiBotBranch),
+        "deploy-mode" => Some(PlanField::InstallMode),
+        "deploy-python" => Some(PlanField::PythonEnv),
+        "deploy-venv" => Some(PlanField::VenvMode),
+        "deploy-github" => Some(PlanField::GithubProxy),
+        "deploy-pypi" => Some(PlanField::PipSource),
+        "deploy-bots" => Some(PlanField::BotProtocols),
+        "deploy-docker" => Some(PlanField::DockerMirror),
+        _ => None,
+    }
+}
+
+pub fn deploy_card_action(id: &str) -> Option<PlanAction> {
+    match id {
+        "deploy-start" => Some(PlanAction::StartInstall),
+        "deploy-reset" => Some(PlanAction::ResetDefaults),
+        "deploy-back" => Some(PlanAction::BackToMenu),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

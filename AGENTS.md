@@ -77,7 +77,7 @@ This is a single-binary TUI + CLI that orchestrates platform shell commands to i
 
 ## Modern TUI roadmap
 
-The current direction for the desktop experience is a full modernization of the legacy retro TUI while keeping the existing CLI contract, platform shell-command behavior, and install/service logic intact.
+The desktop experience has moved from the legacy vertical menu to a modern tabbed TUI while keeping the existing CLI contract, platform shell-command behavior, and install/service logic intact. Treat this section as the maintenance contract for future TUI work.
 
 **Target experience.**
 
@@ -99,16 +99,15 @@ The current direction for the desktop experience is a full modernization of the 
 - `插件中心`: searchable plugin cards on the left, manifest/details/actions on the right.
 - `关于`: build metadata, documentation links, runtime environment, and troubleshooting hints.
 
-**Implementation phases.**
+**Current implementation.**
 
-1. Introduce a shared modern TUI layout layer in `src/ui.rs`:
-   top tabs, panel frames, card rows, section headers, search field rendering, action chips, and bottom status bar.
-2. Add shared view-state models in `model.rs` for tabs, focus zones, filters, selected cards, contextual status text, and action groups.
-3. Refactor each platform `app.rs` main loop to drive the new tab shell instead of the legacy top-level `select_action` menu.
-4. Migrate overview/service/plugin/access pages to the new split-pane renderer while reusing existing action methods.
-5. Rebuild the install planner into the same visual system without changing its existing keyboard contract or risk-prompt behavior.
-6. Apply semantic theming and iconography consistently across Linux, Windows, and macOS, preserving unsupported-state messaging where features are intentionally TODO.
-7. Add subtle motion/polish only where it does not interfere with raw-mode input reliability or readability.
+- `src/ui.rs` owns the shared modern TUI renderer: top tabs, responsive split/stacked panels, card rows, section headers, search rendering, contextual status bar, action menu drawing, and raw-mode prompt switching.
+- `src/model.rs` owns dashboard state and view models: tabs, focus zones, selected cards, filters, detail choices, contextual status messages, and dashboard events.
+- Each platform `app.rs` drives the tab shell with platform-specific cards/details/actions, but must still call the same underlying install/service/access/plugin methods used by CLI and legacy submenus.
+- Wide terminals render a two-column workspace; narrow terminals must degrade to stacked panels without overflowing. Readability bugs in either layout are regressions.
+- The dashboard can show "running but config/path not recorded" as a warning state. Do not display contradictory copy such as "running" plus "not installed"; prefer "配置待同步" / "configuration pending sync".
+- The `About` tab is read-only: Enter should not exit the manager. Top-level exit is `Ctrl+C`.
+- `scripts/verify_tui_capture.py` is the PTY smoke-test helper for final screen snapshots. Keep it able to allocate a controlling terminal, set rows/cols, drive key timelines, and report `overflow`.
 
 **Non-negotiable constraints.**
 
@@ -121,6 +120,12 @@ The current direction for the desktop experience is a full modernization of the 
 
 **Validation expectations.**
 
-- At minimum, run `cargo check` for the active host target after meaningful TUI refactors.
-- Manually sanity-check raw-mode navigation paths for tabs, split panes, install planner, and service action focus.
+- At minimum, run `cargo fmt`, host `cargo check`, and `cargo clippy --all-targets -- -D warnings` after meaningful TUI refactors.
+- On Windows hosts, build and directly run a Windows release EXE before claiming TUI work is done:
+  `cargo build --release --target x86_64-pc-windows-msvc --target-dir target\windows-verify`,
+  then run `target\windows-verify\x86_64-pc-windows-msvc\release\maibot-manager-tui.exe --help`
+  and `target\windows-verify\x86_64-pc-windows-msvc\release\maibot-manager-tui.exe tui`.
+- Use WSL for Linux reality checks from Windows: `cargo build`, `cargo check --target x86_64-unknown-linux-musl`, and `scripts/verify_tui_capture.py` in `wide`, `narrow`, and `tabs` modes.
+- Inspect PTY capture output for `overflow: false`, correct `布局: 双栏面板` in wide mode, correct `布局: 紧凑堆叠` in narrow mode, sensible tab/focus status hints, and no contradictory running/installed state text.
+- Manually sanity-check raw-mode navigation paths for tabs, split panes, install planner, service action focus, search prompt entry/exit, and `Ctrl+C` terminal restoration.
 - Treat readability regressions in narrow terminals as bugs even though the optimized target is a modern wide terminal.

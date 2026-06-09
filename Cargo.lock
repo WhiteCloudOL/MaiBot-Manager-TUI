@@ -343,6 +343,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml_edit",
+ "unicode-width",
 ]
 
 [[package]]

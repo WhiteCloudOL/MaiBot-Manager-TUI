@@ -20,7 +20,7 @@
 ## 🌟 功能概览
 
 * **支持 CLI / TUI**：支持使用 `maibot` 或 `maibot tui` 进入 TUI 界面；也支持附加参数执行 CLI 命令，便于 AGENT 使用 MaiBot 管理程序。
-* **控制台式 TUI**：首页提供工作区摘要、服务状态卡片和带说明的动作菜单，不需要在脚本式菜单里猜操作含义。
+* **现代化 TUI**：顶部标签、左右分栏工作区、服务/插件卡片、上下文状态栏和语义化状态颜色，让常用操作不用在脚本式菜单里猜含义。
 * **安装向导**：单页式安装计划，方向键展开 / 折叠选项，所见即所得。
 * **Github 优选**：GitHub 官方线路与镜像源并行测速，自动选择最佳线路；全部失败时提供重试 / 直连 / 取消的回退选择。
 * **MaiBot 管理**：Linux 使用 `screen` 后台会话；Windows 使用独立进程 / 窗口启动；macOS 使用后台子进程，退出管理器后核心仍继续运行。首次启动需要确认 EULA 时，TUI 会提供交互终端选项，10 秒未选择则默认后台启动。
@@ -100,7 +100,7 @@ maibot install --protocol none
 │   ├── linux/        # Linux 专属安装、服务、访问、插件与命令执行
 │   ├── macos/        # macOS 专属安装、服务、访问、插件与命令执行
 │   ├── win/          # Windows 专属安装、服务、访问、插件与 BAT 执行
-│   ├── ui.rs         # 共享页眉、状态卡片、动作菜单、提示与 prompt/raw mode 切换
+│   ├── ui.rs         # 共享现代 TUI 布局、标签、分栏、卡片、状态栏与 prompt/raw mode 切换
 │   ├── model.rs      # 共享配置模型、安装计划、枚举与常量
 │   └── terminal.rs   # 终端 raw mode、光标恢复、Ctrl+C 清理
 ├── scripts/
@@ -252,7 +252,11 @@ chmod +x ./maibot-manager-linux-arm64
 
 ```
 
-TUI 首页会先展示当前工作区和三端服务概览；每个入口都带有动作说明，危险操作会在菜单里单独标记。进入「部署与更新」后会进入单页安装计划：把光标停在配置项上按 `Enter` 展开选项，再次 `Enter` 应用所选。光标会留在你刚操作的位置，跨字段移动也不会跳。
+现代 TUI 使用顶部标签组织功能区：`概览`、`部署与更新`、`核心服务管理`、`协议端服务`、`访问配置`、`插件中心`、`关于`。宽屏终端会显示左右分栏：左侧是可筛选的服务、步骤或插件卡片，右侧显示当前项详情、状态、日志摘要和可执行动作；窄屏终端会自动降级为上下堆叠布局。
+
+底部状态栏会跟随当前面板变化：左侧显示当前状态消息，右侧显示当前可用按键。例如概览页提示 `↑/↓ 选择服务  Enter 详情  / 搜索`，部署页提示 `↑/↓ 选择步骤  ←/→ 改值  Enter 执行`。`Esc` 只在能从工作区返回顶部标签时有意义，顶层退出请用 `Ctrl+C`。
+
+界面使用 Nerd Font 友好的图标和语义颜色显示状态：绿色表示运行中，黄色表示待同步/警告，红色表示停止或错误，蓝色/青色表示信息。推荐使用带图标字形的现代终端字体，例如 Iosevka Nerd Font、FiraCode Nerd Font 或 JetBrainsMono Nerd Font；没有 Nerd Font 时文字标签仍可读。
 
 安装到 PATH 后，也可以直接执行 `maibot` 或 `maibot tui`。
 
@@ -260,13 +264,14 @@ TUI 首页会先展示当前工作区和三端服务概览；每个入口都带�
 
 | 按键 | 功能 |
 | --- | --- |
-| `↑` / `↓` | 移动光标 |
-| `Home` / `End` | 跳到首项 / 末项 |
-| `←` / `→` | 收起 / 展开当前配置项 |
-| `Enter` | 展开、应用选项或执行当前动作 |
-| `Space` | 应用当前选项 |
-| `Esc` | 返回上一级 |
-| `Ctrl+C` | 退出当前输入并恢复终端 |
+| `←` / `→` | 顶部标签间切换；部署工作区内切换当前步骤的配置值 |
+| `↑` / `↓` | 选择当前列表、卡片或动作块 |
+| `Tab` / `Shift+Tab` | 在顶部标签与工作区之间切换焦点；核心服务页用于切换动作块 |
+| `Enter` | 进入详情、执行当前动作或打开当前管理面板 |
+| `/` | 搜索/筛选当前面板项目 |
+| `Backspace` | 清空当前筛选 |
+| `Esc` | 从工作区返回顶部标签 |
+| `Ctrl+C` | 退出 TUI 并恢复终端 |
 
 ### 主菜单运行状态识别
 
@@ -457,6 +462,27 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 
 ```bash
 cargo check
+
+```
+
+**TUI 改动建议检查：**
+
+```powershell
+cargo fmt
+C:\Users\white\.cargo\bin\cargo.exe check
+C:\Users\white\.cargo\bin\cargo.exe clippy --all-targets -- -D warnings
+C:\Users\white\.cargo\bin\cargo.exe build --release --target x86_64-pc-windows-msvc --target-dir target\windows-verify
+target\windows-verify\x86_64-pc-windows-msvc\release\maibot-manager-tui.exe --help
+target\windows-verify\x86_64-pc-windows-msvc\release\maibot-manager-tui.exe tui
+
+```
+
+```bash
+wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && cargo build"
+wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && cargo check --target x86_64-unknown-linux-musl"
+wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 132 --rows 42 --mode wide"
+wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 72 --rows 28 --mode narrow"
+wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 132 --rows 42 --mode tabs"
 
 ```
 

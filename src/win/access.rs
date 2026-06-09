@@ -351,7 +351,7 @@ fn config_array_display(doc: &DocumentMut, table: &str, key: &str) -> String {
 }
 
 fn ensure_table(doc: &mut DocumentMut, table: &str) {
-    if !doc.get(table).and_then(Item::as_table).is_some() {
+    if doc.get(table).and_then(Item::as_table).is_none() {
         doc[table] = Item::Table(Default::default());
     }
 }

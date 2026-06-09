@@ -1,8 +1,6 @@
 use anyhow::{Result, anyhow, bail};
 use std::{
-    env,
-    ffi::OsString,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -190,7 +188,7 @@ pub fn with_windows_tools_path(root: &Path, command: &str) -> String {
 }
 
 pub fn apply_windows_tools_env(command: &mut Command, root: &Path) {
-    let current_path = env::var_os("PATH").unwrap_or_else(OsString::new);
+    let current_path = env::var_os("PATH").unwrap_or_default();
     let mut paths = windows_tools_path_entries(root);
     paths.extend(env::split_paths(&current_path));
     if let Ok(joined) = env::join_paths(paths) {
