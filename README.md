@@ -60,6 +60,10 @@ curl -fsSL https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/mai
 在 PowerShell 中执行下述命令，会下载最新包含 Windows 资产的 release / prerelease 到用户目录，并写入用户 PATH：
 
 ```powershell
+# 国内安装
+irm https://dl.meowyun.cn/bot/mmtui/install.ps1 | iex
+
+# 海外安装
 irm https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/main/scripts/install.ps1 | iex
 ```
 
