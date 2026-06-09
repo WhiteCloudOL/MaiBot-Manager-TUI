@@ -1,16 +1,15 @@
-use crate::{app::App, cli::parse_tail, utils::screen_exists};
+use crate::{app::App, cli::parse_tail};
 use anyhow::{Result, bail};
-use std::process::Command;
 
 pub(super) fn run_core(app: &App, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str).unwrap_or("help") {
         "start" => app.start_maibot_core(args.iter().any(|arg| arg == "--exec"))?,
         "stop" => app.stop_maibot_core()?,
         "restart" => app.restart_maibot_core()?,
-        "status" => print_screen_status("maibot")?,
+        "status" => app.print_maibot_core_status()?,
         "logs" => {
             let (tail, follow) = parse_tail(&args[1..], 100)?;
-            app.print_screen_logs("maibot", tail, follow)?;
+            app.print_maibot_core_logs(tail, follow)?;
         }
         "exec" => app.attach_screen("maibot")?,
         "-h" | "--help" | "help" => crate::cli::print_help(),
@@ -24,14 +23,14 @@ pub(super) fn run_napcat(app: &App, args: &[String]) -> Result<()> {
         "start" => app.start_napcat()?,
         "stop" => app.stop_napcat()?,
         "restart" => app.restart_napcat()?,
-        "status" => print_napcat_status()?,
+        "status" => app.print_napcat_status()?,
         "logs" => {
             let (tail, follow) = parse_tail(&args[1..], 100)?;
             app.print_napcat_logs(tail, follow)?;
         }
         "rebuild" => app.rebuild_napcat()?,
         "remove-container" => app.remove_napcat_container()?,
-        "exec" => app.run_shell("docker exec -it napcat /bin/sh")?,
+        "exec" => app.exec_napcat_shell()?,
         "-h" | "--help" | "help" => crate::cli::print_help(),
         other => bail!("未知 napcat 命令: {other}"),
     }
@@ -43,10 +42,10 @@ pub(super) fn run_llbot(app: &App, args: &[String]) -> Result<()> {
         "start" => app.start_llbot()?,
         "stop" => app.stop_llbot()?,
         "restart" => app.restart_llbot()?,
-        "status" => print_screen_status("llbot")?,
+        "status" => app.print_llbot_status()?,
         "logs" => {
             let (tail, follow) = parse_tail(&args[1..], 100)?;
-            app.print_screen_logs("llbot", tail, follow)?;
+            app.print_llbot_logs(tail, follow)?;
         }
         "exec" => app.attach_screen("llbot")?,
         "password" => {
@@ -69,26 +68,4 @@ pub(super) fn run_protocol(app: &App, args: &[String]) -> Result<()> {
         }
         other => bail!("未知协议端: {other}"),
     }
-}
-
-fn print_screen_status(session: &str) -> Result<()> {
-    if screen_exists(session)? {
-        println!("{session}: running");
-    } else {
-        println!("{session}: stopped");
-    }
-    Ok(())
-}
-
-fn print_napcat_status() -> Result<()> {
-    let output = Command::new("bash")
-        .arg("-lc")
-        .arg("docker ps --filter name=^napcat$ --filter status=running --format '{{.Names}}' 2>/dev/null")
-        .output()?;
-    if String::from_utf8_lossy(&output.stdout).trim().is_empty() {
-        println!("napcat: stopped");
-    } else {
-        println!("napcat: running");
-    }
-    Ok(())
 }

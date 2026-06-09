@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 pub const APP_VERSION: &str = env!("APP_VERSION");
-pub const APP_BUILD_LABEL: &str = env!("APP_BUILD_LABEL");
+pub const APP_HEADER_TITLE: &str = env!("APP_HEADER_TITLE");
+pub const APP_HEADER_SUBTITLE: &str = env!("APP_HEADER_SUBTITLE");
+pub const APP_HEADER_CREDIT: &str = env!("APP_HEADER_CREDIT");
+pub const APP_HEADER_DOCS: &str = env!("APP_HEADER_DOCS");
 pub const TEST_FILE_PATH: &str = env!("APP_GITHUB_TEST_PATH");
 pub const DOCKER_ONELINER: &str = env!("APP_DOCKER_ONELINER");
 
@@ -126,6 +129,224 @@ pub enum LlbotUpdateMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusKind {
+    Running,
+    Stopped,
+    Warning,
+    Neutral,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DashboardTab {
+    #[default]
+    Overview,
+    Deploy,
+    Core,
+    Protocol,
+    Access,
+    Plugins,
+    About,
+}
+
+impl DashboardTab {
+    pub const SIDEBAR: [Self; 7] = [
+        Self::Overview,
+        Self::Deploy,
+        Self::Core,
+        Self::Protocol,
+        Self::Plugins,
+        Self::Access,
+        Self::About,
+    ];
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Overview => 0,
+            Self::Deploy => 1,
+            Self::Core => 2,
+            Self::Protocol => 3,
+            Self::Access => 4,
+            Self::Plugins => 5,
+            Self::About => 6,
+        }
+    }
+
+    pub fn sidebar_index(self) -> usize {
+        Self::SIDEBAR
+            .iter()
+            .position(|tab| *tab == self)
+            .unwrap_or(0)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "概览",
+            Self::Deploy => "部署与更新",
+            Self::Core => "核心服务管理",
+            Self::Protocol => "协议端服务",
+            Self::Access => "设置",
+            Self::Plugins => "插件中心",
+            Self::About => "关于",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AppMode {
+    #[default]
+    Navigation,
+    ContentFocused,
+    PopupActive,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DashboardFocus {
+    #[default]
+    Sidebar,
+    Content,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AppState {
+    pub mode: AppMode,
+    pub current_tab: usize,
+    pub active_tab: DashboardTab,
+    pub focus: DashboardFocus,
+    pub search_query: String,
+    pub status_message_override: Option<String>,
+    pub deploy_plan: Option<InstallPlan>,
+    pub popup: Option<DashboardPopup>,
+    selections: [usize; 7],
+}
+
+pub type DashboardState = AppState;
+
+impl AppState {
+    pub fn selected(&self) -> usize {
+        self.selections[self.active_tab.index()]
+    }
+
+    pub fn selected_for_len(&self, len: usize) -> usize {
+        if len == 0 {
+            0
+        } else {
+            self.selected().min(len - 1)
+        }
+    }
+
+    pub fn set_selected(&mut self, value: usize) {
+        self.selections[self.active_tab.index()] = value;
+    }
+
+    pub fn clamp_selected(&mut self, len: usize) {
+        if len == 0 {
+            self.set_selected(0);
+        } else if self.selected() >= len {
+            self.set_selected(len - 1);
+        }
+    }
+
+    pub fn move_selection(&mut self, len: usize, delta: isize) {
+        if len == 0 {
+            self.set_selected(0);
+            return;
+        }
+        let current = self.selected() as isize;
+        let next = (current + delta).rem_euclid(len as isize) as usize;
+        self.set_selected(next);
+    }
+
+    pub fn next_tab(&mut self) {
+        let idx = (self.active_tab.sidebar_index() + 1) % DashboardTab::SIDEBAR.len();
+        self.active_tab = DashboardTab::SIDEBAR[idx];
+        self.current_tab = idx;
+    }
+
+    pub fn prev_tab(&mut self) {
+        let idx = if self.active_tab.sidebar_index() == 0 {
+            DashboardTab::SIDEBAR.len() - 1
+        } else {
+            self.active_tab.sidebar_index() - 1
+        };
+        self.active_tab = DashboardTab::SIDEBAR[idx];
+        self.current_tab = idx;
+    }
+
+    pub fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            DashboardFocus::Sidebar => DashboardFocus::Content,
+            DashboardFocus::Content => DashboardFocus::Sidebar,
+        };
+        self.mode = match self.focus {
+            DashboardFocus::Sidebar => AppMode::Navigation,
+            DashboardFocus::Content => AppMode::ContentFocused,
+        };
+    }
+
+    pub fn set_status_message(&mut self, message: impl Into<String>) {
+        self.status_message_override = Some(message.into());
+    }
+
+    pub fn clear_status_message(&mut self) {
+        self.status_message_override = None;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DashboardPopup {
+    pub title: String,
+    pub subtitle: String,
+    pub lines: Vec<String>,
+    pub actions: Vec<String>,
+    pub selected: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct DashboardCard {
+    pub id: &'static str,
+    pub icon: &'static str,
+    pub title: String,
+    pub subtitle: String,
+    pub badge: String,
+    pub detail: String,
+    pub kind: StatusKind,
+}
+
+#[derive(Clone, Debug)]
+pub struct DashboardChoice {
+    pub label: String,
+    pub detail: String,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct DashboardView {
+    pub mode: AppMode,
+    pub active_tab: DashboardTab,
+    pub focus: DashboardFocus,
+    pub popup: Option<DashboardPopup>,
+    pub page_title: String,
+    pub detail_title: String,
+    pub detail_subtitle: String,
+    pub detail_lines: Vec<String>,
+    pub detail_choices: Vec<DashboardChoice>,
+    pub action_lines: Vec<String>,
+    pub cards: Vec<DashboardCard>,
+    pub selected: usize,
+    pub empty_title: String,
+    pub empty_detail: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardEvent {
+    Activate,
+    ClearSearch,
+    Exit,
+    ResetDeployPlan,
+    RunDeployPlan,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlanField {
     InstallPath,
     InstallMode,
@@ -145,11 +366,35 @@ pub enum PlanAction {
     BackToMenu,
 }
 
+pub fn deploy_card_field(id: &str) -> Option<PlanField> {
+    match id {
+        "deploy-path" => Some(PlanField::InstallPath),
+        "deploy-branch" => Some(PlanField::MaiBotBranch),
+        "deploy-mode" => Some(PlanField::InstallMode),
+        "deploy-python" => Some(PlanField::PythonEnv),
+        "deploy-venv" => Some(PlanField::VenvMode),
+        "deploy-github" => Some(PlanField::GithubProxy),
+        "deploy-pypi" => Some(PlanField::PipSource),
+        "deploy-bots" => Some(PlanField::BotProtocols),
+        "deploy-docker" => Some(PlanField::DockerMirror),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlannerEntry {
     Field(PlanField),
     Choice(PlanField, usize),
     Action(PlanAction),
+}
+
+impl PlannerEntry {
+    pub fn field(&self) -> Option<PlanField> {
+        match self {
+            Self::Field(field) | Self::Choice(field, _) => Some(*field),
+            Self::Action(_) => None,
+        }
+    }
 }
 
 impl InstallMode {
@@ -184,8 +429,8 @@ impl VenvMode {
 impl BotProtocol {
     pub fn label(self) -> &'static str {
         match self {
-            Self::NapCat => "NapCatQQ (Docker)",
-            Self::LuckyLilliaBot => "LuckyLilliaBot (LinuxCLI)",
+            Self::NapCat => "NapCatQQ",
+            Self::LuckyLilliaBot => "LuckyLilliaBot",
         }
     }
 }

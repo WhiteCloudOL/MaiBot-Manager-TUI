@@ -5,15 +5,17 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::{
     collections::BTreeMap,
     fs,
-    os::unix::process::ExitStatusExt,
     process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 impl App {
     pub(crate) fn get_public_ip(&self) -> Result<String> {
-        let output = Command::new("bash")
-            .arg("-lc")
-            .arg("curl -s4 --max-time 5 --connect-timeout 3 ifconfig.me")
+        let output = Command::new("cmd")
+            .args([
+                "/C",
+                "curl.exe -s4 --max-time 5 --connect-timeout 3 ifconfig.me",
+            ])
             .output()?;
         let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if ip.is_empty() {
@@ -103,22 +105,28 @@ impl App {
     }
 
     pub(crate) fn run_shell(&self, command: &str) -> Result<()> {
-        use dialoguer::console::style;
-        println!("\n{} {}\n", style("▶").cyan().bold(), style(command).dim());
-        let status = Command::new("bash")
-            .arg("-lc")
-            .arg(command)
+        self.print_command_start(command);
+        let mut script = String::from("@echo off\r\nsetlocal EnableExtensions\r\n");
+        script.push_str(command);
+        if !command.ends_with('\n') {
+            script.push_str("\r\n");
+        }
+
+        let millis = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+        let path = std::env::temp_dir().join(format!("maibot-manager-{millis}.bat"));
+        fs::write(&path, script)?;
+        let status = Command::new("cmd")
+            .arg("/C")
+            .arg(&path)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .status()
-            .with_context(|| format!("执行命令失败: {command}"))?;
-        if matches!(status.signal(), Some(2) | Some(15)) {
-            restore_terminal_state();
-            eprintln!("\n操作已被用户中断 (Ctrl+C)");
-            std::process::exit(130);
-        }
+            .with_context(|| format!("执行 BAT 失败: {}", path.display()))?;
+        let _ = fs::remove_file(&path);
+
         if !status.success() {
+            restore_terminal_state();
             bail!("命令执行失败: {command}");
         }
         Ok(())

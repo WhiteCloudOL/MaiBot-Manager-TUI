@@ -241,6 +241,29 @@ impl App {
                     KeyCode::End => {
                         target = entries.last().cloned();
                     }
+                    KeyCode::Left => {
+                        if let Some(field) = entries.get(selected).and_then(|entry| entry.field()) {
+                            expanded = None;
+                            target = Some(PlannerEntry::Field(field));
+                        }
+                    }
+                    KeyCode::Right => {
+                        if let Some(field) = entries.get(selected).and_then(|entry| entry.field()) {
+                            expanded = Some(field);
+                            target = Some(PlannerEntry::Field(field));
+                        }
+                    }
+                    KeyCode::Char(' ') => match entries.get(selected).cloned() {
+                        Some(PlannerEntry::Choice(field, choice_idx)) => {
+                            self.apply_planner_choice(current, plan, field, choice_idx)?;
+                            target = Some(PlannerEntry::Choice(field, choice_idx));
+                        }
+                        Some(PlannerEntry::Field(field)) if field != PlanField::InstallPath => {
+                            expanded = Some(field);
+                            target = Some(PlannerEntry::Field(field));
+                        }
+                        _ => {}
+                    },
                     KeyCode::Enter => match entries.get(selected).cloned() {
                         Some(PlannerEntry::Field(field)) => {
                             if field == PlanField::InstallPath {
@@ -313,8 +336,8 @@ impl App {
 
     pub(crate) fn planner_choices(&self, plan: &InstallPlan, field: PlanField) -> Vec<String> {
         match field {
-            PlanField::InstallPath => vec!["按 Enter 输入自定义路径".into()],
-            PlanField::MaiBotBranch => vec!["main（稳定版）".into(), "dev（开发版）".into()],
+            PlanField::InstallPath => vec!["自定义路径".into()],
+            PlanField::MaiBotBranch => vec!["main（稳定版）".into(), "dev（预览版）".into()],
             PlanField::InstallMode => {
                 vec!["正常更新/修复".into(), "全新安装（清空目标目录）".into()]
             }
@@ -491,7 +514,10 @@ impl App {
         selected: usize,
         expanded: Option<PlanField>,
     ) {
-        self.print_section("安装计划", "↑/↓ 移动 · Enter 展开/收起 · Esc 返回");
+        self.print_section(
+            "安装计划",
+            "↑/↓ 移动 · ←/→ 展开收起 · Enter/Space 应用 · Esc 返回",
+        );
         let mut printed_actions = false;
         for (idx, entry) in entries.iter().enumerate() {
             let active = idx == selected;
@@ -532,9 +558,9 @@ impl App {
                         printed_actions = true;
                     }
                     let label = match action {
-                        PlanAction::StartInstall => "▶ 开始安装 / 更新",
-                        PlanAction::ResetDefaults => "↺ 恢复推荐默认",
-                        PlanAction::BackToMenu => "← 返回主菜单",
+                        PlanAction::StartInstall => "执行安装 / 更新",
+                        PlanAction::ResetDefaults => "恢复推荐默认",
+                        PlanAction::BackToMenu => "返回主菜单",
                     };
                     let cursor = if active { "▶" } else { " " };
                     let text = format!("  {cursor} {label}");

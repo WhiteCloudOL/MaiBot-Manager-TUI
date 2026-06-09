@@ -6,9 +6,14 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str).unwrap_or("help") {
         "show" => app.print_access_info(),
         "init" => {
+            let prompt = if cfg!(target_os = "macos") {
+                "确认将 MaiBot WebUI 绑定到 0.0.0.0？"
+            } else {
+                "确认将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter？"
+            };
             let confirmed = args[1..].iter().any(|arg| arg == "--yes" || arg == "-y")
                 || Confirm::with_theme(&app.theme)
-                    .with_prompt("确认将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter？")
+                    .with_prompt(prompt)
                     .default(false)
                     .interact()?;
             if !confirmed {

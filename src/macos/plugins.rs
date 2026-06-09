@@ -1,6 +1,7 @@
 use crate::{
     app::App,
     model::{GitDirtyMode, InstallMode},
+    ui::ActionItem,
     utils::*,
 };
 use anyhow::{Context, Result, bail};
@@ -11,18 +12,34 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(crate) struct PluginSummary {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) author: String,
+    pub(crate) version: String,
+    pub(crate) description: String,
+    pub(crate) has_requirements: bool,
+    pub(crate) dir_name: String,
+}
+
 pub(crate) const NAPCAT_ADAPTER_REPO_NAME: &str = "MaiBot-Napcat-Adapter";
 pub(crate) const NAPCAT_ADAPTER_PLUGIN_ID: &str = "maibot-team.napcat-adapter";
 
 impl App {
-    fn plugin_context(&self) -> Result<(PathBuf, PathBuf, PathBuf, String)> {
+    fn plugin_context(&self) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf, String)> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
         let maibot_dir = root.join("MaiBot");
         let plugins_dir = maibot_dir.join("plugins");
         let venv_activate = root.join("venv/bin/activate");
         fs::create_dir_all(&plugins_dir)?;
-        Ok((maibot_dir, plugins_dir, venv_activate, cfg.mai_python_env))
+        Ok((
+            root,
+            maibot_dir,
+            plugins_dir,
+            venv_activate,
+            cfg.mai_python_env,
+        ))
     }
 
     pub(crate) fn plugin_id_from_dir(&self, dir: &Path) -> Result<String> {
@@ -34,6 +51,51 @@ impl App {
             .map(str::to_string)
             .filter(|id| !id.trim().is_empty())
             .ok_or_else(|| anyhow::anyhow!("插件清单缺少有效 id: {}", manifest_path.display()))
+    }
+
+    pub(crate) fn read_plugin_summary(&self, dir: &Path) -> Result<PluginSummary> {
+        let manifest_path = dir.join("_manifest.json");
+        let manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)
+            .with_context(|| format!("解析插件清单失败: {}", manifest_path.display()))?;
+        let id = manifest["id"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let name = manifest["name"]
+            .as_str()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| {
+                if id.is_empty() {
+                    "未命名插件"
+                } else {
+                    &id
+                }
+            })
+            .to_string();
+        let author = manifest["author"]
+            .as_str()
+            .unwrap_or("未知作者")
+            .to_string();
+        let version = manifest["version"].as_str().unwrap_or("未标注").to_string();
+        let description = manifest["description"]
+            .as_str()
+            .or_else(|| manifest["desc"].as_str())
+            .unwrap_or("未提供描述")
+            .to_string();
+        Ok(PluginSummary {
+            id,
+            name,
+            author,
+            version,
+            description,
+            has_requirements: dir.join("requirements.txt").exists(),
+            dir_name: dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string(),
+        })
     }
 
     fn plugin_backup_path(&self, path: &Path) -> PathBuf {
@@ -87,8 +149,7 @@ impl App {
             }
             match self.plugin_id_from_dir(&path) {
                 Ok(id) if id == plugin_id => return Ok(Some(path)),
-                Ok(_) => {}
-                Err(_) => {}
+                Ok(_) | Err(_) => {}
             }
         }
         Ok(None)
@@ -166,7 +227,7 @@ impl App {
     }
 
     pub(crate) fn install_plugin_from_input(&self, input: &str) -> Result<()> {
-        let (maibot_dir, plugins_dir, venv_activate, py_env) = self.plugin_context()?;
+        let (root, maibot_dir, plugins_dir, venv_activate, py_env) = self.plugin_context()?;
         let url = convert_github_url(input, "https://github.com");
         let repo_name = url
             .rsplit('/')
@@ -182,13 +243,13 @@ impl App {
         )?;
         let req = plugin_path.join("requirements.txt");
         if req.exists() {
-            self.install_requirements(&maibot_dir, &venv_activate, &py_env, &req)?;
+            self.install_requirements(&root, &maibot_dir, &venv_activate, &py_env, &req)?;
         }
         Ok(())
     }
 
     pub(crate) fn remove_plugin(&self, name: &str) -> Result<()> {
-        let (_, plugins_dir, _, _) = self.plugin_context()?;
+        let (_, _, plugins_dir, _, _) = self.plugin_context()?;
         let path = plugins_dir.join(name);
         if !path.exists() {
             bail!("插件目录不存在: {name}");
@@ -198,10 +259,10 @@ impl App {
     }
 
     pub(crate) fn install_plugin_dependencies(&self, name: &str) -> Result<()> {
-        let (maibot_dir, plugins_dir, venv_activate, py_env) = self.plugin_context()?;
+        let (root, maibot_dir, plugins_dir, venv_activate, py_env) = self.plugin_context()?;
         let req = plugins_dir.join(name).join("requirements.txt");
         if req.exists() {
-            self.install_requirements(&maibot_dir, &venv_activate, &py_env, &req)?;
+            self.install_requirements(&root, &maibot_dir, &venv_activate, &py_env, &req)?;
         } else {
             println!("插件没有 requirements.txt: {name}");
         }
@@ -209,7 +270,7 @@ impl App {
     }
 
     pub(crate) fn print_plugins(&self) -> Result<()> {
-        let (_, plugins_dir, _, _) = self.plugin_context()?;
+        let (_, _, plugins_dir, _, _) = self.plugin_context()?;
         let plugins = list_plugins(&plugins_dir)?;
         if plugins.is_empty() {
             println!("暂无已安装插件");
@@ -222,23 +283,26 @@ impl App {
     }
 
     pub(crate) fn manage_plugins_menu(&self) -> Result<()> {
-        let (_, plugins_dir, _, _) = self.plugin_context()?;
+        let (_, _, plugins_dir, _, _) = self.plugin_context()?;
         loop {
             self.clear();
             self.print_header(None);
             self.print_section("插件管理", "安装、卸载和补装 Python 依赖");
             self.print_kv("插件目录", &plugins_dir.display().to_string());
             let plugins = list_plugins(&plugins_dir)?;
+            self.print_kv("插件数量", &plugins.len().to_string());
             if plugins.is_empty() {
                 self.print_kv("已安装插件", "暂无");
             } else {
                 self.print_kv("已安装插件", &plugins.join(", "));
             }
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("插件管理")
-                .items(["安装插件", "卸载插件", "安装插件依赖", "返回"])
-                .default(0)
-                .interact()?;
+            let actions = [
+                ActionItem::primary("安装插件", "从 GitHub 仓库安装或更新插件"),
+                ActionItem::destructive("卸载插件", "删除选定插件目录"),
+                ActionItem::normal("修复依赖", "为选定插件安装 requirements"),
+                ActionItem::back("返回", "回到主菜单"),
+            ];
+            let choice = self.select_action("选择插件操作", &actions)?;
             let result = match choice {
                 0 => {
                     let input: String = Input::with_theme(&self.theme)
@@ -283,22 +347,29 @@ impl App {
 
     pub(crate) fn install_requirements(
         &self,
+        root: &Path,
         maibot_dir: &Path,
         venv_activate: &Path,
         py_env: &str,
         req: &Path,
     ) -> Result<()> {
         if py_env == "uv" {
-            self.run_shell(&format!(
-                "cd '{}' && uv pip install -r '{}'",
-                shell_escape(maibot_dir),
-                shell_escape(req)
+            self.run_shell(&with_macos_tools_path(
+                root,
+                &format!(
+                    "cd '{}' && uv pip install -r '{}'",
+                    shell_escape(maibot_dir),
+                    shell_escape(req)
+                ),
             ))
         } else {
-            self.run_shell(&format!(
-                ". '{}' && pip install -r '{}'",
-                shell_escape(venv_activate),
-                shell_escape(req)
+            self.run_shell(&with_macos_tools_path(
+                root,
+                &format!(
+                    ". '{}' && pip install -r '{}'",
+                    shell_escape(venv_activate),
+                    shell_escape(req)
+                ),
             ))
         }
     }

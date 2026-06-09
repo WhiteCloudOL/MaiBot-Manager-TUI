@@ -1,9 +1,12 @@
 use anyhow::{Result, anyhow, bail};
 use std::{
     env, fs,
+    io::{ErrorKind, Read},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
 };
+use unicode_width::UnicodeWidthStr;
 
 pub fn list_plugins(dir: &Path) -> Result<Vec<String>> {
     if !dir.exists() {
@@ -183,12 +186,59 @@ pub fn detect_arch() -> Result<&'static str> {
     }
 }
 
+const SCREEN_STATUS_TIMEOUT: Duration = Duration::from_millis(500);
+
 pub fn screen_exists(name: &str) -> Result<bool> {
-    Ok(Command::new("bash")
-        .arg("-lc")
-        .arg(format!("screen -list | grep -q '\\.{name}[[:space:]]'"))
-        .status()?
-        .success())
+    Ok(screen_sessions_exist(&[name])?
+        .first()
+        .copied()
+        .unwrap_or(false))
+}
+
+pub fn screen_sessions_exist(names: &[&str]) -> Result<Vec<bool>> {
+    let mut child = match Command::new("screen")
+        .arg("-list")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(vec![false; names.len()]),
+        Err(error) => return Err(error.into()),
+    };
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let mut output = String::new();
+            if let Some(mut stdout) = child.stdout.take() {
+                stdout.read_to_string(&mut output)?;
+            }
+            return Ok(if status.success() {
+                names
+                    .iter()
+                    .map(|name| screen_list_contains(&output, name))
+                    .collect()
+            } else {
+                vec![false; names.len()]
+            });
+        }
+        if started.elapsed() >= SCREEN_STATUS_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(vec![false; names.len()]);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn screen_list_contains(output: &str, name: &str) -> bool {
+    output.lines().any(|line| {
+        line.split_whitespace().any(|field| {
+            field
+                .rsplit_once('.')
+                .is_some_and(|(_, session)| session == name)
+        })
+    })
 }
 
 /// 构造一条 `先杀掉同名 screen，再后台启动新 screen` 的 shell 命令。
@@ -212,9 +262,7 @@ pub fn shell_escape_raw(s: &str) -> String {
 }
 
 pub fn display_width(s: &str) -> usize {
-    s.chars()
-        .map(|c| if c.is_ascii() || c.is_control() { 1 } else { 2 })
-        .sum()
+    UnicodeWidthStr::width(s)
 }
 
 pub fn pad_left(s: &str, width: usize) -> String {

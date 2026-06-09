@@ -2,13 +2,12 @@ name: Build and Release
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths-ignore:
       - "README.md"
       - "CLAUDE.md"
       - ".gitignore"
       - "LICENSE"
-      - "build-release.*"
   workflow_dispatch:
 
 permissions:
@@ -20,15 +19,31 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.output_name }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            output_name: maibot-manager-x86_64
-          - target: aarch64-unknown-linux-musl
-            output_name: maibot-manager-arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            output_name: maibot-manager-linux-x86_64
+            binary_path: target/x86_64-unknown-linux-musl/release/maibot-manager-tui
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            output_name: maibot-manager-linux-arm64
+            binary_path: target/aarch64-unknown-linux-musl/release/maibot-manager-tui
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            output_name: maibot-manager-windows-x86_64.exe
+            binary_path: target/x86_64-pc-windows-msvc/release/maibot-manager-tui.exe
+          - os: macos-15
+            target: x86_64-apple-darwin
+            output_name: maibot-manager-macos-x86_64
+            binary_path: target/x86_64-apple-darwin/release/maibot-manager-tui
+          - os: macos-15
+            target: aarch64-apple-darwin
+            output_name: maibot-manager-macos-arm64
+            binary_path: target/aarch64-apple-darwin/release/maibot-manager-tui
 
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +55,7 @@ jobs:
 
       - name: Add rust-lld to PATH
         if: matrix.target == 'aarch64-unknown-linux-musl'
+        shell: bash
         run: |
           echo "$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin" >> "$GITHUB_PATH"
 
@@ -55,12 +71,16 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
 
       - name: Build release binary
+        shell: bash
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Prepare artifact
+        shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/maibot-manager-tui ${{ matrix.output_name }}
-          chmod +x ${{ matrix.output_name }}
+          cp "${{ matrix.binary_path }}" "${{ matrix.output_name }}"
+          if [[ "${{ runner.os }}" != "Windows" ]]; then
+            chmod +x "${{ matrix.output_name }}"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -100,18 +120,41 @@ jobs:
       - name: Sanity check artifact names
         run: |
           ls -la dist
-          test -f dist/maibot-manager-x86_64
-          test -f dist/maibot-manager-arm64
+          test -f dist/maibot-manager-linux-x86_64
+          test -f dist/maibot-manager-linux-arm64
+          test -f dist/maibot-manager-windows-x86_64.exe
+          test -f dist/maibot-manager-macos-x86_64
+          test -f dist/maibot-manager-macos-arm64
 
-      - name: Build prerelease metadata
+      - name: Build release metadata
         id: meta
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           SHORT_SHA="${{ steps.version.outputs.short_sha }}"
-          TAG="v${VERSION}-nextdev-${SHORT_SHA}"
-          TITLE="MaiBot Manager TUI v${VERSION} nextdev ${SHORT_SHA}"
+          BRANCH="${{ github.ref_name }}"
+
+          if [ "${BRANCH}" = "main" ]; then
+            TAG="v${VERSION}"
+            TITLE="MaiBot Manager TUI v${VERSION}"
+            PRERELEASE="false"
+            RELEASE_KIND="stable release"
+          elif [ "${BRANCH}" = "dev" ]; then
+            TAG="${VERSION}-dev-${SHORT_SHA}"
+            TITLE="MaiBot Manager TUI ${VERSION}-dev-${SHORT_SHA}"
+            PRERELEASE="true"
+            RELEASE_KIND="dev prerelease"
+          else
+            SAFE_BRANCH="${BRANCH//[^A-Za-z0-9._-]/-}"
+            TAG="${VERSION}-${SAFE_BRANCH}-${SHORT_SHA}"
+            TITLE="MaiBot Manager TUI ${TAG}"
+            PRERELEASE="true"
+            RELEASE_KIND="manual prerelease"
+          fi
+
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "release_kind=${RELEASE_KIND}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         env:
@@ -165,7 +208,8 @@ jobs:
           done < <(git log "${LOG_RANGE}" --no-merges --pretty=format:'%h|%s')
 
           {
-            echo "Automated prerelease build from commit ${{ github.sha }}."
+            echo "Automated ${{ steps.meta.outputs.release_kind }} from commit ${{ github.sha }}."
+            echo "Branch: ${{ github.ref_name }}"
             echo
             echo "## ${COMPARE_TEXT}"
             echo
@@ -189,8 +233,11 @@ jobs:
             done
 
             echo "Artifacts:"
-            echo "- \`maibot-manager-x86_64\`: Linux x86_64"
-            echo "- \`maibot-manager-arm64\`: Linux aarch64"
+            echo "- \`maibot-manager-linux-x86_64\`: Linux x86_64"
+            echo "- \`maibot-manager-linux-arm64\`: Linux aarch64"
+            echo "- \`maibot-manager-windows-x86_64.exe\`: Windows 10/11 x86_64"
+            echo "- \`maibot-manager-macos-x86_64\`: macOS x86_64"
+            echo "- \`maibot-manager-macos-arm64\`: macOS Apple Silicon"
           } > dist/release-notes.md
 
       - name: Create or update release
@@ -199,22 +246,40 @@ jobs:
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
           TITLE="${{ steps.meta.outputs.title }}"
+          PRERELEASE="${{ steps.meta.outputs.prerelease }}"
 
-          ASSETS=(dist/maibot-manager-x86_64 dist/maibot-manager-arm64)
+          CREATE_FLAGS=()
+          EDIT_FLAGS=()
+          if [ "${PRERELEASE}" = "true" ]; then
+            CREATE_FLAGS+=(--prerelease --latest=false)
+            EDIT_FLAGS+=(--prerelease)
+          else
+            CREATE_FLAGS+=(--latest)
+            EDIT_FLAGS+=(--prerelease=false --latest)
+          fi
+
+          ASSETS=(
+            dist/maibot-manager-linux-x86_64
+            dist/maibot-manager-linux-arm64
+            dist/maibot-manager-windows-x86_64.exe
+            dist/maibot-manager-macos-x86_64
+            dist/maibot-manager-macos-arm64
+          )
 
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release edit "${TAG}" \
               --title "${TITLE}" \
               --notes-file dist/release-notes.md \
-              --prerelease \
-              --repo "${GITHUB_REPOSITORY}"
+              --target "${{ github.sha }}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              "${EDIT_FLAGS[@]}"
             gh release upload "${TAG}" "${ASSETS[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
           else
             gh release create "${TAG}" \
               --title "${TITLE}" \
               --notes-file dist/release-notes.md \
               --target "${{ github.sha }}" \
-              --prerelease \
               --repo "${GITHUB_REPOSITORY}" \
+              "${CREATE_FLAGS[@]}" \
               "${ASSETS[@]}"
           fi
