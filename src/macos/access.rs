@@ -113,7 +113,7 @@ impl App {
     fn access_info_report(&self) -> Result<AccessInfoReport> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
-        let public_ip = self.get_public_ip().unwrap_or_else(|_| "127.0.0.1".into());
+        let mut public_ip = None;
         let mut endpoints = Vec::new();
         let bot_cfg = root.join("MaiBot/config/bot_config.toml");
         let webui_json = root.join("MaiBot/data/webui.json");
@@ -140,7 +140,7 @@ impl App {
             let host_display = if host == "127.0.0.1" || host == "localhost" {
                 host
             } else {
-                public_ip.clone()
+                cached_public_ip(self, &mut public_ip)
             };
             endpoints.push(AccessEndpoint {
                 title: "MaiBot WebUI",
@@ -153,7 +153,7 @@ impl App {
         Ok(AccessInfoReport {
             subtitle: "集中查看 MaiBot WebUI 访问入口",
             ip_label: "本机 / 公网 IP",
-            public_ip,
+            public_ip: public_ip.unwrap_or_else(|| "未读取（当前没有外部地址）".to_string()),
             endpoints,
         })
     }
@@ -215,6 +215,12 @@ impl App {
     pub(crate) fn modify_adapter_config(&self) -> Result<()> {
         macos_adapter_todo()
     }
+}
+
+fn cached_public_ip(app: &App, cached: &mut Option<String>) -> String {
+    cached
+        .get_or_insert_with(|| app.get_public_ip().unwrap_or_else(|_| "127.0.0.1".into()))
+        .clone()
 }
 
 fn macos_adapter_todo() -> Result<()> {

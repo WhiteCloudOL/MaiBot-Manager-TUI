@@ -135,7 +135,7 @@ impl App {
     fn access_info_report(&self) -> Result<AccessInfoReport> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
-        let public_ip = self.get_public_ip().unwrap_or_else(|_| "127.0.0.1".into());
+        let mut public_ip = None;
         let mut endpoints = Vec::new();
         let bot_cfg = root.join("MaiBot/config/bot_config.toml");
         let webui_json = root.join("MaiBot/data/webui.json");
@@ -162,7 +162,7 @@ impl App {
             let host_display = if host == "127.0.0.1" || host == "localhost" {
                 host
             } else {
-                public_ip.clone()
+                cached_public_ip(self, &mut public_ip)
             };
             endpoints.push(AccessEndpoint {
                 title: "MaiBot WebUI",
@@ -182,7 +182,7 @@ impl App {
                         "地址",
                         format!(
                             "http://{}:{}",
-                            public_ip,
+                            cached_public_ip(self, &mut public_ip),
                             data["port"].as_i64().unwrap_or(0)
                         ),
                     ),
@@ -204,7 +204,7 @@ impl App {
                 .trim()
                 .to_string();
             let display_host = if host == "0.0.0.0" {
-                public_ip.clone()
+                cached_public_ip(self, &mut public_ip)
             } else {
                 host.to_string()
             };
@@ -219,7 +219,7 @@ impl App {
         Ok(AccessInfoReport {
             subtitle: "集中查看 MaiBot、NapCat 与 LLBot 的访问入口",
             ip_label: "本机 / 公网 IP",
-            public_ip,
+            public_ip: public_ip.unwrap_or_else(|| "未读取（当前没有外部地址）".to_string()),
             endpoints,
         })
     }
@@ -442,6 +442,12 @@ impl App {
         }
         Ok(())
     }
+}
+
+fn cached_public_ip(app: &App, cached: &mut Option<String>) -> String {
+    cached
+        .get_or_insert_with(|| app.get_public_ip().unwrap_or_else(|_| "127.0.0.1".into()))
+        .clone()
 }
 
 fn display_array(arr: &toml_edit::Array) -> String {

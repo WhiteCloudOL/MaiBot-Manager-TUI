@@ -485,13 +485,15 @@ impl App {
         result
     }
 
-    pub(crate) fn dashboard_event_loop<F>(
+    pub(crate) fn dashboard_event_loop<F, G>(
         &self,
         state: &mut DashboardState,
         mut render: F,
+        mut open_inline_info_popup: G,
     ) -> Result<DashboardEvent>
     where
         F: FnMut(&DashboardState) -> Result<DashboardView>,
+        G: FnMut(&mut DashboardState, &DashboardView) -> Result<bool>,
     {
         enable_raw_mode().context("启用 ratatui raw mode 失败")?;
         let mut stdout = io::stdout();
@@ -524,6 +526,21 @@ impl App {
                             state.popup = popup_for_selection(&view);
                             sync_cached_dashboard_view(&mut view, state);
                             should_draw = state.popup.is_some();
+                        }
+                        DashboardInputAction::OpenInlineInfoPopup => {
+                            state.popup = Some(inline_info_loading_popup(&view));
+                            sync_cached_dashboard_view(&mut view, state);
+                            terminal
+                                .draw(|frame| render_dashboard(frame, &view))
+                                .context("绘制 ratatui Dashboard 失败")?;
+                            if open_inline_info_popup(state, &view)? {
+                                sync_cached_dashboard_view(&mut view, state);
+                                should_draw = true;
+                            } else {
+                                state.popup = popup_for_selection(&view);
+                                sync_cached_dashboard_view(&mut view, state);
+                                should_draw = state.popup.is_some();
+                            }
                         }
                         DashboardInputAction::Idle => {}
                     }
@@ -563,7 +580,7 @@ fn render_dashboard(frame: &mut Frame<'_>, view: &DashboardView) {
     render_footer(frame, root[2], view);
 
     if let Some(popup) = &view.popup {
-        render_popup(frame, centered_rect(62, 58, frame.area()), popup);
+        render_popup(frame, popup_area(popup, frame.area()), popup);
     }
 }
 
@@ -1074,12 +1091,17 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
 
 fn render_popup(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
     frame.render_widget(TuiClear, area);
-    let block = ethereal_block(Some(popup.title.as_str()), true);
+    frame.render_widget(
+        Block::default().style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM)),
+        area,
+    );
+    let block = modal_block(Some(popup.title.as_str()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let action_height = if popup.actions.is_empty() { 0 } else { 3 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(4), Constraint::Length(3)])
+        .constraints([Constraint::Min(1), Constraint::Length(action_height)])
         .split(inner);
 
     let mut lines = Vec::new();
@@ -1093,30 +1115,23 @@ fn render_popup(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
         lines.push(Line::from(""));
     }
     for line in &popup.lines {
-        lines.push(Line::from(Span::styled(line.clone(), muted_style())));
+        lines.push(popup_body_line(line));
     }
     let body = Paragraph::new(Text::from(lines))
-        .style(Style::default().fg(TEXT_PRIMARY))
+        .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
         .wrap(Wrap { trim: true });
     frame.render_widget(body, chunks[0]);
 
-    render_popup_actions(frame, chunks[1], popup);
+    if action_height > 0 {
+        render_popup_actions(frame, chunks[1], popup);
+    }
 }
 
 fn render_popup_actions(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
     if popup.actions.is_empty() {
         return;
     }
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(
-            popup
-                .actions
-                .iter()
-                .map(|_| Constraint::Length(14))
-                .collect::<Vec<_>>(),
-        )
-        .split(area);
+    let chunks = popup_action_areas(area, &popup.actions);
     for (idx, action) in popup.actions.iter().enumerate() {
         let active = idx == popup.selected;
         let paragraph = Paragraph::new(Line::from(Span::styled(
@@ -1131,7 +1146,8 @@ fn render_popup_actions(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopu
             },
         )))
         .alignment(Alignment::Center)
-        .block(compact_block(None, active));
+        .style(Style::default().bg(SURFACE_DIM))
+        .block(popup_action_block(active));
         if let Some(area) = chunks.get(idx) {
             frame.render_widget(paragraph, *area);
         }
@@ -1144,6 +1160,33 @@ fn compact_block(title: Option<&str>, focused: bool) -> Block<'_> {
 
 fn ethereal_block(title: Option<&str>, focused: bool) -> Block<'_> {
     styled_block(title, focused).padding(Padding::symmetric(1, 1))
+}
+
+fn modal_block(title: Option<&str>) -> Block<'_> {
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_PRIMARY))
+        .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
+        .padding(Padding::symmetric(2, 1));
+    if let Some(title) = title {
+        block = block.title(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .bg(SURFACE_DIM)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    block
+}
+
+fn popup_action_block(active: bool) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if active { ACCENT_PRIMARY } else { BORDER_MUTED }))
+        .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
 }
 
 fn styled_block(title: Option<&str>, focused: bool) -> Block<'_> {
@@ -1165,6 +1208,108 @@ fn styled_block(title: Option<&str>, focused: bool) -> Block<'_> {
         ));
     }
     block
+}
+
+fn popup_body_line(line: &str) -> Line<'static> {
+    if line.trim().is_empty() {
+        return Line::from("");
+    }
+    let style = if popup_line_looks_like_heading(line) {
+        Style::default()
+            .fg(ACCENT_SECONDARY)
+            .bg(SURFACE_DIM)
+            .add_modifier(Modifier::BOLD)
+    } else if line.starts_with("地址 ") || line.starts_with("密钥 ") {
+        Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM)
+    } else {
+        muted_style().bg(SURFACE_DIM)
+    };
+    Line::from(Span::styled(line.to_string(), style))
+}
+
+fn popup_line_looks_like_heading(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.contains(' ')
+        && !trimmed.contains(':')
+        && !trimmed.contains('：')
+        && display_width(trimmed) <= 28
+}
+
+fn popup_area(popup: &DashboardPopup, area: Rect) -> Rect {
+    let longest = popup
+        .lines
+        .iter()
+        .chain(std::iter::once(&popup.title))
+        .chain(std::iter::once(&popup.subtitle))
+        .map(|line| display_width(line))
+        .max()
+        .unwrap_or(36);
+    let action_width = popup
+        .actions
+        .iter()
+        .map(|action| (display_width(action) + 6).clamp(10, 16))
+        .sum::<usize>();
+    let desired_width = (longest + 10).max(action_width + 6).clamp(42, 88) as u16;
+    let max_width = area.width.saturating_sub(6).max(24);
+    let width = desired_width.min(max_width);
+    let body_width = usize::from(width.saturating_sub(6)).max(12);
+    let subtitle_lines = if popup.subtitle.is_empty() { 0 } else { 2 };
+    let body_lines = popup
+        .lines
+        .iter()
+        .map(|line| wrapped_line_count(line, body_width))
+        .sum::<usize>();
+    let action_height = if popup.actions.is_empty() {
+        0_usize
+    } else {
+        3_usize
+    };
+    let desired_height = (subtitle_lines + body_lines + action_height + 4).clamp(9, 22) as u16;
+    let max_height = area.height.saturating_sub(4).max(7);
+    let height = desired_height.min(max_height);
+    centered_rect_cells(width, height, area)
+}
+
+fn popup_action_areas(area: Rect, actions: &[String]) -> Vec<Rect> {
+    if actions.is_empty() || area.width == 0 || area.height == 0 {
+        return Vec::new();
+    }
+    let constraints = actions
+        .iter()
+        .map(|action| Constraint::Length((display_width(action) + 6).clamp(10, 16) as u16))
+        .collect::<Vec<_>>();
+    let total = constraints
+        .iter()
+        .map(|constraint| match constraint {
+            Constraint::Length(width) => *width,
+            _ => 0,
+        })
+        .sum::<u16>();
+    let available = area.width;
+    if total > available {
+        return Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![
+                Constraint::Ratio(1, actions.len() as u32);
+                actions.len()
+            ])
+            .split(area)
+            .to_vec();
+    }
+    let x = area.x + available.saturating_sub(total) / 2;
+    let centered = Rect::new(x, area.y, total.min(available), area.height);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(constraints)
+        .split(centered)
+        .to_vec()
+}
+
+fn wrapped_line_count(line: &str, width: usize) -> usize {
+    if line.is_empty() {
+        return 1;
+    }
+    display_width(line).div_ceil(width.max(1)).max(1)
 }
 
 fn selected_style() -> Style {
@@ -1323,6 +1468,30 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
     })
 }
 
+fn inline_info_loading_popup(view: &DashboardView) -> DashboardPopup {
+    let (title, subtitle) = view
+        .cards
+        .get(view.selected)
+        .map(|card| {
+            (
+                card.title.clone(),
+                if card.id == "access-summary" {
+                    "正在整理访问入口".to_string()
+                } else {
+                    "正在整理说明内容".to_string()
+                },
+            )
+        })
+        .unwrap_or_else(|| ("信息".to_string(), "正在整理内容".to_string()));
+    DashboardPopup {
+        title,
+        subtitle,
+        lines: vec!["请稍候。".to_string()],
+        actions: Vec::new(),
+        selected: 0,
+    }
+}
+
 fn ensure_popup_actions(actions: &mut Vec<String>) {
     actions.retain(|action| !action.trim().is_empty());
     if actions.is_empty() {
@@ -1333,23 +1502,12 @@ fn ensure_popup_actions(actions: &mut Vec<String>) {
     }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
+fn centered_rect_cells(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    Rect::new(x, y, width, height)
 }
 
 struct DashboardTerminalGuard;
@@ -1386,6 +1544,7 @@ enum DashboardInputAction {
     Redraw,
     Rebuild,
     OpenPopup,
+    OpenInlineInfoPopup,
     Event(DashboardEvent),
 }
 
@@ -1872,7 +2031,7 @@ fn handle_dashboard_key(
                         if view.active_tab == DashboardTab::About {
                             DashboardInputAction::Idle
                         } else if direct_info_popup_card(view) {
-                            DashboardInputAction::Event(DashboardEvent::Activate)
+                            DashboardInputAction::OpenInlineInfoPopup
                         } else {
                             DashboardInputAction::OpenPopup
                         }
@@ -2809,7 +2968,7 @@ mod tests {
     }
 
     #[test]
-    fn info_cards_activate_directly_inside_dashboard() {
+    fn info_cards_open_inline_without_leaving_dashboard() {
         let mut view = sample_dashboard_view(0);
         view.active_tab = DashboardTab::Access;
         view.cards = vec![DashboardCard {
@@ -2829,7 +2988,7 @@ mod tests {
 
         assert_eq!(
             handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
-            DashboardInputAction::Event(DashboardEvent::Activate)
+            DashboardInputAction::OpenInlineInfoPopup
         );
 
         view.cards[0].id = "access-note";
@@ -2837,8 +2996,62 @@ mod tests {
         assert_eq!(popup.actions, vec!["查看说明", "取消"]);
         assert_eq!(
             handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
-            DashboardInputAction::Event(DashboardEvent::Activate)
+            DashboardInputAction::OpenInlineInfoPopup
         );
+    }
+
+    #[test]
+    fn popup_area_tracks_content_without_half_screen_sprawl() {
+        let popup = DashboardPopup {
+            title: "访问汇总".to_string(),
+            subtitle: "集中查看 MaiBot、NapCat 与 LLBot 的访问入口".to_string(),
+            lines: vec![
+                "本机 / 公网 IP 127.0.0.1".to_string(),
+                String::new(),
+                "MaiBot WebUI".to_string(),
+                "地址 http://127.0.0.1:8001".to_string(),
+                "密钥 token".to_string(),
+            ],
+            actions: vec!["取消".to_string()],
+            selected: 0,
+        };
+        let area = popup_area(&popup, Rect::new(0, 0, 132, 42));
+        assert!(area.width <= 72, "info popup should stay compact: {area:?}");
+        assert!(
+            area.height <= 14,
+            "info popup should fit its content: {area:?}"
+        );
+        assert_eq!(area.x, (132 - area.width) / 2);
+
+        let rendered = render_buffer_text(132, 42, |frame| {
+            render_popup(frame, area, &popup);
+        });
+        let visible = compact_visible_text(&rendered);
+        assert!(visible.contains("访问汇总"));
+        assert!(visible.contains("MaiBotWebUI"));
+        assert!(visible.contains("取消"));
+    }
+
+    #[test]
+    fn inline_info_loading_popup_has_no_actions_or_legacy_prompt() {
+        let mut view = sample_dashboard_view(0);
+        view.active_tab = DashboardTab::Access;
+        view.cards = vec![DashboardCard {
+            id: "access-summary",
+            icon: "A",
+            title: "访问汇总".to_string(),
+            subtitle: "MaiBot WebUI".to_string(),
+            badge: "可查看".to_string(),
+            detail: "集中查看访问入口。".to_string(),
+            kind: StatusKind::Neutral,
+        }];
+        view.selected = 0;
+
+        let popup = inline_info_loading_popup(&view);
+        assert_eq!(popup.title, "访问汇总");
+        assert_eq!(popup.subtitle, "正在整理访问入口");
+        assert!(popup.actions.is_empty());
+        assert!(!popup.lines.join("\n").contains("按回车返回"));
     }
 
     #[test]

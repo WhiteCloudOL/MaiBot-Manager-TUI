@@ -105,8 +105,11 @@ impl App {
         let current = self.load_config().unwrap_or_default();
         dashboard.deploy_plan = Some(self.build_default_install_plan(&current)?);
         loop {
-            let event = self
-                .dashboard_event_loop(&mut dashboard, |state| self.build_dashboard_view(state))?;
+            let event = self.dashboard_event_loop(
+                &mut dashboard,
+                |state| self.build_dashboard_view(state),
+                |state, view| self.open_inline_dashboard_info_popup(state, view),
+            )?;
             match event {
                 DashboardEvent::ClearSearch => {
                     if !dashboard.search_query.is_empty() {
@@ -945,6 +948,39 @@ impl App {
                 label,
             })
             .collect())
+    }
+
+    fn open_inline_dashboard_info_popup(
+        &self,
+        state: &mut DashboardState,
+        view: &DashboardView,
+    ) -> Result<bool> {
+        let Some(card) = view.cards.get(view.selected) else {
+            return Ok(false);
+        };
+        match (view.active_tab, card.id) {
+            (DashboardTab::Access, "access-summary") => {
+                state.popup = Some(self.dashboard_access_summary_popup());
+                state.set_status_message("已生成访问汇总");
+                Ok(true)
+            }
+            (DashboardTab::Access, "access-note") => {
+                state.popup = Some(macos_access_note_popup());
+                state.set_status_message("macOS 当前仅支持 MaiBot WebUI 访问配置");
+                Ok(true)
+            }
+            (DashboardTab::Protocol, "napcat-note") => {
+                state.popup = Some(macos_protocol_popup("NapCatQQ"));
+                state.set_status_message("已显示 NapCat 的 macOS 说明");
+                Ok(true)
+            }
+            (DashboardTab::Protocol, "llbot-note") => {
+                state.popup = Some(macos_protocol_popup("LuckyLilliaBot"));
+                state.set_status_message("已显示 LLBot 的 macOS 说明");
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 
     fn activate_dashboard_selection(&mut self, state: &mut DashboardState) -> Result<bool> {
