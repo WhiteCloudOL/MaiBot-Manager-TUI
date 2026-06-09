@@ -113,43 +113,8 @@ impl App {
             let event = self
                 .dashboard_event_loop(&mut dashboard, |state| self.build_dashboard_view(state))?;
             match event {
-                DashboardEvent::PrevTab => dashboard.prev_tab(),
-                DashboardEvent::NextTab => dashboard.next_tab(),
-                DashboardEvent::AdjustLeft => {
-                    self.adjust_dashboard_selection(&mut dashboard, -1)?
-                }
                 DashboardEvent::AdjustRight => {
                     self.adjust_dashboard_selection(&mut dashboard, 1)?
-                }
-                DashboardEvent::MoveUp => {
-                    if matches!(dashboard.focus, DashboardFocus::Sidebar) {
-                        dashboard.focus = DashboardFocus::Content;
-                    } else {
-                        let len = self
-                            .dashboard_cards(&dashboard.active_tab, &dashboard.search_query)?
-                            .len();
-                        dashboard.move_selection(len, -1);
-                    }
-                }
-                DashboardEvent::MoveDown => {
-                    if matches!(dashboard.focus, DashboardFocus::Sidebar) {
-                        dashboard.focus = DashboardFocus::Content;
-                    } else {
-                        let len = self
-                            .dashboard_cards(&dashboard.active_tab, &dashboard.search_query)?
-                            .len();
-                        dashboard.move_selection(len, 1);
-                    }
-                }
-                DashboardEvent::ToggleFocus => dashboard.toggle_focus(),
-                DashboardEvent::EditSearch => {
-                    let search =
-                        self.prompt_dashboard_search("输入筛选关键字", &dashboard.search_query)?;
-                    dashboard.search_query = search;
-                    let len = self
-                        .dashboard_cards(&dashboard.active_tab, &dashboard.search_query)?
-                        .len();
-                    dashboard.clamp_selected(len);
                 }
                 DashboardEvent::ClearSearch => {
                     if !dashboard.search_query.is_empty() {
@@ -189,22 +154,18 @@ impl App {
         };
         let selected = state.selected_for_len(cards.len());
         let selected_card = cards.get(selected).cloned();
-        let (page_title, page_subtitle, list_title, list_subtitle, detail_title, detail_subtitle) =
+        let (page_title, _, _, _, detail_title, detail_subtitle) =
             self.dashboard_headers(state.active_tab, selected_card.as_ref());
         let detail_lines = self.dashboard_detail_lines(state.active_tab, selected_card.as_ref())?;
         let detail_choices =
             self.dashboard_detail_choices(state, cards.get(selected).map(|card| card.id))?;
         let action_lines = self.dashboard_action_lines(state.active_tab, selected_card.as_ref());
-        let status_message = self.dashboard_status_message(state, selected_card.as_ref());
         Ok(DashboardView {
             mode: state.mode,
             active_tab: state.active_tab,
             focus: state.focus,
             popup: state.popup.clone(),
             page_title: page_title.to_string(),
-            page_subtitle: page_subtitle.to_string(),
-            list_title: list_title.to_string(),
-            list_subtitle: list_subtitle.to_string(),
             detail_title: detail_title.to_string(),
             detail_subtitle: detail_subtitle.to_string(),
             detail_lines,
@@ -212,9 +173,6 @@ impl App {
             action_lines,
             cards: std::mem::take(&mut cards),
             selected,
-            search_query: state.search_query.clone(),
-            status_message,
-            context_hint: self.dashboard_context_hint(state.active_tab, state.focus),
             empty_title: "没有匹配项".to_string(),
             empty_detail: "试试清空筛选，或先完成部署与安装。".to_string(),
         })
@@ -709,7 +667,16 @@ impl App {
                 title: "文档与仓库".to_string(),
                 subtitle: crate::model::APP_HEADER_DOCS.to_string(),
                 badge: "帮助".to_string(),
-                detail: crate::model::APP_HEADER_CREDIT.to_string(),
+                detail: "项目文档与使用说明入口。".to_string(),
+                kind: StatusKind::Neutral,
+            },
+            DashboardCard {
+                id: "credits",
+                icon: "󰨔",
+                title: "作者与许可证".to_string(),
+                subtitle: crate::model::APP_HEADER_CREDIT.to_string(),
+                badge: "许可".to_string(),
+                detail: "项目信息集中展示，标题栏保持清爽。".to_string(),
                 kind: StatusKind::Neutral,
             },
             DashboardCard {
@@ -1009,6 +976,7 @@ impl App {
             DashboardTab::About => {
                 lines.push(format!("标题: {}", crate::model::APP_HEADER_TITLE));
                 lines.push(format!("副标题: {}", crate::model::APP_HEADER_SUBTITLE));
+                lines.push(format!("作者与许可证: {}", crate::model::APP_HEADER_CREDIT));
                 lines.push(format!("文档: {}", crate::model::APP_HEADER_DOCS));
             }
         }
@@ -1140,35 +1108,6 @@ impl App {
                 label,
             })
             .collect())
-    }
-
-    fn dashboard_status_message(
-        &self,
-        state: &DashboardState,
-        selected: Option<&DashboardCard>,
-    ) -> String {
-        if let Some(message) = &state.status_message_override {
-            message.clone()
-        } else if let Some(card) = selected {
-            format!("MaiBot 已就绪 · {}", card.title)
-        } else {
-            "MaiBot 已就绪".to_string()
-        }
-    }
-
-    fn dashboard_context_hint(&self, tab: DashboardTab, focus: DashboardFocus) -> String {
-        if matches!(focus, DashboardFocus::Sidebar) {
-            return "导航".to_string();
-        }
-        match tab {
-            DashboardTab::Overview => "概览".to_string(),
-            DashboardTab::Deploy => "部署".to_string(),
-            DashboardTab::Core => "核心服务".to_string(),
-            DashboardTab::Protocol => "协议端".to_string(),
-            DashboardTab::Access => "访问".to_string(),
-            DashboardTab::Plugins => "插件".to_string(),
-            DashboardTab::About => "关于".to_string(),
-        }
     }
 
     fn activate_dashboard_selection(&mut self, state: &mut DashboardState) -> Result<bool> {

@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use ratatui::widgets::ListState;
-
 pub const APP_VERSION: &str = env!("APP_VERSION");
 pub const APP_HEADER_TITLE: &str = env!("APP_HEADER_TITLE");
 pub const APP_HEADER_SUBTITLE: &str = env!("APP_HEADER_SUBTITLE");
@@ -151,23 +149,14 @@ pub enum DashboardTab {
 }
 
 impl DashboardTab {
-    pub const ALL: [Self; 7] = [
+    pub const SIDEBAR: [Self; 7] = [
         Self::Overview,
         Self::Deploy,
         Self::Core,
         Self::Protocol,
-        Self::Access,
         Self::Plugins,
+        Self::Access,
         Self::About,
-    ];
-
-    pub const SIDEBAR: [Self; 6] = [
-        Self::Overview,
-        Self::Deploy,
-        Self::Core,
-        Self::Protocol,
-        Self::Plugins,
-        Self::Access,
     ];
 
     pub fn index(self) -> usize {
@@ -189,18 +178,6 @@ impl DashboardTab {
             .unwrap_or(0)
     }
 
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::Overview => "󰄛",
-            Self::Deploy => "󱑑",
-            Self::Core => "󰀧",
-            Self::Protocol => "󰘵",
-            Self::Access => "󰢹",
-            Self::Plugins => "󰏗",
-            Self::About => "󰋽",
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             Self::Overview => "概览",
@@ -219,7 +196,6 @@ pub enum AppMode {
     #[default]
     Navigation,
     ContentFocused,
-    InputMode,
     PopupActive,
 }
 
@@ -228,12 +204,6 @@ pub enum DashboardFocus {
     #[default]
     Sidebar,
     Content,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct DeploymentConfig {
-    pub plan: Option<InstallPlan>,
-    pub input_buffer: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -246,11 +216,6 @@ pub struct AppState {
     pub status_message_override: Option<String>,
     pub deploy_plan: Option<InstallPlan>,
     pub popup: Option<DashboardPopup>,
-    pub content_mode: DashboardContentMode,
-    pub sidebar_state: ListState,
-    pub deployment_step_state: ListState,
-    pub github_mirror_state: ListState,
-    pub deployment_config: DeploymentConfig,
     selections: [usize; 7],
 }
 
@@ -295,7 +260,6 @@ impl AppState {
         let idx = (self.active_tab.sidebar_index() + 1) % DashboardTab::SIDEBAR.len();
         self.active_tab = DashboardTab::SIDEBAR[idx];
         self.current_tab = idx;
-        self.sidebar_state.select(Some(idx));
     }
 
     pub fn prev_tab(&mut self) {
@@ -306,7 +270,6 @@ impl AppState {
         };
         self.active_tab = DashboardTab::SIDEBAR[idx];
         self.current_tab = idx;
-        self.sidebar_state.select(Some(idx));
     }
 
     pub fn toggle_focus(&mut self) {
@@ -327,12 +290,6 @@ impl AppState {
     pub fn clear_status_message(&mut self) {
         self.status_message_override = None;
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum DashboardContentMode {
-    #[default]
-    Main,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -369,9 +326,6 @@ pub struct DashboardView {
     pub focus: DashboardFocus,
     pub popup: Option<DashboardPopup>,
     pub page_title: String,
-    pub page_subtitle: String,
-    pub list_title: String,
-    pub list_subtitle: String,
     pub detail_title: String,
     pub detail_subtitle: String,
     pub detail_lines: Vec<String>,
@@ -379,24 +333,14 @@ pub struct DashboardView {
     pub action_lines: Vec<String>,
     pub cards: Vec<DashboardCard>,
     pub selected: usize,
-    pub search_query: String,
-    pub status_message: String,
-    pub context_hint: String,
     pub empty_title: String,
     pub empty_detail: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardEvent {
-    PrevTab,
-    NextTab,
-    AdjustLeft,
     AdjustRight,
-    MoveUp,
-    MoveDown,
-    ToggleFocus,
     Activate,
-    EditSearch,
     ClearSearch,
     Exit,
 }

@@ -543,17 +543,6 @@ impl App {
             }
         }
     }
-
-    pub(crate) fn prompt_dashboard_search(&self, title: &str, current: &str) -> Result<String> {
-        self.with_prompt_mode(|| {
-            Input::with_theme(&self.theme)
-                .with_prompt(title)
-                .default(current.to_string())
-                .allow_empty(true)
-                .interact_text()
-                .map_err(Into::into)
-        })
-    }
 }
 
 fn render_dashboard(frame: &mut Frame<'_>, view: &DashboardView) {
@@ -644,12 +633,21 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
     let detail = selected
         .map(|card| {
             let mut lines = vec![
-                Line::from(Span::styled(
-                    card.title.clone(),
-                    Style::default()
-                        .fg(ACCENT_PRIMARY)
-                        .add_modifier(Modifier::BOLD),
-                )),
+                Line::from(vec![
+                    Span::styled(
+                        card.icon,
+                        Style::default()
+                            .fg(ACCENT_SECONDARY)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        card.title.clone(),
+                        Style::default()
+                            .fg(ACCENT_PRIMARY)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
                 Line::from(Span::styled(card.subtitle.clone(), muted_style())),
                 Line::from(Span::styled(
                     card.detail.clone(),
@@ -687,6 +685,13 @@ fn render_table(frame: &mut Frame<'_>, area: Rect, view: &DashboardView, title: 
             .map(|card| {
                 Row::new(vec![
                     Cell::from(Line::from(vec![
+                        Span::styled(
+                            card.icon,
+                            Style::default()
+                                .fg(ACCENT_SECONDARY)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" "),
                         Span::styled(
                             status_dot(card.kind),
                             Style::default().fg(status_color(card.kind)),
@@ -880,7 +885,6 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
         AppMode::ContentFocused => {
             "[↑/↓] 选择   [Tab] 切换区域   [Enter] 确认/展开   [Esc] 返回   [Ctrl+Q] 退出"
         }
-        AppMode::InputMode => "[Enter] 确认   [Esc] 取消   [Ctrl+Q] 退出",
         AppMode::PopupActive => "[←/→] 选择操作   [Enter] 执行   [Esc] 关闭   [Ctrl+Q] 退出",
     };
     let branch = "主程序分支: main";
@@ -1885,9 +1889,6 @@ mod tests {
             focus: DashboardFocus::Content,
             popup: None,
             page_title: "核心服务".to_string(),
-            page_subtitle: String::new(),
-            list_title: String::new(),
-            list_subtitle: String::new(),
             detail_title: cards[selected].title.clone(),
             detail_subtitle: cards[selected].subtitle.clone(),
             detail_lines: vec!["状态: 正常".to_string()],
@@ -1895,9 +1896,6 @@ mod tests {
             action_lines: Vec::new(),
             cards,
             selected,
-            search_query: String::new(),
-            status_message: "就绪".to_string(),
-            context_hint: String::new(),
             empty_title: "没有匹配项".to_string(),
             empty_detail: "清空筛选后重试".to_string(),
         }
@@ -1946,9 +1944,6 @@ mod tests {
             focus: DashboardFocus::Content,
             popup: None,
             page_title: "部署与更新".to_string(),
-            page_subtitle: String::new(),
-            list_title: String::new(),
-            list_subtitle: String::new(),
             detail_title: "安装路径".to_string(),
             detail_subtitle: "当前路径".to_string(),
             detail_lines: Vec::new(),
@@ -1975,9 +1970,6 @@ mod tests {
                 },
             ],
             selected: 0,
-            search_query: String::new(),
-            status_message: "就绪".to_string(),
-            context_hint: String::new(),
             empty_title: String::new(),
             empty_detail: String::new(),
         };
@@ -1989,6 +1981,35 @@ mod tests {
         assert!(steps.contains("分支"));
         assert!(steps.contains("核心配置"));
         assert!(steps.contains("镜像源"));
+    }
+
+    #[test]
+    fn sidebar_includes_about_entry() {
+        assert_eq!(DashboardTab::SIDEBAR.last(), Some(&DashboardTab::About));
+        assert_eq!(
+            DashboardTab::SIDEBAR,
+            [
+                DashboardTab::Overview,
+                DashboardTab::Deploy,
+                DashboardTab::Core,
+                DashboardTab::Protocol,
+                DashboardTab::Plugins,
+                DashboardTab::Access,
+                DashboardTab::About,
+            ],
+            "sidebar should expose every main menu tab in the intended order"
+        );
+
+        let mut view = sample_dashboard_view(0);
+        view.active_tab = DashboardTab::About;
+        view.focus = DashboardFocus::Sidebar;
+        let rendered = render_buffer_text(42, 18, |frame| {
+            render_sidebar(frame, Rect::new(0, 0, 42, 18), &view);
+        });
+        let visible = compact_visible_text(&rendered);
+        assert!(visible.contains("概览"));
+        assert!(visible.contains("插件中心"));
+        assert!(visible.contains("关于"));
     }
 
     #[test]
@@ -2045,9 +2066,6 @@ mod tests {
             focus: DashboardFocus::Content,
             popup: None,
             page_title: "部署与更新".to_string(),
-            page_subtitle: String::new(),
-            list_title: String::new(),
-            list_subtitle: String::new(),
             detail_title: "安装路径".to_string(),
             detail_subtitle: "当前路径".to_string(),
             detail_lines: Vec::new(),
@@ -2074,9 +2092,6 @@ mod tests {
                 },
             ],
             selected: 0,
-            search_query: String::new(),
-            status_message: "就绪".to_string(),
-            context_hint: String::new(),
             empty_title: String::new(),
             empty_detail: String::new(),
         };
