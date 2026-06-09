@@ -203,6 +203,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 默认会先在 Windows 本机尝试构建 `x86_64-pc-windows-msvc`，再调用 WSL Ubuntu 构建 Linux musl 双架构。可用 `-SkipWindows` 或 `-SkipLinux` 跳过其中一类产物；macOS 产物需在 macOS 本机或 GitHub Actions 中构建。
 
+Windows 发布脚本默认把 Cargo target 放在 `target/build-release-windows`，避免覆盖正在手动运行的默认 `target` exe。`output/` 产物命名固定；若 `output/maibot-manager-windows-x86_64.exe` 正被占用，脚本会明确失败，请关闭占用进程后重跑。可选参数：`-WindowsTargetDir <path>`、`-OutputDir <path>`、`-WslDistro <name>`、`-PauseAtEnd`。
+
 **在 Linux / WSL 或 macOS 本机：**
 
 ```bash
@@ -492,3 +494,5 @@ wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-T
 ./build-release.sh
 
 ```
+
+Windows 主机请使用 `.\build-release.ps1`；它会先构建 Windows x86_64，再通过 WSL 调用 `build-release.sh` 构建 Linux x86_64/arm64，并过滤 WSL 本身可能输出的 localhost 代理乱码警告。

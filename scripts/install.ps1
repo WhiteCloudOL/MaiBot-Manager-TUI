@@ -1,10 +1,12 @@
 param(
     [string]$InstallDir = $(if ($env:MAIBOT_INSTALL_DIR) { $env:MAIBOT_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\MaiBotManager" }),
     [string]$Version = $env:MAIBOT_VERSION,
-    [string]$ForceProxy = $env:MAIBOT_FORCE_PROXY
+    [string]$ForceProxy = $env:MAIBOT_FORCE_PROXY,
+    [switch]$NoPathUpdate
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 
 $Repo = "WhiteCloudOL/MaiBot-Manager-TUI"
 $AssetName = "maibot-manager-windows-x86_64.exe"
@@ -28,6 +30,10 @@ function Write-Ok([string]$Message) {
 
 function Write-Warn([string]$Message) {
     Write-Host " !  $Message" -ForegroundColor Yellow
+}
+
+function Write-Fail([string]$Message) {
+    Write-Host "ERR  $Message" -ForegroundColor Red
 }
 
 function Convert-GithubUrl([string]$Url, [string]$Proxy) {
@@ -56,7 +62,7 @@ function Invoke-GithubJson([string]$Url) {
                 Proxy = $proxy
             }
         } catch {
-            Write-Warn "GitHub API request failed: $requestUrl"
+            Write-Warn "GitHub API request failed: $requestUrl ($($_.Exception.Message))"
         }
     }
     throw "Failed to fetch GitHub release metadata. Set MAIBOT_FORCE_PROXY=https://gh-proxy.org and retry if needed."
@@ -103,43 +109,64 @@ if (-not [Environment]::Is64BitOperatingSystem) {
     throw "This installer supports only 64-bit Windows 10/11."
 }
 
-Write-Step "Fetching release metadata..."
-$releaseInfo = Get-ReleaseInfo
-$release = $releaseInfo.Json
-$tag = $release.tag_name
-$asset = @($release.assets) | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
-if (-not $asset) {
-    throw "Asset $AssetName was not found in $tag"
-}
-
-$downloadUrl = Convert-GithubUrl $asset.browser_download_url $releaseInfo.Proxy
-Write-Step "Target version: $tag"
-Write-Step "Downloading: $downloadUrl"
-
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-$tmp = Join-Path ([IO.Path]::GetTempPath()) "maibot-manager-$([Guid]::NewGuid()).exe"
-$dst = Join-Path $InstallDir $BinaryName
-
 try {
+    Write-Step "MaiBot Manager installer"
+    Write-Host "    Install dir: $InstallDir"
+    if ($Version) {
+        Write-Host "    Version:     $Version"
+    } else {
+        Write-Host "    Version:     newest release containing $AssetName"
+    }
+    if ($ForceProxy) {
+        Write-Host "    Proxy:       $ForceProxy"
+    }
+
+    Write-Step "Fetching release metadata"
+    $releaseInfo = Get-ReleaseInfo
+    $release = $releaseInfo.Json
+    $tag = $release.tag_name
+    $asset = @($release.assets) | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
+    if (-not $asset) {
+        throw "Asset $AssetName was not found in $tag"
+    }
+
+    $downloadUrl = Convert-GithubUrl $asset.browser_download_url $releaseInfo.Proxy
+    Write-Step "Downloading $tag"
+    Write-Host "    $downloadUrl"
+
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) "maibot-manager-$([Guid]::NewGuid()).exe"
+    $dst = Join-Path $InstallDir $BinaryName
+
     Invoke-WebRequest -Uri $downloadUrl -OutFile $tmp -UseBasicParsing
-    $header = [byte[]](Get-Content -LiteralPath $tmp -Encoding Byte -TotalCount 2)
+    $bytes = [System.IO.File]::ReadAllBytes($tmp)
+    $header = if ($bytes.Length -ge 2) { $bytes[0..1] } else { $bytes }
     if ($header.Length -lt 2 -or $header[0] -ne 0x4D -or $header[1] -ne 0x5A) {
         throw "Downloaded file is not a valid Windows executable."
     }
     Move-Item -LiteralPath $tmp -Destination $dst -Force
+
+    if (-not $NoPathUpdate) {
+        Add-UserPath $InstallDir
+    } else {
+        Write-Warn "Skipped user PATH update by request."
+    }
+
+    Write-Host ""
+    Write-Ok "Installed ($tag)"
+    Write-Host "  Binary:     $dst"
+    Write-Host "  Open TUI:   maibot or maibot tui"
+    Write-Host "  Help:       maibot help"
+    Write-Host ""
+    if (-not $NoPathUpdate) {
+        Write-Warn "If this terminal cannot find maibot yet, reopen it or run temporarily:"
+        Write-Host "  `$env:Path = `"$InstallDir;`$env:Path`""
+    }
+} catch {
+    Write-Fail $_.Exception.Message
+    throw
 } finally {
-    if (Test-Path -LiteralPath $tmp) {
+    if ($tmp -and (Test-Path -LiteralPath $tmp)) {
         Remove-Item -LiteralPath $tmp -Force
     }
 }
-
-Add-UserPath $InstallDir
-
-Write-Host ""
-Write-Ok "Installed ($tag)"
-Write-Host "  Binary:     $dst"
-Write-Host "  Open TUI:   maibot or maibot tui"
-Write-Host "  Help:       maibot help"
-Write-Host ""
-Write-Warn "If this terminal cannot find maibot yet, reopen it or run temporarily:"
-Write-Host "  `$env:Path = `"$InstallDir;`$env:Path`""
