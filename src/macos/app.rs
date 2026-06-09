@@ -1,14 +1,16 @@
 use anyhow::{Error, Result, anyhow, bail};
 use dialoguer::console::style;
 use std::{
+    cell::RefCell,
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use crate::model::{
     DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardState, DashboardTab,
-    DashboardView, InstallPlan, PlanAction, PlanField, StatusKind, deploy_card_action,
-    deploy_card_field,
+    DashboardView, InstallPlan, PlanField, StatusKind, deploy_card_field,
 };
 use crate::theme::AppTheme;
 use crate::ui::{ActionItem, StatusCard};
@@ -18,7 +20,27 @@ pub(crate) struct App {
     pub(crate) theme: AppTheme,
     pub(crate) config_path: PathBuf,
     pub(crate) cli_mode: bool,
+    dashboard_cache: RefCell<DashboardRuntimeCache>,
 }
+
+#[derive(Clone, Debug, Default)]
+struct DashboardRuntimeSnapshot {
+    config: crate::model::AppConfig,
+    has_config: bool,
+    maibot_running: bool,
+    plugin_count: usize,
+}
+
+#[derive(Debug, Default)]
+struct DashboardRuntimeCache {
+    snapshot: Option<DashboardRuntimeSnapshot>,
+    snapshot_refreshed_at: Option<Instant>,
+    plugin_cards: Option<Vec<DashboardCard>>,
+    plugin_cards_refreshed_at: Option<Instant>,
+}
+
+const DASHBOARD_STATUS_TTL: Duration = Duration::from_secs(10);
+const LOG_SUMMARY_TAIL_BYTES: u64 = 64 * 1024;
 
 impl App {
     pub(crate) fn new() -> Result<Self> {
@@ -27,11 +49,54 @@ impl App {
             theme: AppTheme::new(),
             config_path: home.join(".maibot_config"),
             cli_mode: false,
+            dashboard_cache: RefCell::new(DashboardRuntimeCache::default()),
         })
     }
 
     pub(crate) fn set_cli_mode(&mut self) {
         self.cli_mode = true;
+    }
+
+    fn dashboard_snapshot(&self) -> DashboardRuntimeSnapshot {
+        {
+            let cache = self.dashboard_cache.borrow();
+            if let (Some(snapshot), Some(refreshed_at)) =
+                (cache.snapshot.as_ref(), cache.snapshot_refreshed_at)
+                && refreshed_at.elapsed() < DASHBOARD_STATUS_TTL
+            {
+                return snapshot.clone();
+            }
+        }
+
+        let config = self.load_config().unwrap_or_default();
+        let has_config = !config.mai_path.is_empty();
+        let root = PathBuf::from(&config.mai_path);
+        let pid_path = root.join("logs").join("maibot.pid");
+        let plugin_count = if has_config {
+            list_plugins(&root.join("MaiBot").join("plugins"))
+                .map(|items| items.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let snapshot = DashboardRuntimeSnapshot {
+            config,
+            has_config,
+            maibot_running: has_config && pid_running(&pid_path).unwrap_or(None).is_some(),
+            plugin_count,
+        };
+        let mut cache = self.dashboard_cache.borrow_mut();
+        cache.snapshot = Some(snapshot.clone());
+        cache.snapshot_refreshed_at = Some(Instant::now());
+        snapshot
+    }
+
+    fn invalidate_dashboard_cache(&self) {
+        let mut cache = self.dashboard_cache.borrow_mut();
+        cache.snapshot = None;
+        cache.snapshot_refreshed_at = None;
+        cache.plugin_cards = None;
+        cache.plugin_cards_refreshed_at = None;
     }
 
     pub(crate) fn run(&mut self) -> Result<()> {
@@ -43,9 +108,6 @@ impl App {
             let event = self
                 .dashboard_event_loop(&mut dashboard, |state| self.build_dashboard_view(state))?;
             match event {
-                DashboardEvent::AdjustRight => {
-                    self.adjust_dashboard_selection(&mut dashboard, 1)?
-                }
                 DashboardEvent::ClearSearch => {
                     if !dashboard.search_query.is_empty() {
                         dashboard.search_query.clear();
@@ -62,6 +124,23 @@ impl App {
                     } else if !self.activate_dashboard_selection(&mut dashboard)? {
                         break;
                     }
+                }
+                DashboardEvent::ResetDeployPlan => {
+                    let reset = self.build_recommended_defaults();
+                    dashboard.deploy_plan = Some(reset);
+                    dashboard.set_status_message("已恢复推荐默认部署配置");
+                }
+                DashboardEvent::RunDeployPlan => {
+                    let plan = if let Some(plan) = dashboard.deploy_plan.as_ref() {
+                        plan.clone()
+                    } else {
+                        let current = self.load_config().unwrap_or_default();
+                        self.build_default_install_plan(&current)?
+                    };
+                    self.handle_menu_result(self.run_install(&plan))?;
+                    dashboard.deploy_plan = Some(plan);
+                    dashboard.set_status_message("安装流程已执行");
+                    self.invalidate_dashboard_cache();
                 }
                 DashboardEvent::Exit => break,
             }
@@ -86,7 +165,8 @@ impl App {
         let selected_card = cards.get(selected).cloned();
         let (page_title, _, _, _, detail_title, detail_subtitle) =
             self.dashboard_headers(state.active_tab, selected_card.as_ref());
-        let detail_lines = self.dashboard_detail_lines(state.active_tab, selected_card.as_ref())?;
+        let detail_lines =
+            self.dashboard_detail_lines(state, state.active_tab, selected_card.as_ref())?;
         let detail_choices =
             self.dashboard_detail_choices(state, cards.get(selected).map(|card| card.id))?;
         let action_lines = self.dashboard_action_lines(state.active_tab, selected_card.as_ref());
@@ -159,7 +239,7 @@ impl App {
             ),
             DashboardTab::Protocol => (
                 "协议端服务",
-                "macOS 当前保留协议端入口，并明确显示暂未适配状态。",
+                "macOS 版目前提供协议端说明入口。",
                 "协议端面板",
                 "先看状态，再进入细项说明",
                 selected
@@ -167,7 +247,7 @@ impl App {
                     .unwrap_or("协议端详情"),
                 selected
                     .map(|card| card.subtitle.as_str())
-                    .unwrap_or("保留统一信息架构，但不伪造功能支持。"),
+                    .unwrap_or("清晰标注当前平台可用范围。"),
             ),
             DashboardTab::Access => (
                 "访问配置",
@@ -220,8 +300,8 @@ impl App {
     }
 
     fn overview_cards(&self) -> Result<Vec<DashboardCard>> {
-        let cfg = self.load_config().unwrap_or_default();
-        if cfg.mai_path.is_empty() {
+        let snapshot = self.dashboard_snapshot();
+        if !snapshot.has_config {
             return Ok(vec![DashboardCard {
                 id: "workspace",
                 icon: "󰙅",
@@ -233,12 +313,8 @@ impl App {
             }]);
         }
 
-        let pid_path = PathBuf::from(&cfg.mai_path).join("logs").join("maibot.pid");
-        let maibot_running = pid_running(&pid_path).unwrap_or(None).is_some();
-        let plugin_count =
-            list_plugins(&PathBuf::from(&cfg.mai_path).join("MaiBot").join("plugins"))
-                .map(|items| items.len())
-                .unwrap_or(0);
+        let maibot_running = snapshot.maibot_running;
+        let plugin_count = snapshot.plugin_count;
         Ok(vec![
             DashboardCard {
                 id: "maibot",
@@ -266,9 +342,9 @@ impl App {
                 id: "protocol",
                 icon: "󰀪",
                 title: "协议端服务".to_string(),
-                subtitle: "NapCat / LLBot 仍处于 TODO".to_string(),
-                badge: "暂未适配".to_string(),
-                detail: "保持入口可见，但明确显示平台限制。".to_string(),
+                subtitle: "NapCat / LLBot 当前仅提供说明入口".to_string(),
+                badge: "说明".to_string(),
+                detail: "保留入口用于查看当前平台能力范围。".to_string(),
                 kind: StatusKind::Warning,
             },
             DashboardCard {
@@ -299,9 +375,7 @@ impl App {
     }
 
     fn core_cards(&self) -> Result<Vec<DashboardCard>> {
-        let cfg = self.load_config().unwrap_or_default();
-        let pid_path = PathBuf::from(&cfg.mai_path).join("logs").join("maibot.pid");
-        let running = pid_running(&pid_path).unwrap_or(None).is_some();
+        let running = self.dashboard_snapshot().maibot_running;
         Ok(vec![
             DashboardCard {
                 id: "core-start",
@@ -353,45 +427,45 @@ impl App {
     fn protocol_cards(&self) -> Result<Vec<DashboardCard>> {
         Ok(vec![
             DashboardCard {
-                id: "napcat-todo",
+                id: "napcat-note",
                 icon: "󰘨",
                 title: "NapCatQQ".to_string(),
-                subtitle: "macOS 暂未适配".to_string(),
-                badge: "TODO".to_string(),
-                detail: "会明确返回 unsupported，而不是假装可用。".to_string(),
+                subtitle: "macOS 版目前仅提供说明入口".to_string(),
+                badge: "说明".to_string(),
+                detail: "当前平台仅管理 MaiBot 核心与插件。".to_string(),
                 kind: StatusKind::Warning,
             },
             DashboardCard {
-                id: "llbot-todo",
+                id: "llbot-note",
                 icon: "󰀻",
                 title: "LuckyLilliaBot".to_string(),
-                subtitle: "macOS 暂未适配".to_string(),
-                badge: "TODO".to_string(),
-                detail: "保持统一信息架构，便于后续补齐。".to_string(),
+                subtitle: "macOS 版目前仅提供说明入口".to_string(),
+                badge: "说明".to_string(),
+                detail: "当前平台仅管理 MaiBot 核心与插件。".to_string(),
                 kind: StatusKind::Warning,
             },
         ])
     }
 
     fn access_cards(&self) -> Result<Vec<DashboardCard>> {
-        let cfg = self.load_config().unwrap_or_default();
+        let snapshot = self.dashboard_snapshot();
         Ok(vec![
             DashboardCard {
                 id: "access-summary",
                 icon: "󰢹",
                 title: "访问汇总".to_string(),
                 subtitle: "MaiBot WebUI".to_string(),
-                badge: if cfg.mai_path.is_empty() {
-                    "未配置"
-                } else {
+                badge: if snapshot.has_config {
                     "可查看"
+                } else {
+                    "未配置"
                 }
                 .to_string(),
                 detail: "公网 IP、端口和访问令牌会在详情中统一汇总。".to_string(),
-                kind: if cfg.mai_path.is_empty() {
-                    StatusKind::Warning
-                } else {
+                kind: if snapshot.has_config {
                     StatusKind::Neutral
+                } else {
+                    StatusKind::Warning
                 },
             },
             DashboardCard {
@@ -409,15 +483,25 @@ impl App {
                 title: "访问策略说明".to_string(),
                 subtitle: "协议端未适配，当前仅管理 MaiBot WebUI".to_string(),
                 badge: "说明".to_string(),
-                detail: "帮助区分当前可用能力与后续 macOS TODO 范围。".to_string(),
+                detail: "帮助确认当前 macOS 版可管理的访问范围。".to_string(),
                 kind: StatusKind::Warning,
             },
         ])
     }
 
     fn plugin_cards(&self) -> Result<Vec<DashboardCard>> {
-        let cfg = self.load_config().unwrap_or_default();
-        if cfg.mai_path.is_empty() {
+        {
+            let cache = self.dashboard_cache.borrow();
+            if let (Some(cards), Some(refreshed_at)) =
+                (cache.plugin_cards.as_ref(), cache.plugin_cards_refreshed_at)
+                && refreshed_at.elapsed() < DASHBOARD_STATUS_TTL
+            {
+                return Ok(cards.clone());
+            }
+        }
+
+        let snapshot = self.dashboard_snapshot();
+        if !snapshot.has_config {
             return Ok(vec![DashboardCard {
                 id: "plugins-empty",
                 icon: "󰏓",
@@ -429,7 +513,9 @@ impl App {
             }]);
         }
 
-        let plugins_dir = PathBuf::from(&cfg.mai_path).join("MaiBot").join("plugins");
+        let plugins_dir = PathBuf::from(&snapshot.config.mai_path)
+            .join("MaiBot")
+            .join("plugins");
         let plugins = list_plugins(&plugins_dir).unwrap_or_default();
         let mut cards = vec![DashboardCard {
             id: "plugin-center",
@@ -469,6 +555,9 @@ impl App {
                 kind: StatusKind::Running,
             });
         }
+        let mut cache = self.dashboard_cache.borrow_mut();
+        cache.plugin_cards = Some(cards.clone());
+        cache.plugin_cards_refreshed_at = Some(Instant::now());
         Ok(cards)
     }
 
@@ -515,6 +604,7 @@ impl App {
 
     fn dashboard_detail_lines(
         &self,
+        state: &DashboardState,
         tab: DashboardTab,
         selected: Option<&DashboardCard>,
     ) -> Result<Vec<String>> {
@@ -525,8 +615,9 @@ impl App {
         }
         match tab {
             DashboardTab::Overview => {
-                let cfg = self.load_config().unwrap_or_default();
-                if cfg.mai_path.is_empty() {
+                let snapshot = self.dashboard_snapshot();
+                let cfg = snapshot.config;
+                if !snapshot.has_config {
                     lines.push("尚未检测到 ~/.maibot_config。".to_string());
                     lines.push("建议先切换到「部署与更新」并完成安装规划。".to_string());
                 } else {
@@ -567,10 +658,8 @@ impl App {
                                 }
                             }
                             "protocol" => {
-                                lines.push(
-                                    "协议端现状: NapCat / LLBot 都保留 TODO 入口".to_string(),
-                                );
-                                lines.push("策略: 明确 unsupported，不伪造支持".to_string());
+                                lines.push("协议端状态: macOS 暂未提供启停管理。".to_string());
+                                lines.push("当前入口用于查看平台支持范围。".to_string());
                             }
                             "plugins" => {
                                 lines.push("插件目录会按 manifest id 自动规范化命名。".to_string());
@@ -582,38 +671,26 @@ impl App {
                 }
             }
             DashboardTab::Deploy => {
-                lines.push("步骤条聚焦路径、分支与安装模式。".to_string());
-                lines.push("路径项会打开输入框，其他项使用单选列表。".to_string());
-                lines.push("协议端维持 macOS TODO 状态，但计划可页内调整其占位项。".to_string());
-                if let (Some(plan), Some(card)) = (
-                    self.load_config()
-                        .ok()
-                        .and_then(|cfg| self.build_default_install_plan(&cfg).ok()),
-                    selected,
-                ) {
-                    if let Some(field) = deploy_card_field(card.id) {
-                        let choices = self.planner_choices(&plan, field);
-                        if !choices.is_empty() {
-                            lines.push("可选项:".to_string());
-                            for choice in choices.into_iter().take(4) {
-                                lines.push(format!(" - {choice}"));
-                            }
+                lines.push("当前表单会实时组成下一次安装或更新计划。".to_string());
+                lines.push("路径项可打开输入框，其余配置会即时更新到当前部署计划。".to_string());
+                if let (Some(plan), Some(card)) = (state.deploy_plan.as_ref(), selected)
+                    && let Some(field) = deploy_card_field(card.id)
+                {
+                    let choices = self.planner_choices(plan, field);
+                    if !choices.is_empty() {
+                        lines.push("可选项:".to_string());
+                        for choice in choices.into_iter().take(4) {
+                            lines.push(format!(" - {choice}"));
                         }
-                    } else if let Some(action) = deploy_card_action(card.id) {
-                        let label = match action {
-                            PlanAction::StartInstall => "立即执行安装 / 更新",
-                            PlanAction::ResetDefaults => "恢复推荐默认值",
-                            PlanAction::BackToMenu => "返回顶部标签",
-                        };
-                        lines.push(format!("当前动作: {label}"));
                     }
                 }
             }
             DashboardTab::Core => {
-                let cfg = self.load_config().unwrap_or_default();
+                let snapshot = self.dashboard_snapshot();
+                let cfg = snapshot.config;
                 let pid_path = PathBuf::from(&cfg.mai_path).join("logs").join("maibot.pid");
                 let log_path = PathBuf::from(&cfg.mai_path).join("logs").join("maibot.log");
-                let running = pid_running(&pid_path).unwrap_or(None).is_some();
+                let running = snapshot.maibot_running;
                 lines.push(if running {
                     "󱄩 当前状态: 运行中".to_string()
                 } else {
@@ -646,32 +723,27 @@ impl App {
             DashboardTab::Protocol => {
                 if let Some(card) = selected {
                     match card.id {
-                        "napcat-todo" => {
-                            lines.push("当前状态: unsupported on macOS".to_string());
-                            lines.push(
-                                "原因: 尚未提供 NapCat 的 macOS 原生安装与进程管理流。".to_string(),
-                            );
-                            lines.push("策略: 明确保留入口，但不伪造可执行功能。".to_string());
+                        "napcat-note" => {
+                            lines.push("当前能力: macOS 版目前仅提供说明入口".to_string());
+                            lines.push("NapCat 安装与进程托管暂不在本版本开放。".to_string());
+                            lines.push("界面会隐藏不可执行的启停操作。".to_string());
                         }
-                        "llbot-todo" => {
-                            lines.push("当前状态: unsupported on macOS".to_string());
+                        "llbot-note" => {
+                            lines.push("当前能力: macOS 版目前仅提供说明入口".to_string());
                             lines.push(
-                                "原因: 尚未提供 LLBot 的 macOS 原生适配与分发流程。".to_string(),
+                                "LuckyLilliaBot 安装与进程托管暂不在本版本开放。".to_string(),
                             );
-                            lines.push("策略: 统一信息架构，等待后续实现。".to_string());
+                            lines.push("界面会隐藏不可执行的启停操作。".to_string());
                         }
                         _ => {}
                     }
                 } else {
-                    lines.push("NapCat 和 LLBot 当前都应返回 unsupported on macOS。".to_string());
-                    lines.push("这里保留入口，是为了统一未来的信息架构。".to_string());
+                    lines.push("NapCat 和 LLBot 当前在 macOS 上仅提供说明入口。".to_string());
+                    lines.push("这里用于集中查看平台支持范围。".to_string());
                 }
             }
             DashboardTab::Access => {
-                if let Ok(ip) = self.get_public_ip() {
-                    lines.push(format!("当前探测公网/出口 IP: {ip}"));
-                }
-                let cfg = self.load_config().unwrap_or_default();
+                let cfg = self.dashboard_snapshot().config;
                 if let Some(card) = selected {
                     match card.id {
                         "access-summary" => {
@@ -701,8 +773,7 @@ impl App {
                         "access-note" => {
                             lines.push("当前只管理 MaiBot WebUI 访问入口。".to_string());
                             lines.push(
-                                "NapCat / LLBot 的访问配置随协议端适配一起保留为 TODO。"
-                                    .to_string(),
+                                "NapCat / LLBot 的访问配置会在对应管理能力可用后开放。".to_string(),
                             );
                             lines.push("这样可以避免让用户误以为 macOS 已支持协议端。".to_string());
                         }
@@ -713,45 +784,43 @@ impl App {
                 }
             }
             DashboardTab::Plugins => {
+                let snapshot = self.dashboard_snapshot();
                 if let Some(card) = selected {
                     lines.push(format!("插件项: {}", card.title));
-                    if let Ok(cfg) = self.load_config() {
-                        if !cfg.mai_path.is_empty() {
-                            let plugins_dir =
-                                PathBuf::from(&cfg.mai_path).join("MaiBot").join("plugins");
-                            if let Some(dir) =
-                                self.find_plugin_dir_by_card_title(&plugins_dir, &card.title)
-                            {
-                                if let Ok(summary) = self.read_plugin_summary(&dir) {
-                                    lines.push(format!("ID: {}", summary.id));
-                                    lines.push(format!("作者: {}", summary.author));
-                                    lines.push(format!("版本: {}", summary.version));
-                                    lines.push(format!(
-                                        "依赖: {}",
-                                        if summary.has_requirements {
-                                            "requirements.txt"
-                                        } else {
-                                            "无额外依赖"
-                                        }
-                                    ));
-                                    lines.push(format!("目录名: {}", summary.dir_name));
-                                }
+                    if snapshot.has_config {
+                        let plugins_dir = PathBuf::from(&snapshot.config.mai_path)
+                            .join("MaiBot")
+                            .join("plugins");
+                        if let Some(dir) =
+                            self.find_plugin_dir_by_card_title(&plugins_dir, &card.title)
+                        {
+                            if let Ok(summary) = self.read_plugin_summary(&dir) {
+                                lines.push(format!("ID: {}", summary.id));
+                                lines.push(format!("作者: {}", summary.author));
+                                lines.push(format!("版本: {}", summary.version));
+                                lines.push(format!(
+                                    "依赖: {}",
+                                    if summary.has_requirements {
+                                        "requirements.txt"
+                                    } else {
+                                        "无额外依赖"
+                                    }
+                                ));
+                                lines.push(format!("目录名: {}", summary.dir_name));
                             }
                         }
                     }
                 }
                 lines.push("插件目录按 _manifest.json 中的 id 规范化命名。".to_string());
                 lines.push("依赖修复会复用当前 Python/uv 安装策略。".to_string());
-                if let Ok(cfg) = self.load_config() {
-                    if !cfg.mai_path.is_empty() {
-                        lines.push(format!(
-                            "目录: {}",
-                            PathBuf::from(cfg.mai_path)
-                                .join("MaiBot")
-                                .join("plugins")
-                                .display()
-                        ));
-                    }
+                if snapshot.has_config {
+                    lines.push(format!(
+                        "目录: {}",
+                        PathBuf::from(snapshot.config.mai_path)
+                            .join("MaiBot")
+                            .join("plugins")
+                            .display()
+                    ));
                 }
             }
             DashboardTab::About => {
@@ -780,8 +849,8 @@ impl App {
                 actions.push("服务与模块索引".to_string());
             }
             DashboardTab::Deploy => {
-                actions.push("当前步骤与表单动作已连接安装规划器".to_string());
-                actions.push("单选项会写回部署计划".to_string());
+                actions.push("当前配置会组成下一次安装或更新计划".to_string());
+                actions.push("恢复默认会回到推荐路径与核心环境组合".to_string());
             }
             DashboardTab::Core => {
                 actions.push("当前动作块会复用核心服务逻辑".to_string());
@@ -802,7 +871,7 @@ impl App {
                 } else {
                     actions.push("协议端状态与限制说明".to_string());
                 }
-                actions.push("明确 unsupported 原因，而不是进入伪功能菜单".to_string());
+                actions.push("说明当前平台支持范围，避免进入不可执行操作".to_string());
             }
             DashboardTab::Access => {
                 if let Some(card) = selected {
@@ -817,7 +886,7 @@ impl App {
                         }
                         "access-note" => {
                             actions.push("当前 macOS 访问能力边界说明".to_string());
-                            actions.push("帮助理解为什么协议端入口仍是 TODO".to_string());
+                            actions.push("帮助确认协议端访问配置暂未开放".to_string());
                         }
                         _ => {
                             actions.push("访问配置菜单包含地址与初始化操作".to_string());
@@ -889,16 +958,19 @@ impl App {
                 match selected.map(|card| card.id) {
                     Some("maibot") => {
                         self.handle_menu_result(self.manage_maibot_menu())?;
+                        self.invalidate_dashboard_cache();
                     }
                     Some("protocol") => {
                         self.handle_menu_result(self.manage_bot_protocol_menu())?;
                     }
                     Some("plugins") => {
                         self.handle_menu_result(self.manage_plugins_menu())?;
+                        self.invalidate_dashboard_cache();
                     }
                     Some("workspace") => {
                         let result = self.install_update_flow();
                         self.handle_menu_result(result)?;
+                        self.invalidate_dashboard_cache();
                     }
                     _ => {}
                 };
@@ -907,37 +979,17 @@ impl App {
                 let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
                 let selected = cards.get(state.selected_for_len(cards.len()));
                 if let Some(plan) = state.deploy_plan.as_ref() {
-                    match selected.and_then(|card| deploy_card_action(card.id)) {
-                        Some(PlanAction::StartInstall) => {
-                            self.handle_menu_result(self.run_install(plan))?;
-                            state.set_status_message("安装流程已执行");
-                        }
-                        Some(PlanAction::ResetDefaults) => {
-                            let reset = self.build_recommended_defaults();
-                            self.save_config(&self.plan_to_config(&reset))?;
-                            state.deploy_plan = Some(reset);
-                            state.set_status_message("已恢复推荐默认部署配置");
-                        }
-                        Some(PlanAction::BackToMenu) => {
-                            state.focus = DashboardFocus::Sidebar;
-                            state.set_status_message("已返回导航");
-                        }
-                        None => {
-                            let Some(field) = selected.and_then(|card| deploy_card_field(card.id))
-                            else {
-                                return Ok(true);
-                            };
-                            if field == PlanField::InstallPath {
-                                let mut new_plan = plan.clone();
-                                self.edit_install_path(&mut new_plan)?;
-                                self.save_config(&self.plan_to_config(&new_plan))?;
-                                state.deploy_plan = Some(new_plan.clone());
-                                state.set_status_message(format!(
-                                    "目录已更新为 {}",
-                                    new_plan.install_path.display()
-                                ));
-                            }
-                        }
+                    let Some(field) = selected.and_then(|card| deploy_card_field(card.id)) else {
+                        return Ok(true);
+                    };
+                    if field == PlanField::InstallPath {
+                        let mut new_plan = plan.clone();
+                        self.edit_install_path(&mut new_plan)?;
+                        state.deploy_plan = Some(new_plan.clone());
+                        state.set_status_message(format!(
+                            "目录已更新为 {}",
+                            new_plan.install_path.display()
+                        ));
                     }
                 }
             }
@@ -947,14 +999,17 @@ impl App {
                 match selected.map(|card| card.id) {
                     Some("core-start") => {
                         self.handle_menu_result(self.start_maibot_core(false))?;
+                        self.invalidate_dashboard_cache();
                         state.set_status_message("已请求后台启动 MaiBot 核心");
                     }
                     Some("core-stop") => {
                         self.handle_menu_result(self.stop_maibot_core())?;
+                        self.invalidate_dashboard_cache();
                         state.set_status_message("已请求停止 MaiBot 核心");
                     }
                     Some("core-console") => {
                         self.handle_menu_result(self.start_maibot_core(true))?;
+                        self.invalidate_dashboard_cache();
                         state.set_status_message("已打开 MaiBot 交互终端");
                     }
                     Some("core-logs") => {
@@ -963,6 +1018,7 @@ impl App {
                     }
                     _ => {
                         self.handle_menu_result(self.manage_maibot_menu())?;
+                        self.invalidate_dashboard_cache();
                     }
                 }
             }
@@ -970,13 +1026,13 @@ impl App {
                 let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
                 let selected = cards.get(state.selected_for_len(cards.len()));
                 match selected.map(|card| card.id) {
-                    Some("napcat-todo") => {
+                    Some("napcat-note") => {
                         self.handle_menu_result(self.print_napcat_status())?;
-                        state.set_status_message("已显示 NapCat 在 macOS 上暂未适配");
+                        state.set_status_message("已显示 NapCat 的 macOS 说明");
                     }
-                    Some("llbot-todo") => {
+                    Some("llbot-note") => {
                         self.handle_menu_result(self.print_llbot_status())?;
-                        state.set_status_message("已显示 LLBot 在 macOS 上暂未适配");
+                        state.set_status_message("已显示 LLBot 的 macOS 说明");
                     }
                     _ => {
                         self.handle_menu_result(self.manage_bot_protocol_menu())?;
@@ -1043,14 +1099,17 @@ impl App {
             DashboardTab::Core => match selected.map(|card| card.id) {
                 Some("core-start") if action_idx == 0 => {
                     self.handle_menu_result(self.start_maibot_core(false))?;
+                    self.invalidate_dashboard_cache();
                     state.set_status_message("已请求后台启动 MaiBot 核心");
                 }
                 Some("core-stop") if action_idx == 0 => {
                     self.handle_menu_result(self.stop_maibot_core())?;
+                    self.invalidate_dashboard_cache();
                     state.set_status_message("已请求停止 MaiBot 核心");
                 }
                 Some("core-console") if action_idx == 0 => {
                     self.handle_menu_result(self.start_maibot_core(true))?;
+                    self.invalidate_dashboard_cache();
                     state.set_status_message("已打开 MaiBot 交互终端");
                 }
                 Some("core-logs") if action_idx == 0 => {
@@ -1059,6 +1118,7 @@ impl App {
                 }
                 _ if action_idx == 1 => {
                     self.handle_menu_result(self.manage_maibot_menu())?;
+                    self.invalidate_dashboard_cache();
                 }
                 _ => {}
             },
@@ -1101,9 +1161,11 @@ impl App {
             DashboardTab::Plugins => match selected.map(|card| card.id) {
                 Some("plugin-item") => {
                     self.manage_plugin_action_from_dashboard(state, action_idx)?;
+                    self.invalidate_dashboard_cache();
                 }
                 _ if action_idx == 0 => {
                     self.handle_menu_result(self.manage_plugins_menu())?;
+                    self.invalidate_dashboard_cache();
                 }
                 _ => {}
             },
@@ -1113,6 +1175,7 @@ impl App {
                 }
                 Some("init") if action_idx == 0 => {
                     self.handle_menu_result(self.initialize_maibot_access_config())?;
+                    self.invalidate_dashboard_cache();
                 }
                 _ if action_idx == 0 => {
                     self.handle_menu_result(self.manage_config_access_menu())?;
@@ -1122,57 +1185,6 @@ impl App {
             DashboardTab::About | DashboardTab::Deploy => {}
         }
         Ok(true)
-    }
-
-    fn adjust_dashboard_selection(
-        &mut self,
-        state: &mut DashboardState,
-        delta: isize,
-    ) -> Result<()> {
-        if state.active_tab != DashboardTab::Deploy
-            || matches!(state.focus, DashboardFocus::Sidebar)
-        {
-            state.focus = DashboardFocus::Sidebar;
-            return Ok(());
-        }
-        let current = self.load_config().unwrap_or_default();
-        if state.deploy_plan.is_none() {
-            state.deploy_plan = Some(self.build_default_install_plan(&current)?);
-        }
-        let cards = self.dashboard_cards(&DashboardTab::Deploy, &state.search_query)?;
-        let selected = state.selected_for_len(cards.len());
-        let Some(card) = cards.get(selected) else {
-            return Ok(());
-        };
-        let Some(field) = deploy_card_field(card.id) else {
-            return Ok(());
-        };
-        if field == PlanField::InstallPath {
-            state.set_status_message("目录项使用输入框编辑");
-            return Ok(());
-        }
-        let Some(plan) = state.deploy_plan.as_mut() else {
-            return Ok(());
-        };
-        let choices = self.planner_choices(plan, field);
-        if choices.is_empty() {
-            return Ok(());
-        }
-        let current_idx = choices
-            .iter()
-            .enumerate()
-            .find_map(|(idx, _)| self.planner_choice_active(plan, field, idx).then_some(idx))
-            .unwrap_or(0);
-        let next = (current_idx as isize + delta).rem_euclid(choices.len() as isize) as usize;
-        self.apply_planner_choice(&current, plan, field, next)?;
-        self.save_config(&self.plan_to_config(plan))?;
-        let message = format!(
-            "{} 已切换为 {}",
-            self.planner_field_label(field),
-            self.planner_field_value(plan, field)
-        );
-        state.set_status_message(message);
-        Ok(())
     }
 
     fn deploy_cards_from_plan(&self, plan: &InstallPlan) -> Vec<DashboardCard> {
@@ -1212,33 +1224,6 @@ impl App {
                 kind: StatusKind::Neutral,
             });
         }
-        cards.push(DashboardCard {
-            id: "deploy-start",
-            icon: "󰐊",
-            title: "开始安装 / 更新".to_string(),
-            subtitle: "应用当前部署计划".to_string(),
-            badge: "执行".to_string(),
-            detail: "应用当前部署计划并开始安装或更新。".to_string(),
-            kind: StatusKind::Running,
-        });
-        cards.push(DashboardCard {
-            id: "deploy-reset",
-            icon: "󰑓",
-            title: "恢复推荐默认".to_string(),
-            subtitle: "HOME/maimai + uv + 暂不安装协议端".to_string(),
-            badge: "重置".to_string(),
-            detail: "恢复推荐部署配置。".to_string(),
-            kind: StatusKind::Warning,
-        });
-        cards.push(DashboardCard {
-            id: "deploy-back",
-            icon: "󰁍",
-            title: "返回导航".to_string(),
-            subtitle: "切回侧边栏导航".to_string(),
-            badge: "导航".to_string(),
-            detail: "回到侧边栏导航。".to_string(),
-            kind: StatusKind::Neutral,
-        });
         cards
     }
 
@@ -1360,8 +1345,8 @@ impl App {
         });
         cards.push(StatusCard::warning(
             "协议端服务",
-            "暂未适配",
-            "macOS 当前只管理 MaiBot 核心与插件；NapCat / LLBot 保留入口",
+            "说明",
+            "macOS 当前只管理 MaiBot 核心与插件；协议端保留说明入口",
         ));
         cards.push(StatusCard::neutral(
             "插件中心",
@@ -1405,13 +1390,13 @@ fn deploy_fields() -> &'static [PlanField] {
 fn planner_field_detail(field: PlanField) -> &'static str {
     match field {
         PlanField::InstallPath => "MaiBot 工作区路径；首次会自动创建目录。",
-        PlanField::MaiBotBranch => "在稳定版 main 和开发版 dev 之间切换。",
+        PlanField::MaiBotBranch => "在稳定版 main 和预览版 dev 之间切换。",
         PlanField::InstallMode => "决定是修复更新还是清空目录后全新安装。",
         PlanField::PythonEnv => "选择本机 python3 或由 uv 管理的独立环境。",
         PlanField::VenvMode => "控制是否保留现有虚拟环境，Clean 模式会强制重建。",
         PlanField::GithubProxy => "切换 GitHub 直连、自动测速或镜像源。",
         PlanField::PipSource => "设置 pip / uv 使用的 PyPI 镜像源。",
-        PlanField::BotProtocols => "macOS 当前保留协议端占位，不实际安装 NapCat / LLBot。",
+        PlanField::BotProtocols => "macOS 当前仅提供协议端说明入口，不安装附加协议端。",
         PlanField::DockerMirror => "macOS 当前不使用 Docker 管理协议端。",
     }
 }
@@ -1475,7 +1460,13 @@ fn deploy_choice_detail(field: PlanField, idx: usize, label: &str) -> String {
 }
 
 fn read_log_summary(path: &PathBuf, lines: usize) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(LOG_SUMMARY_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
     let summary = text
         .lines()
         .rev()

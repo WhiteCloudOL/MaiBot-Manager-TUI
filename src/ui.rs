@@ -40,16 +40,17 @@ const PANEL_WIDTH: usize = 76;
 const KEY_WIDTH: usize = 14;
 const MENU_REDRAW_TICK: Duration = Duration::from_millis(100);
 
-const TEXT_PRIMARY: Color = Color::Rgb(240, 244, 248);
-const TEXT_MUTED: Color = Color::Rgb(166, 179, 204);
-const ACCENT_PRIMARY: Color = Color::Rgb(255, 183, 178);
-const ACCENT_SECONDARY: Color = Color::Rgb(199, 206, 234);
-const STATUS_OK: Color = Color::Rgb(181, 234, 215);
-const STATUS_WARN: Color = Color::Rgb(255, 218, 193);
-const STATUS_ERROR: Color = Color::Rgb(255, 154, 162);
-const SURFACE_DIM: Color = Color::Rgb(41, 48, 64);
-const BORDER_MUTED: Color = Color::Rgb(82, 92, 116);
-const DARK_TEXT: Color = Color::Rgb(40, 45, 56);
+const BG_BASE: Color = Color::Rgb(46, 52, 64);
+const TEXT_PRIMARY: Color = Color::Rgb(216, 222, 233);
+const TEXT_MUTED: Color = Color::Rgb(172, 181, 197);
+const ACCENT_PRIMARY: Color = Color::Rgb(136, 192, 208);
+const ACCENT_SECONDARY: Color = Color::Rgb(129, 161, 193);
+const STATUS_OK: Color = Color::Rgb(163, 190, 140);
+const STATUS_WARN: Color = Color::Rgb(235, 203, 139);
+const STATUS_ERROR: Color = Color::Rgb(191, 97, 106);
+const SURFACE_DIM: Color = Color::Rgb(59, 66, 82);
+const BORDER_MUTED: Color = Color::Rgb(76, 86, 106);
+const DARK_TEXT: Color = Color::Rgb(46, 52, 64);
 
 fn content_width() -> usize {
     let (term_width, _) = size().unwrap_or((80, 24));
@@ -520,7 +521,6 @@ impl App {
                             should_draw = true;
                         }
                         DashboardInputAction::OpenPopup => {
-                            view = refresh_dashboard_view(state, &mut render)?;
                             state.popup = popup_for_selection(&view);
                             sync_cached_dashboard_view(&mut view, state);
                             should_draw = state.popup.is_some();
@@ -546,6 +546,10 @@ impl App {
 }
 
 fn render_dashboard(frame: &mut Frame<'_>, view: &DashboardView) {
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BG_BASE)),
+        frame.area(),
+    );
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -824,7 +828,7 @@ fn render_table(frame: &mut Frame<'_>, area: Rect, view: &DashboardView, title: 
             })
             .collect::<Vec<_>>()
     };
-    let header = Row::new(vec!["服务名称", "当前状态", "版本", "运行模式"])
+    let header = Row::new(vec!["服务名称", "当前状态", "版本", "快捷操作"])
         .style(
             Style::default()
                 .fg(ACCENT_PRIMARY)
@@ -876,14 +880,34 @@ fn render_step_bar(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
         .cards
         .get(view.selected)
         .and_then(|card| deploy_card_field(card.id));
-    let steps = deployment_steps();
+    let steps = view
+        .cards
+        .iter()
+        .filter_map(|card| deploy_card_field(card.id).map(|field| (field, card.title.as_str())))
+        .collect::<Vec<_>>();
+    if steps.is_empty() {
+        return;
+    }
     let current_index = steps
         .iter()
         .position(|(field, _)| Some(*field) == current)
-        .unwrap_or(0);
+        .unwrap_or_else(|| view.selected.min(steps.len().saturating_sub(1)));
+    let visible = if area.width < 58 {
+        3
+    } else if area.width < 96 {
+        5
+    } else {
+        steps.len().min(7)
+    };
+    let start = scroll_start(steps.len(), visible, current_index);
+    let end = (start + visible).min(steps.len());
     let mut spans = Vec::new();
-    for (idx, (field, label)) in steps.iter().enumerate() {
-        if idx > 0 {
+    if start > 0 {
+        spans.push(Span::styled(" ... ", muted_style()));
+        spans.push(Span::styled(" ─ ", Style::default().fg(BORDER_MUTED)));
+    }
+    for (idx, (field, _)) in steps.iter().enumerate().take(end).skip(start) {
+        if idx > start {
             spans.push(Span::styled("  ───  ", Style::default().fg(BORDER_MUTED)));
         }
         let style = if current == Some(*field) {
@@ -891,12 +915,17 @@ fn render_step_bar(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
                 .fg(DARK_TEXT)
                 .bg(ACCENT_PRIMARY)
                 .add_modifier(Modifier::BOLD)
-        } else if idx < current_index {
-            Style::default().fg(STATUS_OK).add_modifier(Modifier::BOLD)
         } else {
             muted_style()
         };
-        spans.push(Span::styled(format!(" {label} "), style));
+        spans.push(Span::styled(
+            format!(" {}. {} ", idx + 1, deployment_step_label(*field)),
+            style,
+        ));
+    }
+    if end < steps.len() {
+        spans.push(Span::styled(" ─ ", Style::default().fg(BORDER_MUTED)));
+        spans.push(Span::styled(" ... ", muted_style()));
     }
     let paragraph = Paragraph::new(Line::from(spans))
         .block(compact_block(None, false))
@@ -906,9 +935,20 @@ fn render_step_bar(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
 }
 
 fn render_deploy_wizard(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let (direction, constraints) = if area.width < 80 {
+        (
+            Direction::Vertical,
+            [Constraint::Percentage(62), Constraint::Percentage(38)],
+        )
+    } else {
+        (
+            Direction::Horizontal,
+            [Constraint::Percentage(65), Constraint::Percentage(35)],
+        )
+    };
     let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .direction(direction)
+        .constraints(constraints)
         .split(area);
     render_current_step_options(frame, chunks[0], view);
     render_deploy_summary(frame, chunks[1], view);
@@ -920,12 +960,13 @@ fn render_current_step_options(frame: &mut Frame<'_>, area: Rect, view: &Dashboa
         .map(|card| deploy_step_title(card.title.as_str()))
         .unwrap_or("选择配置");
 
-    let items = if view.detail_choices.is_empty() {
-        view.cards
-            .iter()
-            .filter(|card| deploy_card_action(card.id).is_some())
-            .map(|card| ListItem::new(Line::from(card.title.clone())))
-            .collect::<Vec<_>>()
+    let items = if view.detail_choices.is_empty() && selected_card.is_some() {
+        vec![ListItem::new(Line::from(vec![Span::styled(
+            selected_card
+                .map(|card| card.subtitle.clone())
+                .unwrap_or_default(),
+            Style::default().fg(TEXT_PRIMARY),
+        )]))]
     } else {
         view.detail_choices
             .iter()
@@ -951,7 +992,10 @@ fn render_current_step_options(frame: &mut Frame<'_>, area: Rect, view: &Dashboa
         state.select(Some(selected_choice.min(items.len() - 1)));
     }
     let list = List::new(items)
-        .block(ethereal_block(Some(title), true))
+        .block(ethereal_block(
+            Some(title),
+            view.focus == DashboardFocus::Content,
+        ))
         .style(Style::default().fg(TEXT_PRIMARY))
         .highlight_style(selected_style())
         .highlight_symbol("");
@@ -981,7 +1025,7 @@ fn render_deploy_summary(frame: &mut Frame<'_>, area: Rect, view: &DashboardView
 
 fn render_deploy_description(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
     let text = selected_deploy_description(view)
-        .unwrap_or_else(|| "准备好后，可以执行当前部署计划。".to_string());
+        .unwrap_or_else(|| "确认配置后，当前表单会组成下一次部署计划。".to_string());
     let paragraph = Paragraph::new(Text::from(vec![Line::from(Span::styled(
         text,
         Style::default().fg(TEXT_MUTED),
@@ -995,14 +1039,20 @@ fn render_deploy_description(frame: &mut Frame<'_>, area: Rect, view: &Dashboard
 fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
     let prompt = match view.mode {
         AppMode::Navigation => {
-            "[↑/↓] 导航   [Tab] 切换区域   [Enter] 确认/展开   [Esc] 返回   [Ctrl+Q] 退出"
+            "[↑/↓] 导航   [Tab] 面板   [Enter] 确认   [Esc] 返回   [Ctrl+Q] 退出"
         }
         AppMode::ContentFocused => {
-            "[↑/↓] 选择   [Tab] 切换区域   [Enter] 确认/展开   [Esc] 返回   [Ctrl+Q] 退出"
+            if view.active_tab == DashboardTab::Deploy {
+                "[←/→] 配置   [↑/↓] 选项   [Enter] 编辑   [F5] 安装/更新   [Ctrl+R] 默认   [Ctrl+1] 导航   [Ctrl+Q] 退出"
+            } else {
+                "[↑/↓] 选择   [Tab] 面板   [Enter] 打开   [Esc] 返回   [Ctrl+1] 导航   [Ctrl+Q] 退出"
+            }
         }
-        AppMode::PopupActive => "[←/→] 选择操作   [Enter] 执行   [Esc] 关闭   [Ctrl+Q] 退出",
+        AppMode::PopupActive => {
+            "[←/→] 操作   [Enter] 执行   [Esc] 关闭   [Ctrl+1] 导航   [Ctrl+Q] 退出"
+        }
     };
-    let branch = "主程序分支: main";
+    let branch = "分支: main";
     let mut text = prompt.to_string();
     let width = usize::from(area.width);
     let branch_width = display_width(branch);
@@ -1054,6 +1104,9 @@ fn render_popup(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
 }
 
 fn render_popup_actions(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
+    if popup.actions.is_empty() {
+        return;
+    }
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(
@@ -1143,14 +1196,18 @@ fn status_color(kind: StatusKind) -> Color {
     }
 }
 
-fn deployment_steps() -> &'static [(PlanField, &'static str)] {
-    &[
-        (PlanField::InstallPath, "目录"),
-        (PlanField::MaiBotBranch, "分支"),
-        (PlanField::InstallMode, "模式"),
-        (PlanField::PythonEnv, "核心配置"),
-        (PlanField::GithubProxy, "镜像源"),
-    ]
+fn deployment_step_label(field: PlanField) -> &'static str {
+    match field {
+        PlanField::InstallPath => "路径",
+        PlanField::MaiBotBranch => "分支",
+        PlanField::InstallMode => "模式",
+        PlanField::PythonEnv => "Python",
+        PlanField::VenvMode => "环境",
+        PlanField::GithubProxy => "GitHub",
+        PlanField::PipSource => "PyPI",
+        PlanField::BotProtocols => "协议端",
+        PlanField::DockerMirror => "Docker",
+    }
 }
 
 fn deploy_step_title(fallback: &str) -> &str {
@@ -1183,7 +1240,7 @@ fn action_label_for_card(card: &DashboardCard) -> String {
         "core-console" => "控制台".to_string(),
         "core-logs" => "日志".to_string(),
         "napcat" | "llbot" => "控制".to_string(),
-        "napcat-todo" | "llbot-todo" => "说明".to_string(),
+        "napcat-note" | "llbot-note" => "说明".to_string(),
         "plugin-item" => "维护".to_string(),
         "plugin-center" => "管理".to_string(),
         "plugins-empty" | "workspace" => "部署".to_string(),
@@ -1193,7 +1250,7 @@ fn action_label_for_card(card: &DashboardCard) -> String {
 
 fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
     let card = view.cards.get(view.selected)?;
-    let actions = match view.active_tab {
+    let mut actions = match view.active_tab {
         DashboardTab::Core => {
             let primary = match card.id {
                 "core-start" => "启动",
@@ -1209,7 +1266,7 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
             ]
         }
         DashboardTab::Protocol => {
-            if card.id.ends_with("-todo") {
+            if card.id.ends_with("-note") {
                 vec!["查看说明".to_string(), "取消".to_string()]
             } else {
                 vec![
@@ -1237,6 +1294,7 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
         DashboardTab::About => return None,
         DashboardTab::Deploy => return None,
     };
+    ensure_popup_actions(&mut actions);
     let mut lines = vec![format!("状态: {}", card.badge), card.detail.clone()];
     lines.extend(view.detail_lines.iter().take(8).cloned());
     Some(DashboardPopup {
@@ -1246,6 +1304,16 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
         actions,
         selected: 0,
     })
+}
+
+fn ensure_popup_actions(actions: &mut Vec<String>) {
+    actions.retain(|action| !action.trim().is_empty());
+    if actions.is_empty() {
+        actions.push("打开".to_string());
+    }
+    if !actions.iter().any(|action| action == "取消") {
+        actions.push("取消".to_string());
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -1334,22 +1402,47 @@ fn sync_cached_dashboard_view(view: &mut DashboardView, state: &mut DashboardSta
         return;
     }
 
+    if view.active_tab == DashboardTab::Deploy {
+        sync_deploy_cards(view, state);
+    }
+
     let selected = state.selected_for_len(view.cards.len());
     let selected_changed = view.selected != selected;
     view.selected = selected;
-    if selected_changed {
-        if let Some(card) = view.cards.get(selected) {
-            view.detail_title = card.title.clone();
-            view.detail_subtitle = card.subtitle.clone();
-        }
-        if view.active_tab == DashboardTab::Deploy {
-            sync_deploy_detail_choices(view, state);
-        } else if view.active_tab == DashboardTab::About {
+    if let Some(card) = view.cards.get(selected)
+        && (selected_changed || view.active_tab == DashboardTab::Deploy)
+    {
+        view.detail_title = card.title.clone();
+        view.detail_subtitle = card.subtitle.clone();
+    }
+    if view.active_tab == DashboardTab::Deploy {
+        sync_deploy_detail_choices(view, state);
+    } else if selected_changed {
+        if view.active_tab == DashboardTab::About {
             view.detail_choices.clear();
         } else {
-            view.detail_lines.clear();
+            sync_card_summary_lines(view);
             view.detail_choices.clear();
             view.action_lines.clear();
+        }
+    }
+}
+
+fn sync_card_summary_lines(view: &mut DashboardView) {
+    view.detail_lines.clear();
+    if let Some(card) = view.cards.get(view.selected) {
+        view.detail_lines.push(format!("状态: {}", card.badge));
+        view.detail_lines.push(format!("摘要: {}", card.detail));
+    }
+}
+
+fn sync_deploy_cards(view: &mut DashboardView, state: &DashboardState) {
+    let Some(plan) = state.deploy_plan.as_ref() else {
+        return;
+    };
+    for card in &mut view.cards {
+        if let Some(field) = deploy_card_field(card.id) {
+            card.subtitle = cached_planner_field_value(plan, field);
         }
     }
 }
@@ -1380,6 +1473,42 @@ fn sync_deploy_detail_choices(view: &mut DashboardView, state: &DashboardState) 
         .collect();
 }
 
+fn cached_planner_field_value(plan: &InstallPlan, field: PlanField) -> String {
+    match field {
+        PlanField::InstallPath => plan.install_path.display().to_string(),
+        PlanField::InstallMode => plan.install_mode.label().to_string(),
+        PlanField::PythonEnv => plan.python_env.label().to_string(),
+        PlanField::VenvMode => plan.venv_mode.label(plan.python_env).to_string(),
+        PlanField::MaiBotBranch => plan.maibot_branch.clone(),
+        PlanField::GithubProxy => {
+            if plan.github_proxy.is_empty() {
+                "自动测速（执行时选择最佳线路）".to_string()
+            } else {
+                plan.github_proxy.clone()
+            }
+        }
+        PlanField::PipSource => {
+            if plan.pip_display.is_empty() {
+                "系统默认".to_string()
+            } else {
+                plan.pip_display.clone()
+            }
+        }
+        PlanField::BotProtocols => {
+            if plan.bot_protocols.is_empty() {
+                "暂不安装".to_string()
+            } else {
+                plan.bot_protocols
+                    .iter()
+                    .map(|protocol| protocol.label())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        }
+        PlanField::DockerMirror => plan.docker_mirror.label().to_string(),
+    }
+}
+
 fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> Vec<String> {
     match field {
         PlanField::InstallPath => vec![plan.install_path.display().to_string()],
@@ -1406,8 +1535,7 @@ fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> Vec<String>
             let mut choices = vec!["自动测速选择".to_string(), "官方直连".to_string()];
             choices.extend(github_mirrors().iter().map(|mirror| (*mirror).to_string()));
             if !plan.github_proxy.is_empty()
-                && plan.github_proxy != "auto"
-                && plan.github_proxy != "direct"
+                && plan.github_proxy != "https://github.com"
                 && !github_mirrors()
                     .iter()
                     .any(|mirror| *mirror == plan.github_proxy)
@@ -1420,14 +1548,22 @@ fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> Vec<String>
         PlanField::PipSource => {
             let mut choices = vec![
                 "系统默认".to_string(),
-                "清华源".to_string(),
-                "阿里云源".to_string(),
-                "腾讯源".to_string(),
-                "中国科大源".to_string(),
+                "阿里云".to_string(),
+                "腾讯云".to_string(),
+                "清华大学".to_string(),
+                "中国科学技术大学".to_string(),
+                "官方源".to_string(),
             ];
             if !plan.pip_display.is_empty()
-                && !["系统默认", "清华源", "阿里云源", "腾讯源", "中国科大源"]
-                    .contains(&plan.pip_display.as_str())
+                && ![
+                    "系统默认",
+                    "阿里云",
+                    "腾讯云",
+                    "清华大学",
+                    "中国科学技术大学",
+                    "官方源",
+                ]
+                .contains(&plan.pip_display.as_str())
             {
                 choices.push(format!("当前: {}", plan.pip_display));
             }
@@ -1477,20 +1613,22 @@ fn planner_choice_active_for_plan(plan: &InstallPlan, field: PlanField, idx: usi
             (idx == 0 && plan.maibot_branch != "dev") || (idx == 1 && plan.maibot_branch == "dev")
         }
         PlanField::GithubProxy => {
-            (idx == 0 && plan.github_proxy == "auto")
-                || (idx == 1 && plan.github_proxy == "direct")
+            (idx == 0 && plan.github_proxy.is_empty())
+                || (idx == 1 && plan.github_proxy == "https://github.com")
                 || github_mirrors()
                     .get(idx.saturating_sub(2))
                     .is_some_and(|mirror| *mirror == plan.github_proxy)
         }
         PlanField::PipSource => {
             matches!(
-                (plan.pip_display.as_str(), idx),
-                ("系统默认", 0)
-                    | ("清华源", 1)
-                    | ("阿里云源", 2)
-                    | ("腾讯源", 3)
-                    | ("中国科大源", 4)
+                (plan.pip_display.as_str(), plan.pip_index.as_str(), idx),
+                (_, "", 0)
+                    | ("系统默认", _, 0)
+                    | ("阿里云", _, 1)
+                    | ("腾讯云", _, 2)
+                    | ("清华大学", _, 3)
+                    | ("中国科学技术大学", _, 4)
+                    | ("官方源", _, 5)
             )
         }
         PlanField::BotProtocols => {
@@ -1578,14 +1716,17 @@ fn handle_dashboard_key(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> DashboardInputAction {
-    if code == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
+    if matches!(code, KeyCode::Char('q') | KeyCode::Char('c'))
+        && modifiers.contains(KeyModifiers::CONTROL)
+    {
         return DashboardInputAction::Event(DashboardEvent::Exit);
     }
 
     if code == KeyCode::Char('1') && modifiers.contains(KeyModifiers::CONTROL) {
-        if state.focus == DashboardFocus::Sidebar {
+        if state.focus == DashboardFocus::Sidebar && state.popup.is_none() {
             return DashboardInputAction::Idle;
         }
+        state.popup = None;
         state.focus = DashboardFocus::Sidebar;
         return DashboardInputAction::Redraw;
     }
@@ -1597,10 +1738,16 @@ fn handle_dashboard_key(
                 DashboardInputAction::Redraw
             }
             KeyCode::Up | KeyCode::Left => {
+                if popup.actions.is_empty() {
+                    popup.actions.push("取消".to_string());
+                }
                 popup.selected = wrap_index(popup.selected, popup.actions.len(), -1);
                 DashboardInputAction::Redraw
             }
             KeyCode::Down | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                if popup.actions.is_empty() {
+                    popup.actions.push("取消".to_string());
+                }
                 popup.selected = wrap_index(popup.selected, popup.actions.len(), 1);
                 DashboardInputAction::Redraw
             }
@@ -1638,8 +1785,12 @@ fn handle_dashboard_key(
                     DashboardInputAction::Rebuild
                 }
                 DashboardFocus::Content => {
-                    state.move_selection(view.cards.len(), -1);
-                    DashboardInputAction::Redraw
+                    if view.active_tab == DashboardTab::Deploy {
+                        adjust_deploy_choice(state, view, -1)
+                    } else {
+                        state.move_selection(view.cards.len(), -1);
+                        DashboardInputAction::Redraw
+                    }
                 }
             },
             KeyCode::Down => match state.focus {
@@ -1648,10 +1799,42 @@ fn handle_dashboard_key(
                     DashboardInputAction::Rebuild
                 }
                 DashboardFocus::Content => {
-                    state.move_selection(view.cards.len(), 1);
-                    DashboardInputAction::Redraw
+                    if view.active_tab == DashboardTab::Deploy {
+                        adjust_deploy_choice(state, view, 1)
+                    } else {
+                        state.move_selection(view.cards.len(), 1);
+                        DashboardInputAction::Redraw
+                    }
                 }
             },
+            KeyCode::Left => match state.focus {
+                DashboardFocus::Sidebar => DashboardInputAction::Idle,
+                DashboardFocus::Content => {
+                    if view.active_tab == DashboardTab::Deploy {
+                        state.move_selection(view.cards.len(), -1);
+                        DashboardInputAction::Redraw
+                    } else {
+                        DashboardInputAction::Idle
+                    }
+                }
+            },
+            KeyCode::Right => match state.focus {
+                DashboardFocus::Sidebar => DashboardInputAction::Idle,
+                DashboardFocus::Content => {
+                    if view.active_tab == DashboardTab::Deploy {
+                        state.move_selection(view.cards.len(), 1);
+                        DashboardInputAction::Redraw
+                    } else {
+                        DashboardInputAction::Idle
+                    }
+                }
+            },
+            KeyCode::F(5)
+                if view.active_tab == DashboardTab::Deploy
+                    && state.focus == DashboardFocus::Content =>
+            {
+                DashboardInputAction::Event(DashboardEvent::RunDeployPlan)
+            }
             KeyCode::Enter => match state.focus {
                 DashboardFocus::Sidebar => {
                     state.focus = DashboardFocus::Content;
@@ -1660,12 +1843,10 @@ fn handle_dashboard_key(
                 DashboardFocus::Content => {
                     if view.active_tab == DashboardTab::Deploy {
                         if let Some(selected) = view.cards.get(view.selected) {
-                            if deploy_card_field(selected.id).is_some_and(|field| {
-                                field != PlanField::InstallPath && !view.detail_choices.is_empty()
-                            }) {
-                                DashboardInputAction::Event(DashboardEvent::AdjustRight)
-                            } else {
+                            if deploy_card_field(selected.id) == Some(PlanField::InstallPath) {
                                 DashboardInputAction::Event(DashboardEvent::Activate)
+                            } else {
+                                DashboardInputAction::Idle
                             }
                         } else {
                             DashboardInputAction::Idle
@@ -1679,10 +1860,160 @@ fn handle_dashboard_key(
                     }
                 }
             },
+            KeyCode::Char('r')
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && view.active_tab == DashboardTab::Deploy =>
+            {
+                if state.focus == DashboardFocus::Content {
+                    DashboardInputAction::Event(DashboardEvent::ResetDeployPlan)
+                } else {
+                    DashboardInputAction::Idle
+                }
+            }
             KeyCode::Backspace => DashboardInputAction::Event(DashboardEvent::ClearSearch),
             _ => DashboardInputAction::Idle,
         }
     }
+}
+
+fn adjust_deploy_choice(
+    state: &mut DashboardState,
+    view: &DashboardView,
+    delta: isize,
+) -> DashboardInputAction {
+    if view.detail_choices.is_empty()
+        || view
+            .cards
+            .get(view.selected)
+            .and_then(|card| deploy_card_field(card.id))
+            == Some(PlanField::InstallPath)
+    {
+        return DashboardInputAction::Idle;
+    }
+    let Some(plan) = state.deploy_plan.as_mut() else {
+        return DashboardInputAction::Idle;
+    };
+    let Some(card) = view.cards.get(view.selected) else {
+        return DashboardInputAction::Idle;
+    };
+    let Some(field) = deploy_card_field(card.id) else {
+        return DashboardInputAction::Idle;
+    };
+    let current_idx = view
+        .detail_choices
+        .iter()
+        .position(|choice| choice.active)
+        .unwrap_or(0);
+    let next = wrap_index(current_idx, view.detail_choices.len(), delta);
+    apply_cached_planner_choice(plan, field, next);
+    DashboardInputAction::Redraw
+}
+
+fn apply_cached_planner_choice(plan: &mut InstallPlan, field: PlanField, idx: usize) {
+    match field {
+        PlanField::InstallPath => {}
+        PlanField::InstallMode => {
+            plan.install_mode = if idx == 0 {
+                InstallMode::Normal
+            } else {
+                InstallMode::Clean
+            };
+            if plan.install_mode == InstallMode::Clean {
+                plan.venv_mode = VenvMode::Recreate;
+            }
+        }
+        PlanField::PythonEnv => {
+            plan.python_env = if idx == 0 {
+                PythonEnv::System
+            } else {
+                PythonEnv::Uv
+            };
+        }
+        PlanField::VenvMode => {
+            if plan.install_mode != InstallMode::Clean {
+                plan.venv_mode = if idx == 0 {
+                    VenvMode::Keep
+                } else {
+                    VenvMode::Recreate
+                };
+            }
+        }
+        PlanField::MaiBotBranch => {
+            plan.maibot_branch = if idx == 0 { "main" } else { "dev" }.to_string();
+        }
+        PlanField::GithubProxy => {
+            if idx == 0 {
+                plan.github_proxy.clear();
+            } else if idx == 1 {
+                plan.github_proxy = "https://github.com".to_string();
+            } else if let Some(mirror) = github_mirrors().get(idx.saturating_sub(2)) {
+                plan.github_proxy = (*mirror).to_string();
+            }
+        }
+        PlanField::PipSource => match idx {
+            0 => {
+                plan.pip_display = "系统默认".to_string();
+                plan.pip_index.clear();
+                plan.pip_host.clear();
+                plan.uv_index.clear();
+            }
+            1 => set_cached_pip_source(
+                plan,
+                "阿里云",
+                "https://mirrors.aliyun.com/pypi/simple/",
+                "mirrors.aliyun.com",
+            ),
+            2 => set_cached_pip_source(
+                plan,
+                "腾讯云",
+                "http://mirrors.cloud.tencent.com/pypi/simple",
+                "mirrors.cloud.tencent.com",
+            ),
+            3 => set_cached_pip_source(
+                plan,
+                "清华大学",
+                "https://pypi.tuna.tsinghua.edu.cn/simple",
+                "pypi.tuna.tsinghua.edu.cn",
+            ),
+            4 => set_cached_pip_source(
+                plan,
+                "中国科学技术大学",
+                "https://pypi.mirrors.ustc.edu.cn/simple/",
+                "pypi.mirrors.ustc.edu.cn",
+            ),
+            5 => set_cached_pip_source(plan, "官方源", "https://pypi.org/simple", "pypi.org"),
+            _ => {}
+        },
+        PlanField::BotProtocols => {
+            plan.bot_protocols = match idx {
+                0 => vec![BotProtocol::NapCat],
+                1 => vec![BotProtocol::LuckyLilliaBot],
+                _ => Vec::new(),
+            };
+            if !plan.bot_protocols.contains(&BotProtocol::NapCat) {
+                plan.docker_mirror = DockerMirror::Keep;
+            }
+        }
+        PlanField::DockerMirror => {
+            if plan.bot_protocols.contains(&BotProtocol::NapCat) {
+                plan.docker_mirror = match idx {
+                    0 => DockerMirror::OneMs,
+                    1 => DockerMirror::Xuanyuan,
+                    2 => DockerMirror::Official,
+                    _ => DockerMirror::Keep,
+                };
+            } else {
+                plan.docker_mirror = DockerMirror::Keep;
+            }
+        }
+    }
+}
+
+fn set_cached_pip_source(plan: &mut InstallPlan, display: &str, index: &str, host: &str) {
+    plan.pip_display = display.to_string();
+    plan.pip_index = index.to_string();
+    plan.pip_host = host.to_string();
+    plan.uv_index = index.to_string();
 }
 
 fn record_printed_line() {
@@ -2098,10 +2429,31 @@ mod tests {
             render_step_bar(frame, Rect::new(0, 0, 96, 3), &deploy_view);
         });
         let steps = compact_visible_text(&steps);
-        assert!(steps.contains("目录"));
+        assert!(steps.contains("路径"));
         assert!(steps.contains("分支"));
-        assert!(steps.contains("核心配置"));
-        assert!(steps.contains("镜像源"));
+    }
+
+    #[test]
+    fn nord_palette_matches_dashboard_contract() {
+        assert_eq!(BG_BASE, Color::Rgb(46, 52, 64));
+        assert_eq!(TEXT_PRIMARY, Color::Rgb(216, 222, 233));
+        assert_eq!(ACCENT_PRIMARY, Color::Rgb(136, 192, 208));
+        assert_eq!(ACCENT_SECONDARY, Color::Rgb(129, 161, 193));
+        assert_eq!(STATUS_OK, Color::Rgb(163, 190, 140));
+        assert_eq!(STATUS_WARN, Color::Rgb(235, 203, 139));
+        assert_eq!(STATUS_ERROR, Color::Rgb(191, 97, 106));
+        assert_eq!(BORDER_MUTED, Color::Rgb(76, 86, 106));
+    }
+
+    #[test]
+    fn service_table_uses_shortcut_action_column() {
+        let view = sample_dashboard_view(0);
+        let rendered = render_buffer_text(96, 14, |frame| {
+            render_table(frame, Rect::new(0, 0, 96, 14), &view, "核心服务管理");
+        });
+        let visible = compact_visible_text(&rendered);
+        assert!(visible.contains("快捷操作"));
+        assert!(!visible.contains("运行模式"));
     }
 
     #[test]
@@ -2205,7 +2557,7 @@ mod tests {
 
     #[test]
     fn content_navigation_uses_cached_redraw_path() {
-        let view = sample_dashboard_view(0);
+        let mut view = sample_dashboard_view(0);
         let mut state = DashboardState::default();
         state.active_tab = DashboardTab::Core;
         state.focus = DashboardFocus::Content;
@@ -2214,7 +2566,15 @@ mod tests {
             handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
             DashboardInputAction::Redraw
         );
+        sync_cached_dashboard_view(&mut view, &mut state);
         assert_eq!(state.selected(), 1);
+        assert_eq!(view.selected, 1);
+        assert_eq!(view.detail_title, "NapCatQQ");
+        assert_eq!(view.detail_subtitle, "协议端服务状态");
+        assert_eq!(
+            view.detail_lines,
+            vec!["状态: 未运行".to_string(), "摘要: 协议端详情".to_string()]
+        );
 
         assert_eq!(
             handle_dashboard_key(&mut state, &view, KeyCode::Char('1'), KeyModifiers::CONTROL),
@@ -2225,10 +2585,14 @@ mod tests {
             handle_dashboard_key(&mut state, &view, KeyCode::Char('q'), KeyModifiers::CONTROL),
             DashboardInputAction::Event(DashboardEvent::Exit)
         );
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Char('c'), KeyModifiers::CONTROL),
+            DashboardInputAction::Event(DashboardEvent::Exit)
+        );
     }
 
     #[test]
-    fn deploy_navigation_refreshes_choices_without_rebuild() {
+    fn deploy_left_right_switch_steps_and_up_down_adjust_choices() {
         let mut view = DashboardView {
             mode: AppMode::ContentFocused,
             active_tab: DashboardTab::Deploy,
@@ -2259,6 +2623,15 @@ mod tests {
                     detail: "分支详情".to_string(),
                     kind: StatusKind::Neutral,
                 },
+                DashboardCard {
+                    id: "deploy-mode",
+                    icon: "M",
+                    title: "模式".to_string(),
+                    subtitle: "正常更新/修复".to_string(),
+                    badge: "模式".to_string(),
+                    detail: "模式详情".to_string(),
+                    kind: StatusKind::Neutral,
+                },
             ],
             selected: 0,
             empty_title: String::new(),
@@ -2269,14 +2642,14 @@ mod tests {
         state.focus = DashboardFocus::Content;
         state.deploy_plan = Some(InstallPlan {
             maibot_branch: "main".to_string(),
-            github_proxy: "auto".to_string(),
+            github_proxy: String::new(),
             pip_display: "系统默认".to_string(),
             bot_protocols: vec![BotProtocol::NapCat],
             ..InstallPlan::default()
         });
 
         assert_eq!(
-            handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
+            handle_dashboard_key(&mut state, &view, KeyCode::Right, KeyModifiers::empty()),
             DashboardInputAction::Redraw
         );
         sync_cached_dashboard_view(&mut view, &mut state);
@@ -2286,6 +2659,70 @@ mod tests {
         assert_eq!(view.detail_choices.len(), 2);
         assert!(view.detail_choices[0].active);
         assert_eq!(view.detail_choices[0].label, "main");
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        sync_cached_dashboard_view(&mut view, &mut state);
+        assert!(view.detail_choices[1].active);
+        assert_eq!(
+            state
+                .deploy_plan
+                .as_ref()
+                .map(|plan| plan.maibot_branch.as_str()),
+            Some("dev")
+        );
+        assert_eq!(view.cards[1].subtitle, "dev");
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Left, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        sync_cached_dashboard_view(&mut view, &mut state);
+        assert_eq!(view.selected, 0);
+        assert_eq!(view.detail_title, "安装路径");
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::F(5), KeyModifiers::empty()),
+            DashboardInputAction::Event(DashboardEvent::RunDeployPlan)
+        );
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Char('r'), KeyModifiers::CONTROL),
+            DashboardInputAction::Event(DashboardEvent::ResetDeployPlan)
+        );
+        state.focus = DashboardFocus::Sidebar;
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::F(5), KeyModifiers::empty()),
+            DashboardInputAction::Idle
+        );
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Char('r'), KeyModifiers::CONTROL),
+            DashboardInputAction::Idle
+        );
+    }
+
+    #[test]
+    fn deploy_cached_choice_keeps_dependent_fields_consistent() {
+        let mut plan = InstallPlan {
+            bot_protocols: vec![BotProtocol::NapCat],
+            docker_mirror: DockerMirror::OneMs,
+            pip_display: String::new(),
+            pip_index: String::new(),
+            ..InstallPlan::default()
+        };
+
+        assert!(planner_choice_active_for_plan(
+            &plan,
+            PlanField::PipSource,
+            0
+        ));
+        apply_cached_planner_choice(&mut plan, PlanField::BotProtocols, 2);
+
+        assert!(plan.bot_protocols.is_empty());
+        assert_eq!(plan.docker_mirror, DockerMirror::Keep);
+        apply_cached_planner_choice(&mut plan, PlanField::DockerMirror, 0);
+        assert_eq!(plan.docker_mirror, DockerMirror::Keep);
     }
 
     #[test]
@@ -2328,21 +2765,21 @@ mod tests {
     }
 
     #[test]
-    fn protocol_popup_keeps_unsupported_platform_actions_clear() {
+    fn protocol_popup_keeps_unavailable_platform_actions_clear() {
         let mut view = sample_dashboard_view(0);
         view.active_tab = DashboardTab::Protocol;
         view.cards = vec![DashboardCard {
-            id: "napcat-todo",
+            id: "napcat-note",
             icon: "N",
             title: "NapCatQQ".to_string(),
-            subtitle: "macOS 暂未适配".to_string(),
-            badge: "TODO".to_string(),
-            detail: "会明确返回 unsupported，而不是假装可用。".to_string(),
+            subtitle: "macOS 版目前仅提供说明入口".to_string(),
+            badge: "说明".to_string(),
+            detail: "会清晰提示当前平台限制，不显示不可执行的操作。".to_string(),
             kind: StatusKind::Warning,
         }];
         view.selected = 0;
-        let unsupported = popup_for_selection(&view).expect("unsupported protocol popup");
-        assert_eq!(unsupported.actions, vec!["查看说明", "取消"]);
+        let unavailable = popup_for_selection(&view).expect("unavailable protocol popup");
+        assert_eq!(unavailable.actions, vec!["查看说明", "取消"]);
 
         view.cards[0].id = "napcat";
         let supported = popup_for_selection(&view).expect("supported protocol popup");
@@ -2350,6 +2787,17 @@ mod tests {
             supported.actions,
             vec!["启动", "停止", "日志", "更多控制", "取消"]
         );
+    }
+
+    #[test]
+    fn popup_actions_are_never_empty() {
+        let mut actions = Vec::new();
+        ensure_popup_actions(&mut actions);
+        assert_eq!(actions, vec!["打开", "取消"]);
+
+        let mut actions = vec!["".to_string(), "启动".to_string()];
+        ensure_popup_actions(&mut actions);
+        assert_eq!(actions, vec!["启动", "取消"]);
     }
 
     #[test]

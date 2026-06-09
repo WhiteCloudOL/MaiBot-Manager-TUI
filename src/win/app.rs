@@ -1,16 +1,16 @@
 use anyhow::{Error, Result, anyhow, bail};
 use dialoguer::console::style;
-use std::cell::RefCell;
 use std::{
+    cell::RefCell,
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 use crate::model::{
     DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardState, DashboardTab,
-    DashboardView, InstallPlan, PlanAction, PlanField, StatusKind, deploy_card_action,
-    deploy_card_field,
+    DashboardView, InstallPlan, PlanField, StatusKind, deploy_card_field,
 };
 use crate::theme::AppTheme;
 use crate::ui::{ActionItem, StatusCard};
@@ -39,9 +39,12 @@ struct DashboardRuntimeSnapshot {
 struct DashboardRuntimeCache {
     snapshot: Option<DashboardRuntimeSnapshot>,
     refreshed_at: Option<Instant>,
+    plugin_cards: Option<Vec<DashboardCard>>,
+    plugin_cards_refreshed_at: Option<Instant>,
 }
 
-const DASHBOARD_STATUS_TTL: Duration = Duration::from_secs(5);
+const DASHBOARD_STATUS_TTL: Duration = Duration::from_secs(10);
+const LOG_SUMMARY_TAIL_BYTES: u64 = 64 * 1024;
 
 impl App {
     pub(crate) fn new() -> Result<Self> {
@@ -102,6 +105,8 @@ impl App {
         let mut cache = self.dashboard_cache.borrow_mut();
         cache.snapshot = None;
         cache.refreshed_at = None;
+        cache.plugin_cards = None;
+        cache.plugin_cards_refreshed_at = None;
     }
 
     pub(crate) fn run(&mut self) -> Result<()> {
@@ -113,9 +118,6 @@ impl App {
             let event = self
                 .dashboard_event_loop(&mut dashboard, |state| self.build_dashboard_view(state))?;
             match event {
-                DashboardEvent::AdjustRight => {
-                    self.adjust_dashboard_selection(&mut dashboard, 1)?
-                }
                 DashboardEvent::ClearSearch => {
                     if !dashboard.search_query.is_empty() {
                         dashboard.search_query.clear();
@@ -132,6 +134,23 @@ impl App {
                     } else if !self.activate_dashboard_selection(&mut dashboard)? {
                         break;
                     }
+                }
+                DashboardEvent::ResetDeployPlan => {
+                    let reset = self.build_recommended_defaults();
+                    dashboard.deploy_plan = Some(reset);
+                    dashboard.set_status_message("已恢复推荐默认部署配置");
+                }
+                DashboardEvent::RunDeployPlan => {
+                    let plan = if let Some(plan) = dashboard.deploy_plan.as_ref() {
+                        plan.clone()
+                    } else {
+                        let current = self.load_config().unwrap_or_default();
+                        self.build_default_install_plan(&current)?
+                    };
+                    self.handle_menu_result(self.run_install(&plan))?;
+                    dashboard.deploy_plan = Some(plan);
+                    dashboard.set_status_message("安装流程已执行");
+                    self.invalidate_dashboard_cache();
                 }
                 DashboardEvent::Exit => break,
             }
@@ -156,7 +175,8 @@ impl App {
         let selected_card = cards.get(selected).cloned();
         let (page_title, _, _, _, detail_title, detail_subtitle) =
             self.dashboard_headers(state.active_tab, selected_card.as_ref());
-        let detail_lines = self.dashboard_detail_lines(state.active_tab, selected_card.as_ref())?;
+        let detail_lines =
+            self.dashboard_detail_lines(state, state.active_tab, selected_card.as_ref())?;
         let detail_choices =
             self.dashboard_detail_choices(state, cards.get(selected).map(|card| card.id))?;
         let action_lines = self.dashboard_action_lines(state.active_tab, selected_card.as_ref());
@@ -593,6 +613,16 @@ impl App {
     }
 
     fn plugin_cards(&self) -> Result<Vec<DashboardCard>> {
+        {
+            let cache = self.dashboard_cache.borrow();
+            if let (Some(cards), Some(refreshed_at)) =
+                (cache.plugin_cards.as_ref(), cache.plugin_cards_refreshed_at)
+                && refreshed_at.elapsed() < DASHBOARD_STATUS_TTL
+            {
+                return Ok(cards.clone());
+            }
+        }
+
         let snapshot = self.dashboard_snapshot();
         let cfg = &snapshot.config;
         if !snapshot.has_config {
@@ -647,6 +677,9 @@ impl App {
                 kind: StatusKind::Running,
             });
         }
+        let mut cache = self.dashboard_cache.borrow_mut();
+        cache.plugin_cards = Some(cards.clone());
+        cache.plugin_cards_refreshed_at = Some(Instant::now());
         Ok(cards)
     }
 
@@ -693,6 +726,7 @@ impl App {
 
     fn dashboard_detail_lines(
         &self,
+        state: &DashboardState,
         tab: DashboardTab,
         selected: Option<&DashboardCard>,
     ) -> Result<Vec<String>> {
@@ -703,8 +737,9 @@ impl App {
         }
         match tab {
             DashboardTab::Overview => {
-                let cfg = self.load_config().unwrap_or_default();
-                if cfg.mai_path.is_empty() {
+                let snapshot = self.dashboard_snapshot();
+                let cfg = snapshot.config;
+                if !snapshot.has_config {
                     lines.push("尚未检测到 ~/.maibot_config。".to_string());
                     lines.push("建议先切换到「部署与更新」并完成安装规划。".to_string());
                 } else {
@@ -775,30 +810,17 @@ impl App {
                 }
             }
             DashboardTab::Deploy => {
-                lines.push("步骤条聚焦路径、分支与安装模式。".to_string());
-                lines.push("路径项会打开输入框，其他项使用单选列表。".to_string());
-                lines.push("开始安装与恢复默认作为表单动作保留。".to_string());
-                if let (Some(plan), Some(card)) = (
-                    self.load_config()
-                        .ok()
-                        .and_then(|cfg| self.build_default_install_plan(&cfg).ok()),
-                    selected,
-                ) {
-                    if let Some(field) = deploy_card_field(card.id) {
-                        let choices = self.planner_choices(&plan, field);
-                        if !choices.is_empty() {
-                            lines.push("可选项:".to_string());
-                            for choice in choices.into_iter().take(4) {
-                                lines.push(format!(" - {choice}"));
-                            }
+                lines.push("当前表单会实时组成下一次安装或更新计划。".to_string());
+                lines.push("路径项可打开输入框，其余配置会即时更新到当前部署计划。".to_string());
+                if let (Some(plan), Some(card)) = (state.deploy_plan.as_ref(), selected)
+                    && let Some(field) = deploy_card_field(card.id)
+                {
+                    let choices = self.planner_choices(plan, field);
+                    if !choices.is_empty() {
+                        lines.push("可选项:".to_string());
+                        for choice in choices.into_iter().take(4) {
+                            lines.push(format!(" - {choice}"));
                         }
-                    } else if let Some(action) = deploy_card_action(card.id) {
-                        let label = match action {
-                            PlanAction::StartInstall => "立即执行安装 / 更新",
-                            PlanAction::ResetDefaults => "恢复推荐默认值",
-                            PlanAction::BackToMenu => "返回顶部标签",
-                        };
-                        lines.push(format!("当前动作: {label}"));
                     }
                 }
             }
@@ -933,13 +955,13 @@ impl App {
                 }
             }
             DashboardTab::Plugins => {
+                let snapshot = self.dashboard_snapshot();
                 if let Some(card) = selected {
                     lines.push(format!("插件项: {}", card.title));
-                    if let Ok(cfg) = self.load_config()
-                        && !cfg.mai_path.is_empty()
-                    {
-                        let plugins_dir =
-                            PathBuf::from(&cfg.mai_path).join("MaiBot").join("plugins");
+                    if snapshot.has_config {
+                        let plugins_dir = PathBuf::from(&snapshot.config.mai_path)
+                            .join("MaiBot")
+                            .join("plugins");
                         if let Some(dir) =
                             self.find_plugin_dir_by_card_title(&plugins_dir, &card.title)
                             && let Ok(summary) = self.read_plugin_summary(&dir)
@@ -961,12 +983,10 @@ impl App {
                 }
                 lines.push("插件目录按 _manifest.json 中的 id 规范化命名。".to_string());
                 lines.push("依赖修复会复用当前 Python/uv 安装策略。".to_string());
-                if let Ok(cfg) = self.load_config()
-                    && !cfg.mai_path.is_empty()
-                {
+                if snapshot.has_config {
                     lines.push(format!(
                         "目录: {}",
-                        PathBuf::from(cfg.mai_path)
+                        PathBuf::from(snapshot.config.mai_path)
                             .join("MaiBot")
                             .join("plugins")
                             .display()
@@ -999,8 +1019,8 @@ impl App {
                 actions.push("服务与模块索引".to_string());
             }
             DashboardTab::Deploy => {
-                actions.push("当前步骤与表单动作已连接安装规划器".to_string());
-                actions.push("单选项会写回部署计划".to_string());
+                actions.push("当前配置会组成下一次安装或更新计划".to_string());
+                actions.push("恢复默认会回到推荐路径、环境与协议端组合".to_string());
             }
             DashboardTab::Core => {
                 actions.push("当前动作块会复用核心服务逻辑".to_string());
@@ -1149,40 +1169,17 @@ impl App {
                 let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
                 let selected = cards.get(state.selected_for_len(cards.len()));
                 if let Some(plan) = state.deploy_plan.as_ref() {
-                    match selected.and_then(|card| deploy_card_action(card.id)) {
-                        Some(PlanAction::StartInstall) => {
-                            self.handle_menu_result(self.run_install(plan))?;
-                            self.invalidate_dashboard_cache();
-                            state.set_status_message("安装流程已执行");
-                        }
-                        Some(PlanAction::ResetDefaults) => {
-                            let reset = self.build_recommended_defaults();
-                            self.save_config(&self.plan_to_config(&reset))?;
-                            self.invalidate_dashboard_cache();
-                            state.deploy_plan = Some(reset);
-                            state.set_status_message("已恢复推荐默认部署配置");
-                        }
-                        Some(PlanAction::BackToMenu) => {
-                            state.focus = DashboardFocus::Sidebar;
-                            state.set_status_message("已返回导航");
-                        }
-                        None => {
-                            let Some(field) = selected.and_then(|card| deploy_card_field(card.id))
-                            else {
-                                return Ok(true);
-                            };
-                            if field == PlanField::InstallPath {
-                                let mut new_plan = plan.clone();
-                                self.edit_install_path(&mut new_plan)?;
-                                self.save_config(&self.plan_to_config(&new_plan))?;
-                                self.invalidate_dashboard_cache();
-                                state.deploy_plan = Some(new_plan.clone());
-                                state.set_status_message(format!(
-                                    "目录已更新为 {}",
-                                    new_plan.install_path.display()
-                                ));
-                            }
-                        }
+                    let Some(field) = selected.and_then(|card| deploy_card_field(card.id)) else {
+                        return Ok(true);
+                    };
+                    if field == PlanField::InstallPath {
+                        let mut new_plan = plan.clone();
+                        self.edit_install_path(&mut new_plan)?;
+                        state.deploy_plan = Some(new_plan.clone());
+                        state.set_status_message(format!(
+                            "目录已更新为 {}",
+                            new_plan.install_path.display()
+                        ));
                     }
                 }
             }
@@ -1384,57 +1381,6 @@ impl App {
         Ok(true)
     }
 
-    fn adjust_dashboard_selection(
-        &mut self,
-        state: &mut DashboardState,
-        delta: isize,
-    ) -> Result<()> {
-        if state.active_tab != DashboardTab::Deploy
-            || matches!(state.focus, DashboardFocus::Sidebar)
-        {
-            state.focus = DashboardFocus::Sidebar;
-            return Ok(());
-        }
-        let current = self.load_config().unwrap_or_default();
-        if state.deploy_plan.is_none() {
-            state.deploy_plan = Some(self.build_default_install_plan(&current)?);
-        }
-        let cards = self.dashboard_cards(&DashboardTab::Deploy, &state.search_query)?;
-        let selected = state.selected_for_len(cards.len());
-        let Some(card) = cards.get(selected) else {
-            return Ok(());
-        };
-        let Some(field) = deploy_card_field(card.id) else {
-            return Ok(());
-        };
-        if field == PlanField::InstallPath {
-            state.set_status_message("目录项使用输入框编辑");
-            return Ok(());
-        }
-        let Some(plan) = state.deploy_plan.as_mut() else {
-            return Ok(());
-        };
-        let choices = self.planner_choices(plan, field);
-        if choices.is_empty() {
-            return Ok(());
-        }
-        let current_idx = choices
-            .iter()
-            .enumerate()
-            .find_map(|(idx, _)| self.planner_choice_active(plan, field, idx).then_some(idx))
-            .unwrap_or(0);
-        let next = (current_idx as isize + delta).rem_euclid(choices.len() as isize) as usize;
-        self.apply_planner_choice(&current, plan, field, next)?;
-        self.save_config(&self.plan_to_config(plan))?;
-        let message = format!(
-            "{} 已切换为 {}",
-            self.planner_field_label(field),
-            self.planner_field_value(plan, field)
-        );
-        state.set_status_message(message);
-        Ok(())
-    }
-
     fn find_plugin_dir_by_card_title(&self, plugins_dir: &Path, title: &str) -> Option<PathBuf> {
         let plugins = list_plugins(plugins_dir).ok()?;
         for plugin in plugins {
@@ -1543,33 +1489,6 @@ impl App {
                 kind: StatusKind::Neutral,
             });
         }
-        cards.push(DashboardCard {
-            id: "deploy-start",
-            icon: "󰐊",
-            title: "开始安装 / 更新".to_string(),
-            subtitle: "应用当前部署计划".to_string(),
-            badge: "执行".to_string(),
-            detail: "应用当前部署计划并开始安装或更新。".to_string(),
-            kind: StatusKind::Running,
-        });
-        cards.push(DashboardCard {
-            id: "deploy-reset",
-            icon: "󰑓",
-            title: "恢复推荐默认".to_string(),
-            subtitle: "HOME/maimai + uv + NapCatQQ".to_string(),
-            badge: "重置".to_string(),
-            detail: "恢复推荐部署配置。".to_string(),
-            kind: StatusKind::Warning,
-        });
-        cards.push(DashboardCard {
-            id: "deploy-back",
-            icon: "󰁍",
-            title: "返回导航".to_string(),
-            subtitle: "切回侧边栏导航".to_string(),
-            badge: "导航".to_string(),
-            detail: "回到侧边栏导航。".to_string(),
-            kind: StatusKind::Neutral,
-        });
         cards
     }
 
@@ -1678,7 +1597,7 @@ fn deploy_fields() -> &'static [PlanField] {
 fn planner_field_detail(field: PlanField) -> &'static str {
     match field {
         PlanField::InstallPath => "MaiBot 工作区路径；首次会自动创建目录。",
-        PlanField::MaiBotBranch => "在稳定版 main 和开发版 dev 之间切换。",
+        PlanField::MaiBotBranch => "在稳定版 main 和预览版 dev 之间切换。",
         PlanField::InstallMode => "决定是修复更新还是清空目录后全新安装。",
         PlanField::PythonEnv => "选择本机 Python 或由 uv 管理的独立环境。",
         PlanField::VenvMode => "控制是否保留现有虚拟环境，Clean 模式会强制重建。",
@@ -1752,7 +1671,13 @@ fn deploy_choice_detail(field: PlanField, idx: usize, label: &str) -> String {
 }
 
 fn read_log_summary(path: &PathBuf, lines: usize) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(LOG_SUMMARY_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
     let summary = text
         .lines()
         .rev()

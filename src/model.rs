@@ -339,10 +339,11 @@ pub struct DashboardView {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardEvent {
-    AdjustRight,
     Activate,
     ClearSearch,
     Exit,
+    ResetDeployPlan,
+    RunDeployPlan,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -376,15 +377,6 @@ pub fn deploy_card_field(id: &str) -> Option<PlanField> {
         "deploy-pypi" => Some(PlanField::PipSource),
         "deploy-bots" => Some(PlanField::BotProtocols),
         "deploy-docker" => Some(PlanField::DockerMirror),
-        _ => None,
-    }
-}
-
-pub fn deploy_card_action(id: &str) -> Option<PlanAction> {
-    match id {
-        "deploy-start" => Some(PlanAction::StartInstall),
-        "deploy-reset" => Some(PlanAction::ResetDefaults),
-        "deploy-back" => Some(PlanAction::BackToMenu),
         _ => None,
     }
 }

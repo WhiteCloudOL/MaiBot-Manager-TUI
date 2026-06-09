@@ -44,7 +44,7 @@ This is a single-binary TUI + CLI that orchestrates platform shell commands to i
 
 **Windows implementation.** Windows commands should prefer BAT/cmd syntax executed through `App::run_shell`, which writes a temporary `.bat` and invokes `cmd.exe /C`. Use PowerShell only when cmd has no good primitive, currently UAC elevation via `Start-Process -Verb RunAs`, log tailing, process-window fallbacks, and launching the MaiBot BAT wrapper with `Start-Process -PassThru` so the manager can record a PID. Do not use `winget` or install required tooling globally from the manager. If Git / uv / Python are missing, Windows install should prepare portable tooling under `<install>/tools` (`tools/git`, `tools/uv`, `tools/python`, `tools/uv-cache`) and prepend those paths only for manager-owned commands. MaiBot core writes `<install>/logs/start-maibot.bat`, opens it in an independent cmd window through PowerShell `Start-Process`, writes the returned cmd PID to `<install>/logs/maibot.pid`, and stops by `taskkill /PID <pid> /T /F`; do not reintroduce `Tee-Object` or direct child stdout inheritance because they broke PID tracking and UTF-8/colorama output. Windows NapCat must use GitHub API to fetch the latest `NapCat.Shell.zip` from `NapNeko/NapCatQQ`, not Docker. Windows LLBot must use GitHub API to fetch the latest `LLBot-Desktop-win-x64.zip` from `LLOneBot/LuckyLilliaBot`, not the CLI zip. Apply the selected GitHub proxy to both API URLs and release asset URLs.
 
-**macOS implementation.** macOS commands should use native shell commands through `/bin/zsh -lc` and Homebrew for dependency bootstrap. If Homebrew is missing, call the official Homebrew install script; if Git / uv / Python are missing, install them with `brew install` rather than portable Windows tooling or Linux package managers. Keep Homebrew path prefixes (`/opt/homebrew`, `/usr/local`) in manager-owned commands. macOS currently installs and manages MaiBot core only; NapCat and LLBot protocol endpoints are intentionally TODO and should return clear unsupported messages until implemented. macOS core start does not use `screen`: default start creates a background child process in its own process group, redirects stdout/stderr to `<install>/logs/maibot.log`, records `<install>/logs/maibot.pid` for status/stop, and returns immediately so MaiBot keeps running after the manager exits. TUI start must offer a timed launch-mode choice for first-run/EULA interaction; if the user does not choose within the timeout, default to background start. In TUI, the interactive option opens a Terminal.app launcher that writes the same pid/log files; in CLI, `core start --exec` attaches the current terminal for EULA. `core exec` follows the log file rather than attaching to a terminal multiplexer. Do not add Docker, LinuxQQ, BAT/cmd, PowerShell, winget, apt/dnf/yum/pacman/zypper/apk, or `screen` process management logic to macOS modules.
+**macOS implementation.** macOS commands should use native shell commands through `/bin/zsh -lc` and Homebrew for dependency bootstrap. If Homebrew is missing, call the official Homebrew install script; if Git / uv / Python are missing, install them with `brew install` rather than portable Windows tooling or Linux package managers. Keep Homebrew path prefixes (`/opt/homebrew`, `/usr/local`) in manager-owned commands. macOS currently installs and manages MaiBot core only; NapCat and LLBot protocol entries should return clear, user-facing platform capability messages until native protocol management is available. macOS core start does not use `screen`: default start creates a background child process in its own process group, redirects stdout/stderr to `<install>/logs/maibot.log`, records `<install>/logs/maibot.pid` for status/stop, and returns immediately so MaiBot keeps running after the manager exits. TUI start must offer a timed launch-mode choice for first-run/EULA interaction; if the user does not choose within the timeout, default to background start. In TUI, the interactive option opens a Terminal.app launcher that writes the same pid/log files; in CLI, `core start --exec` attaches the current terminal for EULA. `core exec` follows the log file rather than attaching to a terminal multiplexer. Do not add Docker, LinuxQQ, BAT/cmd, PowerShell, winget, apt/dnf/yum/pacman/zypper/apk, or `screen` process management logic to macOS modules.
 
 **CLI contract.** CLI commands should reuse the same `App` action methods used by TUI menus rather than duplicating shell strings. `maibot install` / `maibot update` build an `InstallPlan` from existing config plus command-line overrides and then call `run_install`. CLI may ask for confirmation at risk points, but every install/update prompt that blocks scripting must have an explicit CLI strategy flag that bypasses the prompt: `--github-fallback`, `--git-dirty`, `--napcat-conflict`, `--llbot-update`. `maibot access init` prompts by default and `--yes` bypasses it. `maibot core|napcat|llbot ...` should remain script-friendly: status/log commands print and exit, while interactive commands (`core exec`, `llbot exec`, `napcat exec`) intentionally inherit stdio.
 
@@ -64,7 +64,7 @@ This is a single-binary TUI + CLI that orchestrates platform shell commands to i
 
 **Terminal modes.** The planner runs under `TerminalUiGuard` (raw mode + hidden cursor, restored on Drop). `dialoguer` prompts conflict with raw mode — when you need an `Input`/`Confirm`/`Select` from inside the planner, wrap it in `App::with_prompt_mode(|| ...)` which temporarily disables raw mode. `terminal.rs` also installs a `ctrlc` handler so abnormal exits still restore the terminal.
 
-**Linux screen-based background jobs.** Linux long-running processes are wrapped in `screen -dmS <name>` sessions. Hardcoded Linux session names: `maibot`, `llbot`, `mai-lpmm-info`, `mai-lpmm-import`. Linux status detection is `utils::screen_exists` (or `docker ps` filter for NapCat). Main menu's "running" indicators read these platform-specific backends. CLI logs for Linux screen-backed services should use `screen -X hardcopy` (snapshot or follow loop) rather than `screen -r`, so log viewing does not attach to or disturb the running session. Linux `exec` commands may attach, but must keep the warning prompt.
+**Linux screen-based background jobs.** Linux long-running processes are wrapped in `screen -dmS <name>` sessions. Hardcoded Linux session names: `maibot`, `llbot`, `mai-lpmm-info`, `mai-lpmm-import`. Linux status detection is `utils::screen_exists`; dashboard pages should use `utils::screen_sessions_exist` when checking more than one session so one `screen -list` result can feed multiple cards. NapCat status uses a direct `docker ps` probe with a short Rust-side timeout. Main menu's "running" indicators read these platform-specific backends through the dashboard runtime cache, not on every content-row move. CLI logs for Linux screen-backed services should use `screen -X hardcopy` (snapshot or follow loop) rather than `screen -r`, so log viewing does not attach to or disturb the running session. Linux `exec` commands may attach, but must keep the warning prompt.
 
 **LLBot updates.** `install_llbot` reads the latest LuckyLilliaBot release, stores the installed tag in `<install>/LLBot/.maibot-llbot-release`, and preserves absolute-path `LLBot/bin/llbot/data` plus `LLBot/bin/llbot/default_config.json` across updates. If an installed LLBot is not current, TUI/CLI prompt by default; `--llbot-update update` updates without prompting and `--llbot-update skip` keeps the existing install.
 
@@ -78,36 +78,38 @@ This is a single-binary TUI + CLI that orchestrates platform shell commands to i
 
 ## Modern TUI roadmap
 
-The desktop experience has moved from the legacy vertical menu to a modern tabbed TUI while keeping the existing CLI contract, platform shell-command behavior, and install/service logic intact. Treat this section as the maintenance contract for future TUI work.
+The desktop experience has moved from the legacy vertical menu to a modern ratatui dashboard while keeping the existing CLI contract, platform shell-command behavior, and install/service logic intact. Treat this section as the maintenance contract for future TUI work.
 
 **Target experience.**
 
-- Replace the single vertical main menu with a top tab bar under the build-time header.
-- Use a wide-screen two-column workspace by default: navigation/cards on the left, detail/actions on the right.
-- Add a contextual bottom status bar: left side for global state messages, right side for panel-specific key hints.
-- Adopt a richer semantic theme inspired by modern TUIs (for example Gruvbox / Nord / Monokai families), with clear running/warning/error/info colors.
+- Use the current holy-grail layout: a height-3 build-time header, a left sidebar, a main content area, and a single-line footer.
+- Keep the sidebar as the only global navigation surface. `Tab` moves focus between sidebar and content; `Ctrl+1` returns to the sidebar quickly.
+- Keep all global and contextual key hints in the footer. Do not scatter "Enter/Tab" hints across panels.
+- Use the Nord minimalist cool palette globally: bg `#2E3440`, text `#D8DEE9`, focus/accent `#88C0D0`, selected-row accent `#81A1C1`, success `#A3BE8C`, warning `#EBCB8B`, error `#BF616A`, and muted borders `#4C566A`.
 - Introduce Nerd Font friendly icons for tabs, status chips, actions, and cards. Keep graceful text fallback behavior when icons render poorly.
 - Shorten copy throughout the TUI so titles, subtitles, labels, and body text form a clear visual hierarchy.
 
 **Information architecture.**
 
-- Tabs: `概览`, `部署与更新`, `核心服务管理`, `协议端服务`, `访问配置`, `插件中心`, `关于`.
-- `概览`: service cards on the left, selected service detail/log/actions on the right.
-- `部署与更新`: step rail on the left, editable choice/detail panel on the right, with contextual action buttons near the selected step.
-- `核心服务管理`: focused control dashboard with large status indicator plus action blocks navigated by `Tab`.
-- `协议端服务`: keep platform-specific behavior, but present NapCat / LLBot panels with the same shared layout language; unsupported macOS entries must stay explicit.
+- Sidebar entries: `概览`, `部署与更新`, `核心服务管理`, `协议端服务`, `插件中心`, `设置`, `关于`.
+- `概览`: service and workspace rows in a full-width table with a compact detail panel below.
+- `部署与更新`: horizontal stepper at the top, current field options in the main panel, read-only config summary on the side, and description below. `Left/Right` changes the selected field; `Up/Down` changes the option inside that field. `F5` runs install/update, `Ctrl+R` resets the in-memory plan to recommended defaults, and `Enter` edits only the path field.
+- `核心服务管理`: full-width table with `名称 / 状态 / 版本 / 快捷操作` columns plus centered modal actions.
+- `协议端服务`: keep platform-specific behavior, but present NapCat / LLBot panels with the same shared layout language; unavailable macOS entries must stay explicit and written in natural product language.
 - `访问配置`: compact info cards plus direct actions for init/copy/view style tasks where supported.
-- `插件中心`: searchable plugin cards on the left, manifest/details/actions on the right.
+- `插件中心`: full-width plugin table with the same shortcut-action column language plus centered modal actions.
 - `关于`: build metadata, documentation links, runtime environment, and troubleshooting hints.
 
 **Current implementation.**
 
-- `src/ui.rs` owns the shared modern TUI renderer: top tabs, responsive split/stacked panels, card rows, section headers, search rendering, contextual status bar, action menu drawing, and raw-mode prompt switching.
-- `src/model.rs` owns dashboard state and view models: tabs, focus zones, selected cards, filters, detail choices, contextual status messages, and dashboard events.
+- `src/ui.rs` owns the shared modern TUI renderer: header/sidebar/content/footer layout, rounded blocks, responsive deployment form, table views, centered modals, contextual footer, action menu drawing, and raw-mode prompt switching.
+- `src/model.rs` owns dashboard state and view models: sidebar tabs, focus zones, selected rows, filters, detail choices, contextual status messages, deployment events, and popup state.
 - Each platform `app.rs` drives the tab shell with platform-specific cards/details/actions, but must still call the same underlying install/service/access/plugin methods used by CLI and legacy submenus.
 - Wide terminals render a two-column workspace; narrow terminals must degrade to stacked panels without overflowing. Readability bugs in either layout are regressions.
 - The dashboard can show "running but config/path not recorded" as a warning state. Do not display contradictory copy such as "running" plus "not installed"; prefer "配置待同步" / "configuration pending sync".
 - The `About` tab is read-only: Enter should not exit the manager. Top-level exit is `Ctrl+C`.
+- Content-row movement and popup opening must use cached redraw paths and must not trigger platform probes, filesystem scans, or shell commands. Rebuilds should happen when changing sidebar sections or after actions that can alter runtime state.
+- Platform dashboard caches should keep short-lived runtime snapshots and plugin card snapshots. Linux status probes must stay bounded by Rust-side timeouts and should batch `screen` session checks when possible.
 - `scripts/verify_tui_capture.py` is the PTY smoke-test helper for final screen snapshots. Keep it able to allocate a controlling terminal, set rows/cols, drive key timelines, and report `overflow`.
 
 **Non-negotiable constraints.**
@@ -116,8 +118,9 @@ The desktop experience has moved from the legacy vertical menu to a modern tabbe
 - Keep platform isolation rules intact; shared code must not pull in non-current-platform modules.
 - Preserve `TerminalUiGuard`, `with_prompt_mode`, and prompt safety when mixing raw-mode panels with `dialoguer`.
 - Keep CJK-aware alignment via `display_width` and related helpers; new layout code must not assume ASCII-only widths.
-- Keep unsupported macOS NapCat / LLBot flows explicit instead of faking parity.
+- Keep unavailable macOS NapCat / LLBot flows explicit instead of faking parity, and avoid raw implementation-status labels in user-facing UI copy.
 - When Nerd Font icons are added, surrounding labels must remain understandable even if the terminal lacks glyph support.
+- Do not render internal UI metadata such as current focus, layout mode, or item counters. If a value exists only to explain the implementation, keep it out of the interface.
 
 **Validation expectations.**
 
@@ -126,7 +129,7 @@ The desktop experience has moved from the legacy vertical menu to a modern tabbe
   `cargo build --release --target x86_64-pc-windows-msvc --target-dir target\windows-verify`,
   then run `target\windows-verify\x86_64-pc-windows-msvc\release\maibot-manager-tui.exe --help`
   and `target\windows-verify\x86_64-pc-windows-msvc\release\maibot-manager-tui.exe tui`.
-- Use WSL for Linux reality checks from Windows: `cargo build`, `cargo check --target x86_64-unknown-linux-musl`, and `scripts/verify_tui_capture.py` in `wide`, `narrow`, and `tabs` modes.
-- Inspect PTY capture output for `overflow: false`, correct `布局: 双栏面板` in wide mode, correct `布局: 紧凑堆叠` in narrow mode, sensible tab/focus status hints, and no contradictory running/installed state text.
-- Manually sanity-check raw-mode navigation paths for tabs, split panes, install planner, service action focus, search prompt entry/exit, and `Ctrl+C` terminal restoration.
+- Use WSL for Linux reality checks from Windows: `cargo build`, `cargo check --target x86_64-unknown-linux-musl`, and `scripts/verify_tui_capture.py` in `wide`, `narrow`, `tabs`, and `deploy` modes.
+- Inspect PTY capture output for `overflow: false`, visible rounded blocks, expected sidebar/content/footer structure, deployment footer shortcuts, no internal metadata text, and no contradictory running/installed state text.
+- Manually sanity-check raw-mode navigation paths for sidebar/content focus, deployment left-right/up-down behavior, centered modals, install planner, service actions, and `Ctrl+C` terminal restoration.
 - Treat readability regressions in narrow terminals as bugs even though the optimized target is a modern wide terminal.

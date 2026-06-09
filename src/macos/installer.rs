@@ -193,8 +193,8 @@ impl App {
 
     pub(crate) fn planner_choices(&self, plan: &InstallPlan, field: PlanField) -> Vec<String> {
         match field {
-            PlanField::InstallPath => vec!["按 Enter 输入自定义路径".into()],
-            PlanField::MaiBotBranch => vec!["main（稳定版）".into(), "dev（开发版）".into()],
+            PlanField::InstallPath => vec!["自定义路径".into()],
+            PlanField::MaiBotBranch => vec!["main（稳定版）".into(), "dev（预览版）".into()],
             PlanField::InstallMode => {
                 vec!["正常更新/修复".into(), "全新安装（清空目标目录）".into()]
             }
@@ -223,7 +223,7 @@ impl App {
                 "官方源".into(),
                 "自定义镜像源".into(),
             ],
-            PlanField::BotProtocols => vec!["macOS 暂不安装协议端（NapCat/LLBot TODO）".into()],
+            PlanField::BotProtocols => vec!["macOS 暂不安装协议端".into()],
             PlanField::DockerMirror => vec!["macOS 暂不使用 Docker 部署协议端".into()],
         }
     }
@@ -263,7 +263,7 @@ impl App {
                     plan.pip_display.clone()
                 }
             }
-            PlanField::BotProtocols => "暂不安装（macOS TODO）".into(),
+            PlanField::BotProtocols => "暂不安装".into(),
             PlanField::DockerMirror => "不使用".into(),
         }
     }
@@ -383,9 +383,9 @@ impl App {
                         printed_actions = true;
                     }
                     let label = match action {
-                        PlanAction::StartInstall => "▶ 开始安装 / 更新",
-                        PlanAction::ResetDefaults => "↺ 恢复推荐默认",
-                        PlanAction::BackToMenu => "← 返回主菜单",
+                        PlanAction::StartInstall => "执行安装 / 更新",
+                        PlanAction::ResetDefaults => "恢复推荐默认",
+                        PlanAction::BackToMenu => "返回主菜单",
                     };
                     let cursor = if active { "▶" } else { " " };
                     let text = format!("  {cursor} {label}");
@@ -567,7 +567,7 @@ impl App {
     pub(crate) fn run_install(&self, plan: &InstallPlan) -> Result<()> {
         let mut plan = plan.clone();
         if !plan.bot_protocols.is_empty() {
-            bail!("macOS 版暂未适配 NapCat / LLBot，请使用 --protocol none");
+            bail!("macOS 版目前只安装 MaiBot 核心，请使用 --protocol none");
         }
         if plan.install_mode == InstallMode::Clean {
             plan.venv_mode = VenvMode::Recreate;
@@ -1019,15 +1019,15 @@ impl App {
     }
 
     pub(crate) fn install_napcat(&self, _plan: &InstallPlan) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn redownload_napcat_shell(&self, _plan: &InstallPlan) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn install_llbot(&self, _plan: &InstallPlan) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn drain_pending_input(&self) {
@@ -1094,6 +1094,6 @@ fn set_pip(plan: &mut InstallPlan, display: &str, index: &str) {
     plan.uv_index = plan.pip_index.clone();
 }
 
-fn macos_protocol_todo() -> Result<()> {
-    bail!("macOS 版暂未适配 NapCat / LLBot 协议端，这部分已留作 TODO")
+fn macos_protocol_note() -> Result<()> {
+    bail!("macOS 版目前只安装 MaiBot 核心，请使用 --protocol none")
 }

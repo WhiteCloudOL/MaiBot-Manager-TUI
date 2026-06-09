@@ -336,8 +336,8 @@ impl App {
 
     pub(crate) fn planner_choices(&self, plan: &InstallPlan, field: PlanField) -> Vec<String> {
         match field {
-            PlanField::InstallPath => vec!["按 Enter 输入自定义路径".into()],
-            PlanField::MaiBotBranch => vec!["main（稳定版）".into(), "dev（开发版）".into()],
+            PlanField::InstallPath => vec!["自定义路径".into()],
+            PlanField::MaiBotBranch => vec!["main（稳定版）".into(), "dev（预览版）".into()],
             PlanField::InstallMode => {
                 vec!["正常更新/修复".into(), "全新安装（清空目标目录）".into()]
             }
@@ -558,9 +558,9 @@ impl App {
                         printed_actions = true;
                     }
                     let label = match action {
-                        PlanAction::StartInstall => "▶ 开始安装 / 更新",
-                        PlanAction::ResetDefaults => "↺ 恢复推荐默认",
-                        PlanAction::BackToMenu => "← 返回主菜单",
+                        PlanAction::StartInstall => "执行安装 / 更新",
+                        PlanAction::ResetDefaults => "恢复推荐默认",
+                        PlanAction::BackToMenu => "返回主菜单",
                     };
                     let cursor = if active { "▶" } else { " " };
                     let text = format!("  {cursor} {label}");

@@ -139,5 +139,5 @@ impl App {
 }
 
 fn macos_adapter_todo() -> Result<()> {
-    bail!("macOS 版暂未适配 Napcat Adapter 配置，这部分随协议端一起留作 TODO")
+    bail!("macOS 版目前只开放 MaiBot WebUI 访问配置，Adapter 策略会随协议端能力一起提供")
 }

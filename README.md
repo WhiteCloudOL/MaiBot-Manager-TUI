@@ -13,18 +13,18 @@
 </div>
 
 > **食用文档**：[https://docs.meowyun.cn/qqbot/maibot/install.html](https://docs.meowyun.cn/qqbot/maibot/install.html)  
-> **声明**：本项目使用 `Claude Code` / `Codex` 协助开发
+> **声明**：本项目使用 `Claude Code` / `Codex` 协助维护
 
 ---
 
 ## 🌟 功能概览
 
 * **支持 CLI / TUI**：支持使用 `maibot` 或 `maibot tui` 进入 TUI 界面；也支持附加参数执行 CLI 命令，便于 AGENT 使用 MaiBot 管理程序。
-* **现代化 TUI**：顶部标签、左右分栏工作区、服务/插件卡片、上下文状态栏和语义化状态颜色，让常用操作不用在脚本式菜单里猜含义。
-* **安装向导**：单页式安装计划，方向键展开 / 折叠选项，所见即所得。
+* **现代化 TUI**：Header / Sidebar / Content / Footer 的清爽布局、圆角面板、服务/插件表格、统一底部快捷键和 Nord 极简冷色调，让常用操作不用在脚本式菜单里猜含义。
+* **安装向导**：横向步骤条 + 当前项配置面板；左右切换安装项，上下切换当前项选项，安装/更新与恢复默认使用底部快捷键。
 * **Github 优选**：GitHub 官方线路与镜像源并行测速，自动选择最佳线路；全部失败时提供重试 / 直连 / 取消的回退选择。
 * **MaiBot 管理**：Linux 使用 `screen` 后台会话；Windows 使用独立进程 / 窗口启动；macOS 使用后台子进程，退出管理器后核心仍继续运行。首次启动需要确认 EULA 时，TUI 会提供交互终端选项，10 秒未选择则默认后台启动。
-* **LLBot / Napcat 安装**：Linux 使用 LLBot CLI + NapCat Docker；Windows 使用 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限；macOS 协议端暂未适配。
+* **LLBot / Napcat 安装**：Linux 使用 LLBot CLI + NapCat Docker；Windows 使用 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限；macOS 当前保留清晰的平台能力说明入口。
 * **依赖自检**：Linux 自动检测包管理器并补装基础工具；Windows 缺少 Git / uv / Python 时会优先下载便携工具到 MaiBot 安装目录；macOS 缺少 Homebrew 时会调用官方脚本安装，并通过 Homebrew 补齐 Git / uv / Python。
 * **配置访问**：集中查看当前平台已支持的 WebUI 地址与密钥；初始化访问配置带二次确认。
 * **插件管理**：安装、卸载插件并按需补装依赖。
@@ -74,7 +74,7 @@ irm https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/main/scrip
 
 ### macOS
 
-macOS 版目前支持 MaiBot 核心安装 / 更新、后台子进程运行、访问配置与插件管理；NapCat / LLBot 协议端暂未适配，安装计划默认不安装协议端。
+macOS 版目前支持 MaiBot 核心安装 / 更新、后台子进程运行、访问配置与插件管理；NapCat / LLBot 协议端在当前平台保留说明入口，安装计划默认不安装协议端。
 
 ```bash
 # 国内安装
@@ -100,8 +100,8 @@ maibot install --protocol none
 │   ├── linux/        # Linux 专属安装、服务、访问、插件与命令执行
 │   ├── macos/        # macOS 专属安装、服务、访问、插件与命令执行
 │   ├── win/          # Windows 专属安装、服务、访问、插件与 BAT 执行
-│   ├── ui.rs         # 共享现代 TUI 布局、标签、分栏、卡片、状态栏与 prompt/raw mode 切换
-│   ├── model.rs      # 共享配置模型、安装计划、枚举与常量
+│   ├── ui.rs         # 共享现代 TUI Header/Sidebar/Content/Footer、表格、模态框与 raw mode 切换
+│   ├── model.rs      # 共享配置模型、安装计划、状态机、枚举与常量
 │   └── terminal.rs   # 终端 raw mode、光标恢复、Ctrl+C 清理
 ├── scripts/
 │   ├── install.sh    # Linux / macOS 一键安装脚本
@@ -144,7 +144,7 @@ maibot install --protocol none
 * **系统架构**：macOS x86_64 或 Apple Silicon
 * **基础工具**：优先使用 macOS 自带 `curl` / `unzip`；缺少 Homebrew 时自动调用官方脚本安装，缺少 Git / uv / Python 时通过 Homebrew 补齐
 * **Python 环境**：推荐 `uv`；uv 缓存与托管 Python 目录固定在 `<MaiBot安装目录>/tools`
-* **协议端**：NapCat / LLBot 暂未适配，macOS 默认只部署 MaiBot 核心
+* **协议端**：NapCat / LLBot 在当前平台保留说明入口，macOS 默认只部署 MaiBot 核心
 
 
 ### 构建环境
@@ -254,26 +254,34 @@ chmod +x ./maibot-manager-linux-arm64
 
 ```
 
-现代 TUI 使用顶部标签组织功能区：`概览`、`部署与更新`、`核心服务管理`、`协议端服务`、`访问配置`、`插件中心`、`关于`。宽屏终端会显示左右分栏：左侧是可筛选的服务、步骤或插件卡片，右侧显示当前项详情、状态、日志摘要和可执行动作；窄屏终端会自动降级为上下堆叠布局。
+现代 TUI 使用固定 Header、左侧 Sidebar、主 Content Area 和底部 Footer。侧边栏包含 `概览`、`部署与更新`、`核心服务管理`、`协议端服务`、`插件中心`、`设置`、`关于`；中间区域按当前功能显示概览详情、部署向导、服务表格、插件表格或关于信息。
 
-底部状态栏会跟随当前面板变化：左侧显示当前状态消息，右侧显示当前可用按键。例如概览页提示 `↑/↓ 选择服务  Enter 详情  / 搜索`，部署页提示 `↑/↓ 选择步骤  ←/→ 改值  Enter 执行`。`Esc` 只在能从工作区返回顶部标签时有意义，顶层退出请用 `Ctrl+C`。
+底部状态栏会统一显示当前可用按键，界面其他区域不会重复散落快捷键提示。部署页使用横向步骤条：`←/→` 切换安装配置项，`↑/↓` 调整当前配置项的候选值，`F5` 开始安装/更新，`Ctrl+R` 将当前表单恢复为推荐默认值。`Ctrl+1` 可从内容区或弹窗快速回到侧边栏。
 
-界面使用 Nerd Font 友好的图标和语义颜色显示状态：绿色表示运行中，黄色表示待同步/警告，红色表示停止或错误，蓝色/青色表示信息。推荐使用带图标字形的现代终端字体，例如 Iosevka Nerd Font、FiraCode Nerd Font 或 JetBrainsMono Nerd Font；没有 Nerd Font 时文字标签仍可读。
+核心服务、协议端和插件中心使用全宽表格呈现，列为名称、状态、版本与快捷操作；按 `Enter` 后会弹出居中的操作对话框，底层表格保持干净。界面使用 Nerd Font 友好的图标和 Nord 柔和状态色显示状态；没有 Nerd Font 时文字标签仍可读。
+
+TUI 全局使用 Nord 冷色调：背景 `#2E3440`、常规文本 `#D8DEE9`、焦点边框 `#88C0D0`、选中行 `#81A1C1`、运行/警告/错误分别为 `#A3BE8C`、`#EBCB8B`、`#BF616A`。
 
 安装到 PATH 后，也可以直接执行 `maibot` 或 `maibot tui`。
+
+**响应性能说明：**
+
+TUI 的内容区移动和弹窗打开走缓存重绘路径，不会在每次按键时重新探测服务状态。Linux 状态页会批量读取 `screen -list`，NapCat 使用带短超时的 `docker ps` 探测；服务日志摘要只读取文件尾部，避免大日志拖慢切换。
 
 **按键操作说明：**
 
 | 按键 | 功能 |
 | --- | --- |
-| `←` / `→` | 顶部标签间切换；部署工作区内切换当前步骤的配置值 |
-| `↑` / `↓` | 选择当前列表、卡片或动作块 |
-| `Tab` / `Shift+Tab` | 在顶部标签与工作区之间切换焦点；核心服务页用于切换动作块 |
-| `Enter` | 进入详情、执行当前动作或打开当前管理面板 |
-| `/` | 搜索/筛选当前面板项目 |
+| `↑` / `↓` | 在当前所在的侧边栏、表格或部署选项中移动 |
+| `←` / `→` | 部署页切换安装配置项；弹窗中切换操作按钮 |
+| `Tab` / `Shift+Tab` | 在侧边栏与内容区之间切换焦点 |
+| `Enter` | 进入内容区、打开操作弹窗，或编辑部署路径 |
+| `F5` | 在部署页执行安装 / 更新 |
+| `Ctrl+R` | 在部署页恢复推荐默认配置 |
+| `Ctrl+1` | 快速回到侧边栏 |
 | `Backspace` | 清空当前筛选 |
-| `Esc` | 从工作区返回顶部标签 |
-| `Ctrl+C` | 退出 TUI 并恢复终端 |
+| `Esc` | 返回侧边栏或关闭弹窗 |
+| `Ctrl+Q` / `Ctrl+C` | 退出 TUI 并恢复终端 |
 
 ### 主菜单运行状态识别
 
@@ -283,7 +291,7 @@ chmod +x ./maibot-manager-linux-arm64
 * **Linux NapCat**：基于 Docker 容器状态
 * **Windows MaiBot / LLBot**：基于 Windows 进程 / 窗口状态
 * **Windows NapCat**：基于 NapCat Shell 进程状态
-* **macOS MaiBot**：基于 `logs/maibot.pid` 记录的子进程状态；NapCat / LLBot 暂未适配
+* **macOS MaiBot**：基于 `logs/maibot.pid` 记录的子进程状态；NapCat / LLBot 显示当前平台能力说明
 
 未检测到安装时会引导先进入「安装 / 更新 MaiBot」。
 
@@ -304,7 +312,7 @@ maibot update
 # 指定安装目录、分支、Python 环境与协议端
 maibot install --path ~/maimai --branch main --python uv --protocol napcat
 
-# macOS 当前只部署 MaiBot 核心，协议端先留 TODO
+# macOS 当前只部署 MaiBot 核心
 maibot install --path ~/maimai --branch main --python uv --protocol none
 
 # 全新安装，重建环境，GitHub 直连，使用清华 PyPI
@@ -367,28 +375,28 @@ maibot core exec         # Linux: 进入 screen；Windows: 提示独立窗口；
 **NapCatQQ：**
 
 ```bash
-maibot napcat start             # Linux: docker compose up -d；Windows: 管理员启动 launcher.bat；macOS: 暂未适配
+maibot napcat start             # Linux: docker compose up -d；Windows: 管理员启动 launcher.bat；macOS: 显示当前平台能力说明
 maibot napcat stop              # Linux: docker compose stop；Windows: 停止 NapCat Shell 进程
 maibot napcat restart           # 重启 NapCat
 maibot napcat status            # 输出 running / stopped
 maibot napcat logs              # 查看最近 100 行日志
 maibot napcat logs --tail 200 --follow # 实时跟随日志
-maibot napcat rebuild           # Linux: down + pull + up -d；Windows: 重新下载最新 NapCat Shell 包；macOS: 暂未适配
+maibot napcat rebuild           # Linux: down + pull + up -d；Windows: 重新下载最新 NapCat Shell 包；macOS: 显示当前平台能力说明
 maibot napcat remove-container  # Linux: 删除 napcat 容器；Windows/macOS 不使用 Docker
-maibot napcat exec              # Linux: 进入容器 shell；Windows: 管理员启动 launcher.bat；macOS: 暂未适配
+maibot napcat exec              # Linux: 进入容器 shell；Windows: 管理员启动 launcher.bat；macOS: 显示当前平台能力说明
 
 ```
 
 **LuckyLilliaBot：**
 
 ```bash
-maibot llbot start              # Linux: 后台 screen；Windows: 管理员启动 llbot.exe；macOS: 暂未适配
+maibot llbot start              # Linux: 后台 screen；Windows: 管理员启动 llbot.exe；macOS: 显示当前平台能力说明
 maibot llbot stop               # 停止
 maibot llbot restart            # 重启
 maibot llbot status             # 输出 running / stopped
 maibot llbot logs               # 缓冲日志
 maibot llbot logs --tail 200 --follow
-maibot llbot exec               # Linux: 进入 screen 控制台；Windows: 提示 Desktop 程序窗口；macOS: 暂未适配
+maibot llbot exec               # Linux: 进入 screen 控制台；Windows: 提示 Desktop 程序窗口；macOS: 显示当前平台能力说明
 maibot llbot password <新密码>   # 写入 LLBot WebUI 密码文件
 
 ```
@@ -399,7 +407,7 @@ maibot llbot password <新密码>   # 写入 LLBot WebUI 密码文件
 
 ```bash
 maibot access show              # 查看配置地址与密钥
-maibot access init              # 绑定 WebUI 到 0.0.0.0（Linux/Windows 同时启用 Napcat Adapter，macOS 暂不启用）
+maibot access init              # 绑定 WebUI 到 0.0.0.0（Linux/Windows 同时启用 Napcat Adapter，macOS 保留核心配置能力）
 maibot access init --yes        # 跳过交互确认直接应用（适合确信防火墙安全的脚本环境）
 
 # Adapter 黑白名单设置
@@ -437,8 +445,8 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 * **Python 环境**：沿用历史配置，否则默认 `uv`（Python 3.14）
 * **GitHub**：默认执行时并行测速；全部失败提供重试 / 直连 / 取消
 * **PyPI**：默认系统源；选自定义源时**只在 venv 目录写 `pip.conf`**，不污染用户全局 `~/.pip/`
-* **协议端**：Linux/Windows 检测已有 NapCat / LLBot，未检测到时默认安装 NapCatQQ；macOS 默认不安装协议端，NapCat / LLBot 留作 TODO
-*(可修改模块：安装目录 / 安装模式 / Python 环境 / 虚拟环境处理 / GitHub 线路 / PyPI 源 / Bot 协议端 / Docker 镜像；macOS 暂不展示协议端 / Docker 安装项)*
+* **协议端**：Linux/Windows 检测已有 NapCat / LLBot，未检测到时默认安装 NapCatQQ；macOS 默认不安装协议端，并在协议端入口说明当前平台能力
+*(可修改模块：安装目录 / 安装模式 / Python 环境 / 虚拟环境处理 / GitHub 线路 / PyPI 源 / Bot 协议端 / Docker 镜像；macOS 默认隐藏协议端 / Docker 安装项)*
 
 **配置文件记录**：
 `~/.maibot_config` 用于记录安装路径、Python 环境和 LLBot 路径，便于管理菜单自动定位。
@@ -451,14 +459,14 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 * Linux LLBot 安装时会尝试自动安装 LinuxQQ，`apt` 环境下可能需要输入 `sudo` 密码。
 * Windows NapCat Shell 与 LLBot Desktop 启动时会请求管理员权限，这是上游程序运行需要。
 * Windows 缺失 Git / uv / Python 时会在 MaiBot 安装目录的 `tools` 子目录准备便携工具链，不会写入系统安装目录。
-* macOS 缺少 Homebrew 时会调用 Homebrew 官方安装脚本；NapCat / LLBot 协议端暂未适配。
+* macOS 缺少 Homebrew 时会调用 Homebrew 官方安装脚本；NapCat / LLBot 在当前平台保留说明入口。
 * Docker、GitHub、PyPI、NapCat / LLBot Release 下载都依赖目标机器的网络。
 * `初始化 MaiBot 访问配置` 会把 WebUI 绑定到 `0.0.0.0`，相当于把端口暴露给外网，请确认已设置 token 或防火墙策略。
 * NapCat 的 `docker-compose.yml` 仅在首次安装时写入，更新时不会覆盖你的自定义修改；如需重置请手动删除该文件再运行安装。
 
 ---
 
-## 🛠️ 开发指南
+## 🛠️ 维护指南
 
 **本地快速检查：**
 
@@ -485,6 +493,7 @@ wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-T
 wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 132 --rows 42 --mode wide"
 wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 72 --rows 28 --mode narrow"
 wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 132 --rows 42 --mode tabs"
+wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 100 --rows 34 --mode deploy"
 
 ```
 

@@ -191,14 +191,14 @@ def main() -> None:
     parser.add_argument("--exe", required=True)
     parser.add_argument("--cols", type=int, default=128)
     parser.add_argument("--rows", type=int, default=40)
-    parser.add_argument("--mode", choices=["wide", "narrow", "tabs"], default="wide")
+    parser.add_argument("--mode", choices=["wide", "narrow", "tabs", "deploy"], default="wide")
     args = parser.parse_args()
 
     if args.mode == "wide":
         timeline = [(3.0, b"\x03")]
     elif args.mode == "narrow":
         timeline = [(3.0, b"\x03")]
-    else:
+    elif args.mode == "tabs":
         timeline = [
             (0.8, b"\x1b[C"),
             (1.2, b"\x1b[C"),
@@ -209,6 +209,14 @@ def main() -> None:
             (3.2, b"\x1b[C"),
             (3.6, b"\x1b[C"),
             (4.4, b"\x03"),
+        ]
+    else:
+        timeline = [
+            (0.8, b"\x1b[B"),
+            (1.2, b"\t"),
+            (1.6, b"\x1b[C"),
+            (2.0, b"\x1b[B"),
+            (3.2, b"\x03"),
         ]
 
     result = run_capture(args.exe, args.cwd, args.cols, args.rows, timeline)

@@ -29,8 +29,8 @@ pub(crate) fn print_help() {
   llbot exec         Windows 下无法附着 Desktop 窗口；请查看已打开窗口
   protocol           也可作为聚合入口，例如 maibot protocol napcat restart"#
     } else if cfg!(target_os = "macos") {
-        r#"  napcat             macOS 暂未适配 NapCat 协议端，相关命令会提示 TODO
-  llbot              macOS 暂未适配 LuckyLilliaBot 协议端，相关命令会提示 TODO
+        r#"  napcat             macOS 版目前仅提供协议端说明入口
+  llbot              macOS 版目前仅提供协议端说明入口
   protocol           聚合入口保留，后续接入 macOS 原生协议端管理"#
     } else {
         r#"  napcat             管理 NapCat Docker Compose
@@ -50,7 +50,7 @@ pub(crate) fn print_help() {
     } else if cfg!(target_os = "macos") {
         r#"macOS 提示:
   安装时若缺少 Homebrew，会调用 Homebrew 官方脚本安装；缺少 Git / uv / Python 时通过 Homebrew 补齐。
-  当前 macOS 版只部署 MaiBot 核心与插件管理，NapCat / LLBot 协议端暂未适配。
+  当前 macOS 版只部署 MaiBot 核心与插件管理，协议端入口会清晰说明当前平台能力。
   MaiBot 核心默认由管理器创建后台子进程运行；首次启动/EULA 可用 --exec 附加当前终端。"#
     } else {
         r#"Screen 退出提示:

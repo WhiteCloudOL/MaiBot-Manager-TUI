@@ -20,7 +20,7 @@ const MAIBOT_LOG_FILE: &str = "maibot.log";
 impl App {
     pub(crate) fn warn_before_screen_attach(&self, session: &str) -> Result<()> {
         if session == "llbot" {
-            return macos_protocol_todo();
+            return macos_protocol_note();
         }
         println!(
             "{}",
@@ -321,61 +321,61 @@ exit "$status"
     }
 
     pub(crate) fn print_napcat_status(&self) -> Result<()> {
-        println!("napcat: unsupported on macOS (TODO)");
+        println!("napcat: macOS 版目前仅提供说明入口，暂不管理该协议端");
         Ok(())
     }
 
     pub(crate) fn print_llbot_status(&self) -> Result<()> {
-        println!("llbot: unsupported on macOS (TODO)");
+        println!("llbot: macOS 版目前仅提供说明入口，暂不管理该协议端");
         Ok(())
     }
 
     pub(crate) fn print_napcat_logs(&self, _tail: usize, _follow: bool) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn print_llbot_logs(&self, _tail: usize, _follow: bool) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn start_napcat(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn stop_napcat(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn restart_napcat(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn rebuild_napcat(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn remove_napcat_container(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn exec_napcat_shell(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn start_llbot(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn stop_llbot(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn restart_llbot(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn set_llbot_password(&self, _password: &str) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn manage_bot_protocol_menu(&self) -> Result<()> {
@@ -385,16 +385,16 @@ exit "$status"
         let cards = [
             StatusCard::warning(
                 "NapCatQQ",
-                "暂未适配",
-                "入口保留，后续接入 macOS 原生协议端管理",
+                "说明",
+                "当前平台仅提供说明入口，不显示不可执行的启停操作",
             ),
             StatusCard::warning(
                 "LuckyLilliaBot",
-                "暂未适配",
-                "入口保留，当前不会安装或启动协议端",
+                "说明",
+                "当前平台仅提供说明入口，不显示不可执行的启停操作",
             ),
         ];
-        self.print_status_cards("适配状态", &cards);
+        self.print_status_cards("平台能力", &cards);
         self.pause("按回车返回主菜单")?;
         Ok(())
     }
@@ -455,16 +455,16 @@ exit "$status"
     }
 
     pub(crate) fn manage_napcat_menu(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 
     pub(crate) fn manage_llbot_menu(&self) -> Result<()> {
-        macos_protocol_todo()
+        macos_protocol_note()
     }
 }
 
-fn macos_protocol_todo() -> Result<()> {
-    bail!("macOS 版暂未适配 NapCat / LLBot 协议端，这部分已留作 TODO")
+fn macos_protocol_note() -> Result<()> {
+    bail!("macOS 版目前只管理 MaiBot 核心与插件，协议端服务会在后续版本提供")
 }
 
 fn maibot_runtime_paths(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
