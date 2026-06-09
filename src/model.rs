@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use ratatui::widgets::ListState;
+
 pub const APP_VERSION: &str = env!("APP_VERSION");
 pub const APP_HEADER_TITLE: &str = env!("APP_HEADER_TITLE");
 pub const APP_HEADER_SUBTITLE: &str = env!("APP_HEADER_SUBTITLE");
@@ -159,6 +161,15 @@ impl DashboardTab {
         Self::About,
     ];
 
+    pub const SIDEBAR: [Self; 6] = [
+        Self::Overview,
+        Self::Deploy,
+        Self::Core,
+        Self::Protocol,
+        Self::Plugins,
+        Self::Access,
+    ];
+
     pub fn index(self) -> usize {
         match self {
             Self::Overview => 0,
@@ -169,6 +180,13 @@ impl DashboardTab {
             Self::Plugins => 5,
             Self::About => 6,
         }
+    }
+
+    pub fn sidebar_index(self) -> usize {
+        Self::SIDEBAR
+            .iter()
+            .position(|tab| *tab == self)
+            .unwrap_or(0)
     }
 
     pub fn icon(self) -> &'static str {
@@ -189,7 +207,7 @@ impl DashboardTab {
             Self::Deploy => "部署与更新",
             Self::Core => "核心服务管理",
             Self::Protocol => "协议端服务",
-            Self::Access => "访问配置",
+            Self::Access => "设置",
             Self::Plugins => "插件中心",
             Self::About => "关于",
         }
@@ -197,23 +215,48 @@ impl DashboardTab {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AppMode {
+    #[default]
+    Navigation,
+    ContentFocused,
+    InputMode,
+    PopupActive,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DashboardFocus {
     #[default]
-    Tabs,
-    List,
+    Sidebar,
+    Content,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct DashboardState {
+pub struct DeploymentConfig {
+    pub plan: Option<InstallPlan>,
+    pub input_buffer: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AppState {
+    pub mode: AppMode,
+    pub current_tab: usize,
     pub active_tab: DashboardTab,
     pub focus: DashboardFocus,
     pub search_query: String,
     pub status_message_override: Option<String>,
     pub deploy_plan: Option<InstallPlan>,
+    pub popup: Option<DashboardPopup>,
+    pub content_mode: DashboardContentMode,
+    pub sidebar_state: ListState,
+    pub deployment_step_state: ListState,
+    pub github_mirror_state: ListState,
+    pub deployment_config: DeploymentConfig,
     selections: [usize; 7],
 }
 
-impl DashboardState {
+pub type DashboardState = AppState;
+
+impl AppState {
     pub fn selected(&self) -> usize {
         self.selections[self.active_tab.index()]
     }
@@ -249,23 +292,31 @@ impl DashboardState {
     }
 
     pub fn next_tab(&mut self) {
-        let idx = (self.active_tab.index() + 1) % DashboardTab::ALL.len();
-        self.active_tab = DashboardTab::ALL[idx];
+        let idx = (self.active_tab.sidebar_index() + 1) % DashboardTab::SIDEBAR.len();
+        self.active_tab = DashboardTab::SIDEBAR[idx];
+        self.current_tab = idx;
+        self.sidebar_state.select(Some(idx));
     }
 
     pub fn prev_tab(&mut self) {
-        let idx = if self.active_tab.index() == 0 {
-            DashboardTab::ALL.len() - 1
+        let idx = if self.active_tab.sidebar_index() == 0 {
+            DashboardTab::SIDEBAR.len() - 1
         } else {
-            self.active_tab.index() - 1
+            self.active_tab.sidebar_index() - 1
         };
-        self.active_tab = DashboardTab::ALL[idx];
+        self.active_tab = DashboardTab::SIDEBAR[idx];
+        self.current_tab = idx;
+        self.sidebar_state.select(Some(idx));
     }
 
     pub fn toggle_focus(&mut self) {
         self.focus = match self.focus {
-            DashboardFocus::Tabs => DashboardFocus::List,
-            DashboardFocus::List => DashboardFocus::Tabs,
+            DashboardFocus::Sidebar => DashboardFocus::Content,
+            DashboardFocus::Content => DashboardFocus::Sidebar,
+        };
+        self.mode = match self.focus {
+            DashboardFocus::Sidebar => AppMode::Navigation,
+            DashboardFocus::Content => AppMode::ContentFocused,
         };
     }
 
@@ -276,6 +327,21 @@ impl DashboardState {
     pub fn clear_status_message(&mut self) {
         self.status_message_override = None;
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum DashboardContentMode {
+    #[default]
+    Main,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DashboardPopup {
+    pub title: String,
+    pub subtitle: String,
+    pub lines: Vec<String>,
+    pub actions: Vec<String>,
+    pub selected: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -298,8 +364,10 @@ pub struct DashboardChoice {
 
 #[derive(Clone, Debug)]
 pub struct DashboardView {
+    pub mode: AppMode,
     pub active_tab: DashboardTab,
     pub focus: DashboardFocus,
+    pub popup: Option<DashboardPopup>,
     pub page_title: String,
     pub page_subtitle: String,
     pub list_title: String,

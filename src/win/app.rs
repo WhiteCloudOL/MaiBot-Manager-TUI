@@ -1,8 +1,10 @@
 use anyhow::{Error, Result, anyhow, bail};
 use dialoguer::console::style;
+use std::cell::RefCell;
 use std::{
     fs,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use crate::model::{
@@ -18,7 +20,28 @@ pub(crate) struct App {
     pub(crate) theme: AppTheme,
     pub(crate) config_path: PathBuf,
     pub(crate) cli_mode: bool,
+    dashboard_cache: RefCell<DashboardRuntimeCache>,
 }
+
+#[derive(Clone, Debug, Default)]
+struct DashboardRuntimeSnapshot {
+    config: crate::model::AppConfig,
+    has_config: bool,
+    maibot_running: bool,
+    napcat_running: bool,
+    llbot_running: bool,
+    napcat_installed: bool,
+    llbot_installed: bool,
+    plugin_count: usize,
+}
+
+#[derive(Debug, Default)]
+struct DashboardRuntimeCache {
+    snapshot: Option<DashboardRuntimeSnapshot>,
+    refreshed_at: Option<Instant>,
+}
+
+const DASHBOARD_STATUS_TTL: Duration = Duration::from_secs(5);
 
 impl App {
     pub(crate) fn new() -> Result<Self> {
@@ -27,6 +50,7 @@ impl App {
             theme: AppTheme::new(),
             config_path: home.join(".maibot_config"),
             cli_mode: false,
+            dashboard_cache: RefCell::new(DashboardRuntimeCache::default()),
         })
     }
 
@@ -34,9 +58,55 @@ impl App {
         self.cli_mode = true;
     }
 
+    fn dashboard_snapshot(&self) -> DashboardRuntimeSnapshot {
+        {
+            let cache = self.dashboard_cache.borrow();
+            if let (Some(snapshot), Some(refreshed_at)) =
+                (cache.snapshot.as_ref(), cache.refreshed_at)
+                && refreshed_at.elapsed() < DASHBOARD_STATUS_TTL
+            {
+                return snapshot.clone();
+            }
+        }
+
+        let config = self.load_config().unwrap_or_default();
+        let has_config = !config.mai_path.is_empty();
+        let root = PathBuf::from(&config.mai_path);
+        let napcat_installed = has_config && root.join("NapCat").exists();
+        let llbot_installed =
+            has_config && (!config.mai_llbot_path.is_empty() || root.join("LLBot").exists());
+        let plugin_count = if has_config {
+            list_plugins(&root.join("MaiBot").join("plugins"))
+                .map(|items| items.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let snapshot = DashboardRuntimeSnapshot {
+            config,
+            has_config,
+            maibot_running: has_config && self.maibot_core_running().unwrap_or(false),
+            napcat_running: has_config && self.napcat_running().unwrap_or(false),
+            llbot_running: has_config && self.llbot_running().unwrap_or(false),
+            napcat_installed,
+            llbot_installed,
+            plugin_count,
+        };
+        let mut cache = self.dashboard_cache.borrow_mut();
+        cache.snapshot = Some(snapshot.clone());
+        cache.refreshed_at = Some(Instant::now());
+        snapshot
+    }
+
+    fn invalidate_dashboard_cache(&self) {
+        let mut cache = self.dashboard_cache.borrow_mut();
+        cache.snapshot = None;
+        cache.refreshed_at = None;
+    }
+
     pub(crate) fn run(&mut self) -> Result<()> {
         let mut dashboard = DashboardState::default();
-        dashboard.focus = DashboardFocus::List;
+        dashboard.focus = DashboardFocus::Sidebar;
         let current = self.load_config().unwrap_or_default();
         dashboard.deploy_plan = Some(self.build_default_install_plan(&current)?);
         loop {
@@ -52,8 +122,8 @@ impl App {
                     self.adjust_dashboard_selection(&mut dashboard, 1)?
                 }
                 DashboardEvent::MoveUp => {
-                    if matches!(dashboard.focus, DashboardFocus::Tabs) {
-                        dashboard.focus = DashboardFocus::List;
+                    if matches!(dashboard.focus, DashboardFocus::Sidebar) {
+                        dashboard.focus = DashboardFocus::Content;
                     } else {
                         let len = self
                             .dashboard_cards(&dashboard.active_tab, &dashboard.search_query)?
@@ -62,8 +132,8 @@ impl App {
                     }
                 }
                 DashboardEvent::MoveDown => {
-                    if matches!(dashboard.focus, DashboardFocus::Tabs) {
-                        dashboard.focus = DashboardFocus::List;
+                    if matches!(dashboard.focus, DashboardFocus::Sidebar) {
+                        dashboard.focus = DashboardFocus::Content;
                     } else {
                         let len = self
                             .dashboard_cards(&dashboard.active_tab, &dashboard.search_query)?
@@ -92,8 +162,8 @@ impl App {
                 }
                 DashboardEvent::Activate => {
                     dashboard.clear_status_message();
-                    if matches!(dashboard.focus, DashboardFocus::Tabs) {
-                        dashboard.focus = DashboardFocus::List;
+                    if matches!(dashboard.focus, DashboardFocus::Sidebar) {
+                        dashboard.focus = DashboardFocus::Content;
                     } else if !self.activate_dashboard_selection(&mut dashboard)? {
                         break;
                     }
@@ -127,8 +197,10 @@ impl App {
         let action_lines = self.dashboard_action_lines(state.active_tab, selected_card.as_ref());
         let status_message = self.dashboard_status_message(state, selected_card.as_ref());
         Ok(DashboardView {
+            mode: state.mode,
             active_tab: state.active_tab,
             focus: state.focus,
+            popup: state.popup.clone(),
             page_title: page_title.to_string(),
             page_subtitle: page_subtitle.to_string(),
             list_title: list_title.to_string(),
@@ -165,7 +237,7 @@ impl App {
                 "系统概览",
                 "快速查看核心服务、协议端和插件健康状态。",
                 "服务卡片",
-                "支持 / 搜索服务与模块",
+                "服务与模块",
                 selected
                     .map(|card| card.title.as_str())
                     .unwrap_or("服务详情"),
@@ -183,13 +255,13 @@ impl App {
                     .unwrap_or("部署详情"),
                 selected
                     .map(|card| card.subtitle.as_str())
-                    .unwrap_or("Enter 直接进入现有安装规划器。"),
+                    .unwrap_or("路径、分支与安装模式集中在此处调整。"),
             ),
             DashboardTab::Core => (
                 "核心服务管理",
                 "聚焦 MaiBot 核心进程、控制台与日志入口。",
                 "核心动作",
-                "Tab 返回标签，Enter 执行当前动作",
+                "启动、停止、控制台与日志",
                 selected
                     .map(|card| card.title.as_str())
                     .unwrap_or("核心详情"),
@@ -219,19 +291,19 @@ impl App {
                     .unwrap_or("访问详情"),
                 selected
                     .map(|card| card.subtitle.as_str())
-                    .unwrap_or("Enter 进入现有访问配置菜单。"),
+                    .unwrap_or("WebUI、令牌与 Adapter 策略入口。"),
             ),
             DashboardTab::Plugins => (
                 "插件中心",
                 "以插件健康度和维护任务为中心组织操作。",
                 "插件视图",
-                "支持 / 搜索插件状态与管理项",
+                "插件状态与管理项",
                 selected
                     .map(|card| card.title.as_str())
                     .unwrap_or("插件详情"),
                 selected
                     .map(|card| card.subtitle.as_str())
-                    .unwrap_or("Enter 进入插件中心。"),
+                    .unwrap_or("安装、卸载与依赖修复集中管理。"),
             ),
             DashboardTab::About => (
                 "关于",
@@ -260,8 +332,8 @@ impl App {
     }
 
     fn overview_cards(&self) -> Result<Vec<DashboardCard>> {
-        let cfg = self.load_config().unwrap_or_default();
-        if cfg.mai_path.is_empty() {
+        let snapshot = self.dashboard_snapshot();
+        if !snapshot.has_config {
             return Ok(vec![DashboardCard {
                 id: "workspace",
                 icon: "󰙅",
@@ -272,16 +344,12 @@ impl App {
                 kind: StatusKind::Warning,
             }]);
         }
-        let maibot_running = self.maibot_core_running().unwrap_or(false);
-        let llbot_running = self.llbot_running().unwrap_or(false);
-        let napcat_running = self.napcat_running().unwrap_or(false);
-        let napcat_installed = PathBuf::from(&cfg.mai_path).join("NapCat").exists();
-        let llbot_installed =
-            !cfg.mai_llbot_path.is_empty() || PathBuf::from(&cfg.mai_path).join("LLBot").exists();
-        let plugin_count =
-            list_plugins(&PathBuf::from(&cfg.mai_path).join("MaiBot").join("plugins"))
-                .map(|items| items.len())
-                .unwrap_or(0);
+        let maibot_running = snapshot.maibot_running;
+        let llbot_running = snapshot.llbot_running;
+        let napcat_running = snapshot.napcat_running;
+        let napcat_installed = snapshot.napcat_installed;
+        let llbot_installed = snapshot.llbot_installed;
+        let plugin_count = snapshot.plugin_count;
         Ok(vec![
             DashboardCard {
                 id: "maibot",
@@ -401,7 +469,7 @@ impl App {
     }
 
     fn core_cards(&self) -> Result<Vec<DashboardCard>> {
-        let running = self.maibot_core_running().unwrap_or(false);
+        let running = self.dashboard_snapshot().maibot_running;
         Ok(vec![
             DashboardCard {
                 id: "core-start",
@@ -455,12 +523,11 @@ impl App {
     }
 
     fn protocol_cards(&self) -> Result<Vec<DashboardCard>> {
-        let cfg = self.load_config().unwrap_or_default();
-        let napcat_running = self.napcat_running().unwrap_or(false);
-        let napcat_installed = PathBuf::from(&cfg.mai_path).join("NapCat").exists();
-        let llbot_running = self.llbot_running().unwrap_or(false);
-        let llbot_installed =
-            !cfg.mai_llbot_path.is_empty() || PathBuf::from(&cfg.mai_path).join("LLBot").exists();
+        let snapshot = self.dashboard_snapshot();
+        let napcat_running = snapshot.napcat_running;
+        let napcat_installed = snapshot.napcat_installed;
+        let llbot_running = snapshot.llbot_running;
+        let llbot_installed = snapshot.llbot_installed;
         Ok(vec![
             DashboardCard {
                 id: "napcat",
@@ -526,21 +593,21 @@ impl App {
     }
 
     fn access_cards(&self) -> Result<Vec<DashboardCard>> {
-        let cfg = self.load_config().unwrap_or_default();
+        let snapshot = self.dashboard_snapshot();
         Ok(vec![
             DashboardCard {
                 id: "access-summary",
                 icon: "󰢹",
                 title: "访问汇总".to_string(),
                 subtitle: "MaiBot / NapCat / LLBot WebUI".to_string(),
-                badge: if cfg.mai_path.is_empty() {
+                badge: if !snapshot.has_config {
                     "未配置"
                 } else {
                     "可查看"
                 }
                 .to_string(),
                 detail: "公网 IP、端口和访问令牌会在详情中统一汇总。".to_string(),
-                kind: if cfg.mai_path.is_empty() {
+                kind: if !snapshot.has_config {
                     StatusKind::Warning
                 } else {
                     StatusKind::Neutral
@@ -568,8 +635,9 @@ impl App {
     }
 
     fn plugin_cards(&self) -> Result<Vec<DashboardCard>> {
-        let cfg = self.load_config().unwrap_or_default();
-        if cfg.mai_path.is_empty() {
+        let snapshot = self.dashboard_snapshot();
+        let cfg = &snapshot.config;
+        if !snapshot.has_config {
             return Ok(vec![DashboardCard {
                 id: "plugins-empty",
                 icon: "󰏓",
@@ -589,7 +657,7 @@ impl App {
             title: "插件管理".to_string(),
             subtitle: "安装、卸载与依赖修复".to_string(),
             badge: format!("{} 个插件", plugins.len()),
-            detail: "Enter 打开完整插件中心。".to_string(),
+            detail: "集中安装、卸载与修复插件依赖。".to_string(),
             kind: StatusKind::Neutral,
         }];
         for plugin in plugins {
@@ -740,9 +808,9 @@ impl App {
                 }
             }
             DashboardTab::Deploy => {
-                lines.push("左侧步骤卡支持用 ←/→ 直接切换选项。".to_string());
-                lines.push("目录项按 Enter 可输入自定义路径。".to_string());
-                lines.push("底部仍保留开始安装、恢复默认和返回入口。".to_string());
+                lines.push("步骤条聚焦路径、分支与安装模式。".to_string());
+                lines.push("路径项会打开输入框，其他项使用单选列表。".to_string());
+                lines.push("开始安装与恢复默认作为表单动作保留。".to_string());
                 if let (Some(plan), Some(card)) = (
                     self.load_config()
                         .ok()
@@ -768,7 +836,7 @@ impl App {
                 }
             }
             DashboardTab::Core => {
-                let running = self.maibot_core_running().unwrap_or(false);
+                let running = self.dashboard_snapshot().maibot_running;
                 lines.push(if running {
                     "󱄩 当前状态: 运行中".to_string()
                 } else {
@@ -812,7 +880,8 @@ impl App {
                 }
             }
             DashboardTab::Protocol => {
-                let cfg = self.load_config().unwrap_or_default();
+                let snapshot = self.dashboard_snapshot();
+                let cfg = snapshot.config;
                 if let Some(card) = selected {
                     match card.id {
                         "napcat" => {
@@ -822,7 +891,7 @@ impl App {
                             ));
                             lines.push(format!(
                                 "运行状态: {}",
-                                if self.napcat_running().unwrap_or(false) {
+                                if snapshot.napcat_running {
                                     "NapCat Shell 正在运行"
                                 } else {
                                     "NapCat Shell 未运行"
@@ -840,7 +909,7 @@ impl App {
                             lines.push(format!("目录: {}", llbot_dir.display()));
                             lines.push(format!(
                                 "运行状态: {}",
-                                if self.llbot_running().unwrap_or(false) {
+                                if snapshot.llbot_running {
                                     "LLBot Desktop 正在运行"
                                 } else {
                                     "LLBot Desktop 未运行"
@@ -857,10 +926,7 @@ impl App {
                 }
             }
             DashboardTab::Access => {
-                if let Ok(ip) = self.get_public_ip() {
-                    lines.push(format!("当前探测公网/出口 IP: {ip}"));
-                }
-                let cfg = self.load_config().unwrap_or_default();
+                let cfg = self.dashboard_snapshot().config;
                 if let Some(card) = selected {
                     match card.id {
                         "access-summary" => {
@@ -880,9 +946,7 @@ impl App {
                                     .join("webui.json")
                                     .display()
                             ));
-                            lines.push(
-                                "Enter 打开完整访问汇总，可查看 URL 与访问令牌。".to_string(),
-                            );
+                            lines.push("完整访问汇总可查看 URL 与访问令牌。".to_string());
                         }
                         "access-init" => {
                             lines.push("会把 MaiBot WebUI host 改为 0.0.0.0。".to_string());
@@ -893,7 +957,7 @@ impl App {
                             lines.push("可维护群聊白名单/黑名单、私聊名单和封禁 QQ。".to_string());
                             lines
                                 .push("配置文件: MaiBot/plugins/<adapter>/config.toml".to_string());
-                            lines.push("Enter 直接进入黑白名单编辑面板。".to_string());
+                            lines.push("黑白名单编辑面板会维护群聊、私聊与封禁名单。".to_string());
                         }
                         _ => {}
                     }
@@ -960,16 +1024,16 @@ impl App {
         match tab {
             DashboardTab::Overview => {
                 if let Some(card) = selected {
-                    actions.push(format!("Enter 打开 {}", card.title));
+                    actions.push(format!("打开 {}", card.title));
                 }
-                actions.push("/ 搜索服务或模块".to_string());
+                actions.push("服务与模块索引".to_string());
             }
             DashboardTab::Deploy => {
-                actions.push("Enter 进入部署与更新流程".to_string());
-                actions.push("规划器内支持 ←/→ 展开收起，Space/Enter 应用".to_string());
+                actions.push("当前步骤与表单动作已连接安装规划器".to_string());
+                actions.push("单选项会写回部署计划".to_string());
             }
             DashboardTab::Core => {
-                actions.push("Enter 执行当前动作块".to_string());
+                actions.push("当前动作块会复用核心服务逻辑".to_string());
                 if let Some(card) = selected {
                     match card.id {
                         "core-start" => {
@@ -989,61 +1053,61 @@ impl App {
                 if let Some(card) = selected {
                     match card.id {
                         "napcat" => {
-                            actions.push("Enter 直接进入 NapCat 管理".to_string());
+                            actions.push("NapCat 管理支持启动、停止与日志查看".to_string());
                             actions.push("支持启动 / 停止 / 重启 / 日志 / 重下载".to_string());
                         }
                         "llbot" => {
-                            actions.push("Enter 直接进入 LLBot 管理".to_string());
+                            actions.push("LLBot 管理支持日志与密码维护".to_string());
                             actions.push("支持启动 / 停止 / 重启 / 日志 / 密码修改".to_string());
                         }
                         _ => {
-                            actions.push("Enter 打开协议端服务菜单".to_string());
+                            actions.push("协议端服务菜单包含平台专属操作".to_string());
                         }
                     }
                 } else {
-                    actions.push("Enter 打开协议端服务菜单".to_string());
+                    actions.push("协议端服务菜单包含平台专属操作".to_string());
                 }
             }
             DashboardTab::Access => {
                 if let Some(card) = selected {
                     match card.id {
                         "access-summary" => {
-                            actions.push("Enter 查看完整访问信息".to_string());
+                            actions.push("完整访问信息包含 WebUI 地址与令牌".to_string());
                             actions.push("可确认 WebUI 地址、端口和 token".to_string());
                         }
                         "access-init" => {
-                            actions.push("Enter 初始化远程访问".to_string());
+                            actions.push("初始化远程访问会写入 WebUI/Adapter 配置".to_string());
                             actions.push("会提示确认后写入 WebUI/Adapter 配置".to_string());
                         }
                         "adapter" => {
-                            actions.push("Enter 进入黑白名单策略编辑".to_string());
+                            actions.push("黑白名单策略编辑会维护群聊与私聊名单".to_string());
                             actions.push("可维护群聊、私聊与封禁名单".to_string());
                         }
                         _ => {
-                            actions.push("Enter 打开访问配置菜单".to_string());
+                            actions.push("访问配置菜单包含地址、令牌与策略操作".to_string());
                         }
                     }
                 } else {
-                    actions.push("Enter 打开访问配置菜单".to_string());
+                    actions.push("访问配置菜单包含地址、令牌与策略操作".to_string());
                 }
             }
             DashboardTab::Plugins => {
                 if let Some(card) = selected {
                     if card.id == "plugin-item" {
-                        actions.push("Enter 打开该插件的维护动作".to_string());
+                        actions.push("插件维护动作包含依赖修复与卸载".to_string());
                         actions.push("可执行卸载或修复依赖".to_string());
                     } else {
-                        actions.push("Enter 打开完整插件中心".to_string());
+                        actions.push("完整插件中心包含安装、卸载与修复".to_string());
                     }
                 } else {
-                    actions.push("Enter 打开完整插件中心".to_string());
+                    actions.push("完整插件中心包含安装、卸载与修复".to_string());
                 }
-                actions.push("/ 筛选插件名称".to_string());
+                actions.push("插件名称与 manifest 摘要可用于定位".to_string());
                 actions.push("右侧面板现在会显示 manifest 摘要与依赖状态".to_string());
             }
             DashboardTab::About => {
-                actions.push("Ctrl+C 退出管理器".to_string());
-                actions.push("Esc 仅在工作区内返回顶部标签".to_string());
+                actions.push("只读信息页".to_string());
+                actions.push("构建信息与运行环境说明".to_string());
             }
         }
         actions
@@ -1086,28 +1150,31 @@ impl App {
         if let Some(message) = &state.status_message_override {
             message.clone()
         } else if let Some(card) = selected {
-            format!("MaiBot 已就绪 · 当前聚焦 {}", card.title)
+            format!("MaiBot 已就绪 · {}", card.title)
         } else {
             "MaiBot 已就绪".to_string()
         }
     }
 
     fn dashboard_context_hint(&self, tab: DashboardTab, focus: DashboardFocus) -> String {
-        if matches!(focus, DashboardFocus::Tabs) {
-            return "←/→ 切换标签  Tab 进入工作区  Ctrl+C 退出".to_string();
+        if matches!(focus, DashboardFocus::Sidebar) {
+            return "导航".to_string();
         }
         match tab {
-            DashboardTab::Overview => "↑/↓ 选择服务  Enter 详情  / 搜索".to_string(),
-            DashboardTab::Deploy => "↑/↓ 选择步骤  ←/→ 改值  Enter 执行".to_string(),
-            DashboardTab::Core => "↑/↓ 切换动作块  Enter 执行  Tab 回标签".to_string(),
-            DashboardTab::Protocol => "↑/↓ 选择协议端  Enter 进入  Tab 回标签".to_string(),
-            DashboardTab::Access => "↑/↓ 选择任务  Enter 进入  Tab 回标签".to_string(),
-            DashboardTab::Plugins => "↑/↓ 选择插件  Enter 进入  / 搜索".to_string(),
-            DashboardTab::About => "↑/↓ 浏览信息  Tab 回标签  Ctrl+C 退出".to_string(),
+            DashboardTab::Overview => "概览".to_string(),
+            DashboardTab::Deploy => "部署".to_string(),
+            DashboardTab::Core => "核心服务".to_string(),
+            DashboardTab::Protocol => "协议端".to_string(),
+            DashboardTab::Access => "访问".to_string(),
+            DashboardTab::Plugins => "插件".to_string(),
+            DashboardTab::About => "关于".to_string(),
         }
     }
 
     fn activate_dashboard_selection(&mut self, state: &mut DashboardState) -> Result<bool> {
+        if let Some(popup) = state.popup.take() {
+            return self.activate_dashboard_popup(state, popup.selected);
+        }
         match state.active_tab {
             DashboardTab::Overview => {
                 let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
@@ -1115,19 +1182,24 @@ impl App {
                 match selected.map(|card| card.id) {
                     Some("maibot") => {
                         self.handle_menu_result(self.manage_maibot_menu())?;
+                        self.invalidate_dashboard_cache();
                     }
                     Some("napcat") => {
                         self.handle_menu_result(self.manage_napcat_menu())?;
+                        self.invalidate_dashboard_cache();
                     }
                     Some("llbot") => {
                         self.handle_menu_result(self.manage_llbot_menu())?;
+                        self.invalidate_dashboard_cache();
                     }
                     Some("plugins") => {
                         self.handle_menu_result(self.manage_plugins_menu())?;
+                        self.invalidate_dashboard_cache();
                     }
                     Some("workspace") => {
                         let result = self.install_update_flow();
                         self.handle_menu_result(result)?;
+                        self.invalidate_dashboard_cache();
                     }
                     _ => {}
                 };
@@ -1139,17 +1211,19 @@ impl App {
                     match selected.and_then(|card| deploy_card_action(card.id)) {
                         Some(PlanAction::StartInstall) => {
                             self.handle_menu_result(self.run_install(plan))?;
+                            self.invalidate_dashboard_cache();
                             state.set_status_message("安装流程已执行");
                         }
                         Some(PlanAction::ResetDefaults) => {
                             let reset = self.build_recommended_defaults();
                             self.save_config(&self.plan_to_config(&reset))?;
+                            self.invalidate_dashboard_cache();
                             state.deploy_plan = Some(reset);
                             state.set_status_message("已恢复推荐默认部署配置");
                         }
                         Some(PlanAction::BackToMenu) => {
-                            state.focus = DashboardFocus::Tabs;
-                            state.set_status_message("已返回顶部标签");
+                            state.focus = DashboardFocus::Sidebar;
+                            state.set_status_message("已返回导航");
                         }
                         None => {
                             let Some(field) = selected.and_then(|card| deploy_card_field(card.id))
@@ -1160,6 +1234,7 @@ impl App {
                                 let mut new_plan = plan.clone();
                                 self.edit_install_path(&mut new_plan)?;
                                 self.save_config(&self.plan_to_config(&new_plan))?;
+                                self.invalidate_dashboard_cache();
                                 state.deploy_plan = Some(new_plan.clone());
                                 state.set_status_message(format!(
                                     "目录已更新为 {}",
@@ -1176,10 +1251,12 @@ impl App {
                 match selected.map(|card| card.id) {
                     Some("core-start") => {
                         self.handle_menu_result(self.start_maibot_core(false))?;
+                        self.invalidate_dashboard_cache();
                         state.set_status_message("已请求启动 MaiBot 核心");
                     }
                     Some("core-stop") => {
                         self.handle_menu_result(self.stop_maibot_core())?;
+                        self.invalidate_dashboard_cache();
                         state.set_status_message("已请求停止 MaiBot 核心");
                     }
                     Some("core-console") => {
@@ -1201,14 +1278,17 @@ impl App {
                 match selected.map(|card| card.id) {
                     Some("napcat") => {
                         self.handle_menu_result(self.manage_napcat_menu())?;
+                        self.invalidate_dashboard_cache();
                         state.set_status_message("已打开 NapCat 管理面板");
                     }
                     Some("llbot") => {
                         self.handle_menu_result(self.manage_llbot_menu())?;
+                        self.invalidate_dashboard_cache();
                         state.set_status_message("已打开 LLBot 管理面板");
                     }
                     _ => {
                         self.handle_menu_result(self.manage_bot_protocol_menu())?;
+                        self.invalidate_dashboard_cache();
                     }
                 }
             }
@@ -1222,6 +1302,7 @@ impl App {
                     }
                     Some("access-init") => {
                         self.handle_menu_result(self.initialize_maibot_access_config())?;
+                        self.invalidate_dashboard_cache();
                         state.set_status_message("已执行访问初始化流程");
                     }
                     Some("adapter") => {
@@ -1239,15 +1320,125 @@ impl App {
                 match selected.map(|card| card.id) {
                     Some("plugin-item") => {
                         self.handle_menu_result(self.manage_plugin_from_dashboard(state))?;
+                        self.invalidate_dashboard_cache();
                     }
                     _ => {
                         self.handle_menu_result(self.manage_plugins_menu())?;
+                        self.invalidate_dashboard_cache();
                     }
                 }
             }
             DashboardTab::About => {
-                state.set_status_message("这里是只读信息页，Ctrl+C 退出管理器");
+                state.set_status_message("这里是只读信息页");
             }
+        }
+        Ok(true)
+    }
+
+    fn activate_dashboard_popup(
+        &mut self,
+        state: &mut DashboardState,
+        action_idx: usize,
+    ) -> Result<bool> {
+        let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
+        let selected = cards.get(state.selected_for_len(cards.len()));
+        match state.active_tab {
+            DashboardTab::Overview => {
+                match selected.map(|card| card.id) {
+                    Some("maibot") => state.active_tab = DashboardTab::Core,
+                    Some("napcat") | Some("llbot") => state.active_tab = DashboardTab::Protocol,
+                    Some("plugins") => state.active_tab = DashboardTab::Plugins,
+                    Some("workspace") => state.active_tab = DashboardTab::Deploy,
+                    _ => {}
+                }
+                state.focus = DashboardFocus::Content;
+            }
+            DashboardTab::Core => match selected.map(|card| card.id) {
+                Some("core-start") if action_idx == 0 => {
+                    self.handle_menu_result(self.start_maibot_core(false))?;
+                    self.invalidate_dashboard_cache();
+                    state.set_status_message("已请求启动 MaiBot 核心");
+                }
+                Some("core-stop") if action_idx == 0 => {
+                    self.handle_menu_result(self.stop_maibot_core())?;
+                    self.invalidate_dashboard_cache();
+                    state.set_status_message("已请求停止 MaiBot 核心");
+                }
+                Some("core-console") if action_idx == 0 => {
+                    self.handle_menu_result(self.manage_maibot_menu())?;
+                }
+                Some("core-logs") if action_idx == 0 => {
+                    self.handle_menu_result(self.print_maibot_core_logs(100, true))?;
+                    state.set_status_message("已打开 MaiBot 实时日志");
+                }
+                _ if action_idx == 1 => {
+                    self.handle_menu_result(self.manage_maibot_menu())?;
+                    self.invalidate_dashboard_cache();
+                }
+                _ => {}
+            },
+            DashboardTab::Protocol => {
+                match selected.map(|card| card.id) {
+                    Some("napcat") => match action_idx {
+                        0 => {
+                            self.handle_menu_result(self.start_napcat())?;
+                        }
+                        1 => {
+                            self.handle_menu_result(self.stop_napcat())?;
+                        }
+                        2 => {
+                            self.handle_menu_result(self.print_napcat_logs(100, true))?;
+                        }
+                        3 => {
+                            self.handle_menu_result(self.manage_napcat_menu())?;
+                        }
+                        _ => {}
+                    },
+                    Some("llbot") => match action_idx {
+                        0 => {
+                            self.handle_menu_result(self.start_llbot())?;
+                        }
+                        1 => {
+                            self.handle_menu_result(self.stop_llbot())?;
+                        }
+                        2 => {
+                            self.handle_menu_result(self.print_llbot_logs(100, true))?;
+                        }
+                        3 => {
+                            self.handle_menu_result(self.manage_llbot_menu())?;
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                self.invalidate_dashboard_cache();
+                state.set_status_message("协议端操作已执行");
+            }
+            DashboardTab::Plugins => match selected.map(|card| card.id) {
+                Some("plugin-item") => {
+                    self.manage_plugin_action_from_dashboard(state, action_idx)?;
+                    self.invalidate_dashboard_cache();
+                }
+                _ if action_idx == 0 => {
+                    self.handle_menu_result(self.manage_plugins_menu())?;
+                    self.invalidate_dashboard_cache();
+                }
+                _ => {}
+            },
+            DashboardTab::Access => match selected.map(|card| card.id) {
+                Some("access-summary") if action_idx == 0 => {
+                    self.handle_menu_result(self.show_access_info())?;
+                }
+                Some("access-init") if action_idx == 0 => {
+                    self.handle_menu_result(self.initialize_maibot_access_config())?;
+                    self.invalidate_dashboard_cache();
+                }
+                Some("adapter") if action_idx == 0 => {
+                    self.handle_menu_result(self.modify_adapter_config())?;
+                }
+                _ => {}
+            },
+            DashboardTab::About | DashboardTab::Deploy => {}
         }
         Ok(true)
     }
@@ -1257,8 +1448,10 @@ impl App {
         state: &mut DashboardState,
         delta: isize,
     ) -> Result<()> {
-        if state.active_tab != DashboardTab::Deploy || matches!(state.focus, DashboardFocus::Tabs) {
-            state.focus = DashboardFocus::Tabs;
+        if state.active_tab != DashboardTab::Deploy
+            || matches!(state.focus, DashboardFocus::Sidebar)
+        {
+            state.focus = DashboardFocus::Sidebar;
             return Ok(());
         }
         let current = self.load_config().unwrap_or_default();
@@ -1274,7 +1467,7 @@ impl App {
             return Ok(());
         };
         if field == PlanField::InstallPath {
-            state.set_status_message("目录项请按 Enter 输入路径");
+            state.set_status_message("目录项使用输入框编辑");
             return Ok(());
         }
         let Some(plan) = state.deploy_plan.as_mut() else {
@@ -1345,6 +1538,33 @@ impl App {
         Ok(())
     }
 
+    fn manage_plugin_action_from_dashboard(
+        &self,
+        state: &mut DashboardState,
+        action_idx: usize,
+    ) -> Result<()> {
+        let cfg = self.require_config()?;
+        let plugins_dir = PathBuf::from(&cfg.mai_path).join("MaiBot").join("plugins");
+        let cards = self.dashboard_cards(&DashboardTab::Plugins, &state.search_query)?;
+        let Some(card) = cards.get(state.selected_for_len(cards.len())) else {
+            return Ok(());
+        };
+        let dir = match self.find_plugin_dir_by_card_title(&plugins_dir, &card.title) {
+            Some(dir) => dir,
+            None => bail!("未找到插件目录: {}", card.title),
+        };
+        let summary = self.read_plugin_summary(&dir)?;
+        let result = match action_idx {
+            0 => self.install_plugin_dependencies(&summary.dir_name),
+            1 => self.remove_plugin(&summary.dir_name),
+            _ => Ok(()),
+        };
+        if self.handle_menu_result(result)? {
+            state.set_status_message(format!("插件 {} 操作已执行", summary.name));
+        }
+        Ok(())
+    }
+
     fn deploy_cards_from_plan(&self, plan: &InstallPlan) -> Vec<DashboardCard> {
         let mut cards = Vec::new();
         for (idx, field) in deploy_fields().iter().enumerate() {
@@ -1375,7 +1595,7 @@ impl App {
                 badge: if *field == PlanField::InstallPath {
                     "输入路径"
                 } else {
-                    "←/→ 切换"
+                    "单选"
                 }
                 .to_string(),
                 detail: planner_field_detail(*field).to_string(),
@@ -1388,7 +1608,7 @@ impl App {
             title: "开始安装 / 更新".to_string(),
             subtitle: "应用当前部署计划".to_string(),
             badge: "执行".to_string(),
-            detail: "按 Enter 立即开始安装或更新。".to_string(),
+            detail: "应用当前部署计划并开始安装或更新。".to_string(),
             kind: StatusKind::Running,
         });
         cards.push(DashboardCard {
@@ -1397,16 +1617,16 @@ impl App {
             title: "恢复推荐默认".to_string(),
             subtitle: "HOME/maimai + uv + NapCatQQ".to_string(),
             badge: "重置".to_string(),
-            detail: "按 Enter 恢复推荐部署配置。".to_string(),
+            detail: "恢复推荐部署配置。".to_string(),
             kind: StatusKind::Warning,
         });
         cards.push(DashboardCard {
             id: "deploy-back",
             icon: "󰁍",
-            title: "返回顶部标签".to_string(),
-            subtitle: "把焦点切回标签栏".to_string(),
+            title: "返回导航".to_string(),
+            subtitle: "切回侧边栏导航".to_string(),
             badge: "导航".to_string(),
-            detail: "按 Enter 回到顶部导航。".to_string(),
+            detail: "回到侧边栏导航。".to_string(),
             kind: StatusKind::Neutral,
         });
         cards
@@ -1516,7 +1736,7 @@ fn deploy_fields() -> &'static [PlanField] {
 
 fn planner_field_detail(field: PlanField) -> &'static str {
     match field {
-        PlanField::InstallPath => "MaiBot 工作区路径；按 Enter 输入，首次会自动创建目录。",
+        PlanField::InstallPath => "MaiBot 工作区路径；首次会自动创建目录。",
         PlanField::MaiBotBranch => "在稳定版 main 和开发版 dev 之间切换。",
         PlanField::InstallMode => "决定是修复更新还是清空目录后全新安装。",
         PlanField::PythonEnv => "选择本机 Python 或由 uv 管理的独立环境。",
@@ -1530,7 +1750,7 @@ fn planner_field_detail(field: PlanField) -> &'static str {
 
 fn deploy_choice_detail(field: PlanField, idx: usize, label: &str) -> String {
     match field {
-        PlanField::InstallPath => "按 Enter 打开路径输入框".to_string(),
+        PlanField::InstallPath => "打开路径输入框".to_string(),
         PlanField::MaiBotBranch => {
             if idx == 0 {
                 "推荐稳定环境使用。".to_string()

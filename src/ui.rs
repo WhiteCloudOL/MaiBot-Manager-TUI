@@ -10,10 +10,24 @@ use crossterm::{
     event::{Event, KeyCode, KeyEventKind, KeyModifiers, poll, read},
     execute, queue,
     style::Print,
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode, size},
+    terminal::{
+        Clear as TermClear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
+        disable_raw_mode, enable_raw_mode, size,
+    },
 };
 use dialoguer::Input;
-use dialoguer::console::{StyledObject, style};
+use dialoguer::console::style;
+use ratatui::{
+    Frame, Terminal,
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{
+        Block, BorderType, Borders, Cell, Clear as TuiClear, List, ListItem, ListState, Padding,
+        Paragraph, Row, Table, TableState, Wrap,
+    },
+};
 use std::{
     io::{self, Write},
     sync::atomic::{AtomicU16, Ordering},
@@ -21,12 +35,27 @@ use std::{
 };
 use unicode_width::UnicodeWidthChar;
 
-const PANEL_WIDTH: usize = 78;
+const MAX_CONTENT_WIDTH: usize = 112;
+const PANEL_WIDTH: usize = 76;
 const KEY_WIDTH: usize = 14;
+const MENU_REDRAW_TICK: Duration = Duration::from_millis(100);
+
+const TEXT_PRIMARY: Color = Color::Rgb(240, 244, 248);
+const TEXT_MUTED: Color = Color::Rgb(166, 179, 204);
+const ACCENT_PRIMARY: Color = Color::Rgb(255, 183, 178);
+const ACCENT_SECONDARY: Color = Color::Rgb(199, 206, 234);
+const STATUS_OK: Color = Color::Rgb(181, 234, 215);
+const STATUS_WARN: Color = Color::Rgb(255, 218, 193);
+const STATUS_ERROR: Color = Color::Rgb(255, 154, 162);
+const SURFACE_DIM: Color = Color::Rgb(41, 48, 64);
+const BORDER_MUTED: Color = Color::Rgb(82, 92, 116);
+const DARK_TEXT: Color = Color::Rgb(40, 45, 56);
 
 fn content_width() -> usize {
     let (term_width, _) = size().unwrap_or((80, 24));
-    usize::from(term_width).saturating_sub(4).clamp(1, 136)
+    usize::from(term_width)
+        .saturating_sub(4)
+        .clamp(1, MAX_CONTENT_WIDTH)
 }
 
 macro_rules! wln {
@@ -156,9 +185,6 @@ impl App {
         let rule = "━".repeat(content_width());
         wln!("{}", style(&rule).cyan().bright().bold());
         print_centered_line(&format!("{}  v{}", APP_HEADER_TITLE, APP_VERSION), true);
-        print_centered_line(APP_HEADER_SUBTITLE, false);
-        print_centered_line(APP_HEADER_CREDIT, false);
-        print_centered_line(APP_HEADER_DOCS, false);
         wln!("{}", style(&rule).cyan().bright().bold());
 
         if let Some(plan) = plan {
@@ -333,7 +359,7 @@ impl App {
             .unwrap_or(actions.len() - 1);
         enable_raw_mode().context("启用动作菜单 raw mode 失败")?;
         let mut stdout = io::stdout();
-        execute!(stdout, Hide).context("隐藏终端光标失败")?;
+        execute!(stdout, Show).context("显示终端光标失败")?;
         let _guard = ActionMenuGuard;
         stdout.flush().context("刷新动作菜单前置内容失败")?;
         let menu_origin = (0, printed_rows());
@@ -369,13 +395,16 @@ impl App {
 
             let event = if let Some((default, duration)) = timeout {
                 let remaining = duration.saturating_sub(started.elapsed());
-                if remaining.is_zero() || !poll(remaining).context("等待动作菜单按键失败")?
-                {
+                if remaining.is_zero() {
                     clear_action_menu(&mut stdout, last_start_row, last_drawn_rows)
                         .context("清理动作菜单失败")?;
                     set_printed_rows(menu_origin.1);
                     stdout.flush()?;
                     return Ok(default);
+                }
+                if !poll(remaining.min(MENU_REDRAW_TICK)).context("等待动作菜单按键失败")?
+                {
+                    continue;
                 }
                 read().context("读取动作菜单按键失败")?
             } else {
@@ -383,21 +412,17 @@ impl App {
             };
 
             match event {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                Event::Key(key) if is_key_input(key.kind) => match key.code {
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         restore_terminal_state();
-                        println!("\r\n操作已被用户中断 (Ctrl+C)");
+                        println!("\r\n操作已被用户中断");
                         std::process::exit(130);
                     }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        selected = if selected == 0 {
-                            actions.len() - 1
-                        } else {
-                            selected - 1
-                        };
+                    KeyCode::Up | KeyCode::Left | KeyCode::Char('k') | KeyCode::Char('h') => {
+                        selected = wrap_index(selected, actions.len(), -1);
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        selected = (selected + 1) % actions.len();
+                    KeyCode::Down | KeyCode::Right | KeyCode::Char('j') | KeyCode::Char('l') => {
+                        selected = wrap_index(selected, actions.len(), 1);
                     }
                     KeyCode::Enter => {
                         clear_action_menu(&mut stdout, last_start_row, last_drawn_rows)
@@ -415,8 +440,7 @@ impl App {
                     }
                     _ => {}
                 },
-                Event::Key(_) => {}
-                Event::Resize(_, _) => {}
+                Event::Resize(_, _) | Event::Key(_) => {}
                 _ => {}
             }
         }
@@ -456,7 +480,7 @@ impl App {
         let result = f();
         enable_raw_mode().context("重新启用终端 raw mode 失败")?;
         let mut stdout = io::stdout();
-        execute!(stdout, Hide).context("重新隐藏终端光标失败")?;
+        execute!(stdout, Show).context("重新显示终端光标失败")?;
         result
     }
 
@@ -468,325 +492,670 @@ impl App {
     where
         F: FnMut(&DashboardState) -> Result<DashboardView>,
     {
-        enable_raw_mode().context("启用现代 TUI raw mode 失败")?;
+        enable_raw_mode().context("启用 ratatui raw mode 失败")?;
         let mut stdout = io::stdout();
-        execute!(stdout, Hide).context("隐藏现代 TUI 光标失败")?;
-        let _guard = ActionMenuGuard;
+        execute!(stdout, EnterAlternateScreen, Hide).context("进入 ratatui 备用屏幕失败")?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend).context("创建 ratatui 终端失败")?;
+        terminal.clear().context("清空 ratatui 终端失败")?;
+        let _guard = DashboardTerminalGuard;
+
+        let mut view = refresh_dashboard_view(state, &mut render)?;
+        terminal
+            .draw(|frame| render_dashboard(frame, &view))
+            .context("绘制 ratatui Dashboard 失败")?;
 
         loop {
-            let view = render(state)?;
-            self.draw_dashboard(&view)?;
-
-            let event = read().context("读取现代 TUI 按键失败")?;
-            match event {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(DashboardEvent::Exit);
-                    }
-                    KeyCode::Left => {
-                        if matches!(state.focus, DashboardFocus::Tabs) {
-                            return Ok(DashboardEvent::PrevTab);
+            let mut should_draw = false;
+            match read().context("读取 ratatui 按键失败")? {
+                Event::Key(key) if is_key_input(key.kind) => {
+                    match handle_dashboard_key(state, &view, key.code, key.modifiers) {
+                        DashboardInputAction::Event(event) => return Ok(event),
+                        DashboardInputAction::Rebuild => {
+                            view = refresh_dashboard_view(state, &mut render)?;
+                            should_draw = true;
                         }
-                        return Ok(DashboardEvent::AdjustLeft);
-                    }
-                    KeyCode::Right => {
-                        if matches!(state.focus, DashboardFocus::Tabs) {
-                            return Ok(DashboardEvent::NextTab);
+                        DashboardInputAction::Redraw => {
+                            sync_cached_dashboard_view(&mut view, state);
+                            should_draw = true;
                         }
-                        return Ok(DashboardEvent::AdjustRight);
-                    }
-                    KeyCode::BackTab => {
-                        if matches!(state.focus, DashboardFocus::List)
-                            && state.active_tab == DashboardTab::Core
-                        {
-                            return Ok(DashboardEvent::MoveUp);
+                        DashboardInputAction::OpenPopup => {
+                            view = refresh_dashboard_view(state, &mut render)?;
+                            state.popup = popup_for_selection(&view);
+                            sync_cached_dashboard_view(&mut view, state);
+                            should_draw = state.popup.is_some();
                         }
-                        return Ok(DashboardEvent::ToggleFocus);
+                        DashboardInputAction::Idle => {}
                     }
-                    KeyCode::Tab => {
-                        if matches!(state.focus, DashboardFocus::List)
-                            && state.active_tab == DashboardTab::Core
-                        {
-                            return Ok(DashboardEvent::MoveDown);
-                        }
-                        return Ok(DashboardEvent::ToggleFocus);
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => return Ok(DashboardEvent::MoveUp),
-                    KeyCode::Down | KeyCode::Char('j') => return Ok(DashboardEvent::MoveDown),
-                    KeyCode::Enter => return Ok(DashboardEvent::Activate),
-                    KeyCode::Char('/') => return Ok(DashboardEvent::EditSearch),
-                    KeyCode::Esc => {
-                        if matches!(state.focus, DashboardFocus::List) {
-                            state.focus = DashboardFocus::Tabs;
-                        }
-                    }
-                    KeyCode::Backspace => return Ok(DashboardEvent::ClearSearch),
-                    _ => {}
-                },
-                Event::Resize(_, _) => {}
+                }
+                Event::Resize(_, _) => {
+                    sync_cached_dashboard_view(&mut view, state);
+                    should_draw = true;
+                }
+                Event::Key(_) => {}
                 _ => {}
+            }
+
+            if should_draw {
+                terminal
+                    .draw(|frame| render_dashboard(frame, &view))
+                    .context("绘制 ratatui Dashboard 失败")?;
             }
         }
     }
 
     pub(crate) fn prompt_dashboard_search(&self, title: &str, current: &str) -> Result<String> {
         self.with_prompt_mode(|| {
-            let mut input = Input::with_theme(&self.theme);
-            input = input.with_prompt(title).allow_empty(true);
-            if !current.is_empty() {
-                input = input.with_initial_text(current.to_string());
-            }
-            input.interact_text().map_err(Into::into)
+            Input::with_theme(&self.theme)
+                .with_prompt(title)
+                .default(current.to_string())
+                .allow_empty(true)
+                .interact_text()
+                .map_err(Into::into)
         })
     }
+}
 
-    pub(crate) fn draw_dashboard(&self, view: &DashboardView) -> Result<()> {
-        self.clear();
-        self.print_header(None);
-        self.draw_tabs(view);
-        self.draw_dashboard_intro(view);
-        self.draw_dashboard_body(view);
-        self.draw_dashboard_status_bar(view);
-        Ok(())
+fn render_dashboard(frame: &mut Frame<'_>, view: &DashboardView) {
+    let root = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(frame.area());
+    render_header(frame, root[0]);
+    render_body(frame, root[1], view);
+    render_footer(frame, root[2], view);
+
+    if let Some(popup) = &view.popup {
+        render_popup(frame, centered_rect(62, 58, frame.area()), popup);
     }
+}
 
-    fn draw_tabs(&self, view: &DashboardView) {
-        let max_width = content_width().saturating_sub(2).max(16);
-        let mut used = 0_usize;
-        print!("  ");
-        used += 2;
-        for tab in DashboardTab::ALL {
-            let label = format!("{} {}", tab.icon(), tab.label());
-            let rendered = format!(" {label} ");
-            let rendered_width = display_width(&rendered);
-            if used > 2 && used + rendered_width + 1 > max_width {
-                print!("\r\n  ");
-                record_printed_line();
-                used = 2;
-            }
-            if tab == view.active_tab {
-                print!(
-                    "{} ",
-                    if matches!(view.focus, DashboardFocus::Tabs) {
-                        style(rendered.clone()).black().on_magenta().bright().bold()
-                    } else {
-                        style(rendered.clone()).black().on_blue().bright().bold()
-                    }
-                );
-            } else {
-                print!("{} ", style(rendered).cyan().bright());
-            }
-            used += rendered_width + 1;
+fn render_header(frame: &mut Frame<'_>, area: Rect) {
+    let block = compact_block(None, false);
+    let title = Line::from(Span::styled(
+        format!("{APP_HEADER_TITLE}  v{APP_VERSION}"),
+        Style::default()
+            .fg(ACCENT_PRIMARY)
+            .add_modifier(Modifier::BOLD),
+    ));
+    let paragraph = Paragraph::new(title)
+        .alignment(Alignment::Center)
+        .block(block)
+        .style(Style::default());
+    frame.render_widget(paragraph, area);
+}
+
+fn render_body(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+        .margin(1)
+        .split(area);
+    render_sidebar(frame, chunks[0], view);
+    render_content(frame, chunks[1], view);
+}
+
+fn render_sidebar(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let items = DashboardTab::SIDEBAR
+        .iter()
+        .map(|tab| {
+            ListItem::new(Line::from(Span::styled(
+                tab.label(),
+                Style::default().fg(TEXT_MUTED),
+            )))
+        })
+        .collect::<Vec<_>>();
+    let mut state = ListState::default();
+    state.select(Some(view.active_tab.sidebar_index()));
+    let list = List::new(items)
+        .block(ethereal_block(
+            Some("导航"),
+            view.focus == DashboardFocus::Sidebar,
+        ))
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .highlight_style(selected_style())
+        .highlight_symbol("");
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_content(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    match view.active_tab {
+        DashboardTab::Deploy => render_deployment(frame, area, view),
+        DashboardTab::Core | DashboardTab::Protocol | DashboardTab::Plugins => {
+            render_table_view(frame, area, view)
         }
-        print!("\r\n");
-        record_printed_line();
-        let hint = match view.focus {
-            DashboardFocus::Tabs => "导航层: ←/→ 切换标签  Tab 进入工作区  Ctrl+C 退出",
-            DashboardFocus::List => &view.context_hint,
+        _ => render_overview(frame, area, view),
+    }
+}
+
+fn render_overview(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(66), Constraint::Percentage(34)])
+        .margin(1)
+        .split(area);
+    render_table(frame, chunks[0], view, "概览");
+
+    let selected = view.cards.get(view.selected);
+    let detail = selected
+        .map(|card| {
+            let mut lines = vec![
+                Line::from(Span::styled(
+                    card.title.clone(),
+                    Style::default()
+                        .fg(ACCENT_PRIMARY)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(card.subtitle.clone(), muted_style())),
+                Line::from(Span::styled(
+                    card.detail.clone(),
+                    Style::default().fg(TEXT_PRIMARY),
+                )),
+            ];
+            for line in &view.detail_lines {
+                lines.push(Line::from(Span::styled(line.clone(), muted_style())));
+            }
+            Text::from(lines)
+        })
+        .unwrap_or_else(|| Text::from(view.empty_detail.clone()));
+    let paragraph = Paragraph::new(detail)
+        .block(ethereal_block(Some("详情"), false))
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, chunks[1]);
+}
+
+fn render_table_view(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    render_table(frame, area, view, view.page_title.as_str());
+}
+
+fn render_table(frame: &mut Frame<'_>, area: Rect, view: &DashboardView, title: &str) {
+    let rows = if view.cards.is_empty() {
+        vec![Row::new(vec![
+            Cell::from(view.empty_title.clone()),
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(view.empty_detail.clone()),
+        ])]
+    } else {
+        view.cards
+            .iter()
+            .map(|card| {
+                Row::new(vec![
+                    Cell::from(Line::from(vec![
+                        Span::styled(
+                            status_dot(card.kind),
+                            Style::default().fg(status_color(card.kind)),
+                        ),
+                        Span::raw("  "),
+                        Span::styled(card.title.clone(), Style::default().fg(TEXT_PRIMARY)),
+                    ])),
+                    Cell::from(Line::from(Span::styled(
+                        card.badge.clone(),
+                        Style::default().fg(status_color(card.kind)),
+                    ))),
+                    Cell::from(card.subtitle.clone()),
+                    Cell::from(action_label_for_card(card)),
+                ])
+            })
+            .collect::<Vec<_>>()
+    };
+    let header = Row::new(vec!["服务名称", "当前状态", "版本", "运行模式"])
+        .style(
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )
+        .height(1);
+    let widths = [
+        Constraint::Percentage(28),
+        Constraint::Percentage(16),
+        Constraint::Percentage(32),
+        Constraint::Percentage(24),
+    ];
+    let mut state = TableState::default();
+    if !view.cards.is_empty() {
+        state.select(Some(view.selected.min(view.cards.len() - 1)));
+    }
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(ethereal_block(
+            Some(title),
+            view.focus == DashboardFocus::Content,
+        ))
+        .row_highlight_style(selected_style())
+        .highlight_symbol("")
+        .style(Style::default().fg(TEXT_PRIMARY));
+    frame.render_stateful_widget(table, area, &mut state);
+}
+
+fn render_deployment(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let outer = ethereal_block(Some("部署与更新"), view.focus == DashboardFocus::Content);
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(5),
+        ])
+        .split(inner);
+    render_step_bar(frame, chunks[0], view);
+    render_deploy_wizard(frame, chunks[1], view);
+    render_deploy_description(frame, chunks[2], view);
+}
+
+fn render_step_bar(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let current = view
+        .cards
+        .get(view.selected)
+        .and_then(|card| deploy_card_field(card.id));
+    let steps = deployment_steps();
+    let current_index = steps
+        .iter()
+        .position(|(field, _)| Some(*field) == current)
+        .unwrap_or(0);
+    let mut spans = Vec::new();
+    for (idx, (field, label)) in steps.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled("  ───  ", Style::default().fg(BORDER_MUTED)));
+        }
+        let style = if current == Some(*field) {
+            Style::default()
+                .fg(DARK_TEXT)
+                .bg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD)
+        } else if idx < current_index {
+            Style::default().fg(STATUS_OK).add_modifier(Modifier::BOLD)
+        } else {
+            muted_style()
         };
-        wln!(
-            "  {}",
-            style(pad_right(hint, content_width().saturating_sub(2)))
-                .black()
-                .on_blue()
-                .bold()
+        spans.push(Span::styled(format!(" {label} "), style));
+    }
+    let paragraph = Paragraph::new(Line::from(spans))
+        .block(compact_block(None, false))
+        .alignment(Alignment::Center)
+        .style(Style::default());
+    frame.render_widget(paragraph, area);
+}
+
+fn render_deploy_wizard(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(area);
+    render_current_step_options(frame, chunks[0], view);
+    render_deploy_summary(frame, chunks[1], view);
+}
+
+fn render_current_step_options(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let selected_card = view.cards.get(view.selected);
+    let title = selected_card
+        .map(|card| deploy_step_title(card.title.as_str()))
+        .unwrap_or("选择配置");
+
+    let items = if view.detail_choices.is_empty() {
+        view.cards
+            .iter()
+            .filter(|card| deploy_card_action(card.id).is_some())
+            .map(|card| ListItem::new(Line::from(card.title.clone())))
+            .collect::<Vec<_>>()
+    } else {
+        view.detail_choices
+            .iter()
+            .map(|choice| {
+                let suffix = if choice.active { "  ✔" } else { "" };
+                ListItem::new(Line::from(vec![
+                    Span::styled(choice.label.clone(), Style::default().fg(TEXT_PRIMARY)),
+                    Span::styled(
+                        suffix,
+                        Style::default().fg(STATUS_OK).add_modifier(Modifier::BOLD),
+                    ),
+                ]))
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut state = ListState::default();
+    let selected_choice = view
+        .detail_choices
+        .iter()
+        .position(|choice| choice.active)
+        .unwrap_or(0);
+    if !items.is_empty() {
+        state.select(Some(selected_choice.min(items.len() - 1)));
+    }
+    let list = List::new(items)
+        .block(ethereal_block(Some(title), true))
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .highlight_style(selected_style())
+        .highlight_symbol("");
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_deploy_summary(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let summary = view
+        .cards
+        .iter()
+        .filter(|card| deploy_card_field(card.id).is_some())
+        .take(6)
+        .map(|card| {
+            Line::from(vec![
+                Span::styled(card.title.clone(), muted_style()),
+                Span::raw("  "),
+                Span::styled(card.subtitle.clone(), Style::default().fg(TEXT_PRIMARY)),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let paragraph = Paragraph::new(Text::from(summary))
+        .block(ethereal_block(Some("配置总览"), false))
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
+}
+
+fn render_deploy_description(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let text = selected_deploy_description(view)
+        .unwrap_or_else(|| "准备好后，可以执行当前部署计划。".to_string());
+    let paragraph = Paragraph::new(Text::from(vec![Line::from(Span::styled(
+        text,
+        Style::default().fg(TEXT_MUTED),
+    ))]))
+    .block(ethereal_block(Some("说明"), false))
+    .style(Style::default().fg(TEXT_MUTED))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
+}
+
+fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let prompt = match view.mode {
+        AppMode::Navigation => {
+            "[↑/↓] 导航   [Tab] 切换区域   [Enter] 确认/展开   [Esc] 返回   [Ctrl+Q] 退出"
+        }
+        AppMode::ContentFocused => {
+            "[↑/↓] 选择   [Tab] 切换区域   [Enter] 确认/展开   [Esc] 返回   [Ctrl+Q] 退出"
+        }
+        AppMode::InputMode => "[Enter] 确认   [Esc] 取消   [Ctrl+Q] 退出",
+        AppMode::PopupActive => "[←/→] 选择操作   [Enter] 执行   [Esc] 关闭   [Ctrl+Q] 退出",
+    };
+    let branch = "主程序分支: main";
+    let mut text = prompt.to_string();
+    let width = usize::from(area.width);
+    let branch_width = display_width(branch);
+    let prompt_width = display_width(prompt);
+    if width > branch_width + 2 {
+        let spaces = width.saturating_sub(prompt_width + branch_width).max(1);
+        text = format!("{prompt}{}{branch}", " ".repeat(spaces));
+    }
+    let paragraph = Paragraph::new(truncate_display(&text, width))
+        .alignment(Alignment::Center)
+        .style(
+            Style::default()
+                .fg(TEXT_PRIMARY)
+                .bg(SURFACE_DIM)
+                .add_modifier(Modifier::BOLD),
         );
-        self.print_line();
+    frame.render_widget(paragraph, area);
+}
+
+fn render_popup(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
+    frame.render_widget(TuiClear, area);
+    let block = ethereal_block(Some(popup.title.as_str()), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(3)])
+        .split(inner);
+
+    let mut lines = Vec::new();
+    if !popup.subtitle.is_empty() {
+        lines.push(Line::from(Span::styled(
+            popup.subtitle.clone(),
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
     }
-
-    fn draw_dashboard_intro(&self, view: &DashboardView) {
-        wln!(
-            "  {} {}",
-            style("▌").green().bright().bold(),
-            style(&view.page_title).cyan().bright().bold()
-        );
-        if !view.page_subtitle.is_empty() {
-            wln!("    {}", style(&view.page_subtitle).white().dim());
-        }
-        let focus = match view.focus {
-            DashboardFocus::Tabs => "焦点: 顶部标签",
-            DashboardFocus::List => "焦点: 工作区",
-        };
-        let search = if view.search_query.is_empty() {
-            "筛选: 全部".to_string()
-        } else {
-            format!(
-                "筛选: {}",
-                truncate_display(&view.search_query, content_width().saturating_sub(26))
-            )
-        };
-        let scope = if view.cards.is_empty() {
-            "项目: 0 / 0".to_string()
-        } else {
-            format!("项目: {} / {}", view.selected + 1, view.cards.len())
-        };
-        let layout = if content_width() < 84 {
-            "布局: 紧凑堆叠"
-        } else {
-            "布局: 双栏面板"
-        };
-        wln!(
-            "    {}  {}  {}",
-            style(focus).yellow().bright(),
-            style(search).magenta().bright(),
-            style(scope).cyan().bright()
-        );
-        wln!("    {}", style(layout).white().dim());
-        self.print_line();
+    for line in &popup.lines {
+        lines.push(Line::from(Span::styled(line.clone(), muted_style())));
     }
+    let body = Paragraph::new(Text::from(lines))
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(body, chunks[0]);
 
-    fn draw_dashboard_body(&self, view: &DashboardView) {
-        let (term_width, _) = size().unwrap_or((80, 24));
-        let content_width = usize::from(term_width).saturating_sub(7).clamp(1, 136);
-        if content_width < 84 {
-            let panel_width = content_width;
-            let left = self.build_left_panel_lines(view, panel_width);
-            let right = self.build_right_panel_lines(view, panel_width);
+    render_popup_actions(frame, chunks[1], popup);
+}
 
-            wln!("  {}", style("导航面板").cyan().bright().bold());
-            for line in left {
-                wln!("  {}", style_left_panel_line(view, &line, panel_width));
-            }
-            self.print_line();
-            wln!("  {}", style("详情面板").magenta().bright().bold());
-            for line in right {
-                wln!("  {}", style_right_panel_line(view, &line, panel_width));
-            }
-            self.print_line();
-            return;
-        }
-        let left_width = match view.active_tab {
-            DashboardTab::Core => (content_width * 29 / 100).clamp(24, 32),
-            DashboardTab::Deploy => (content_width * 33 / 100).clamp(24, 36),
-            _ => (content_width * 37 / 100).clamp(26, 42),
-        };
-        let right_width = content_width
-            .saturating_sub(left_width)
-            .saturating_sub(3)
-            .max(28);
-        let left = self.build_left_panel_lines(view, left_width);
-        let right = self.build_right_panel_lines(view, right_width);
-        let height = left.len().max(right.len());
-
-        for idx in 0..height {
-            let left_line = left
-                .get(idx)
-                .cloned()
-                .unwrap_or_else(|| " ".repeat(left_width));
-            let right_line = right
-                .get(idx)
-                .cloned()
-                .unwrap_or_else(|| " ".repeat(right_width));
-            wln!(
-                "  {} {} {}",
-                style_left_panel_line(view, &left_line, left_width),
-                style("|").blue().bright(),
-                style_right_panel_line(view, &right_line, right_width)
-            );
-        }
-        self.print_line();
-    }
-
-    fn build_left_panel_lines(&self, view: &DashboardView, width: usize) -> Vec<String> {
-        match view.active_tab {
-            DashboardTab::Overview => return build_overview_left_panel_lines(view, width),
-            DashboardTab::Core => return build_core_left_panel_lines(view, width),
-            DashboardTab::Deploy => return build_deploy_left_panel_lines(view, width),
-            DashboardTab::Plugins => return build_plugins_left_panel_lines(view, width),
-            _ => {}
-        }
-
-        let mut lines = Vec::new();
-        lines.push(frame_top(&view.list_title, width));
-        lines.push(frame_line(&view.list_subtitle, width));
-        lines.push(frame_rule(width));
-        let search = if view.search_query.is_empty() {
-            "/ 搜索服务、步骤或插件".to_string()
-        } else {
-            format!(
-                "/ {}",
-                truncate_display(&view.search_query, width.saturating_sub(4))
-            )
-        };
-        lines.push(frame_line(&search, width));
-        lines.push(frame_rule(width));
-
-        if view.cards.is_empty() {
-            lines.push(frame_line(&view.empty_title, width));
-            lines.push(frame_line(&view.empty_detail, width));
-            lines.push(frame_bottom(width));
-            return lines;
-        }
-
-        for (idx, card) in view.cards.iter().enumerate() {
-            let active = idx == view.selected;
-            let title = truncate_display(
-                &format!("{} {}", card.icon, card.title),
-                width.saturating_sub(3),
-            );
-            let badge = truncate_display(
-                &format!("{} {}", status_glyph(card.kind), card.badge),
-                width.saturating_sub(3),
-            );
-            let subtitle = truncate_display(&card.subtitle, width.saturating_sub(3));
-            let detail = truncate_display(&card.detail, width.saturating_sub(3));
-            lines.push(format!("{} {}", if active { ">" } else { " " }, title));
-            lines.push(format!("  {}", badge));
-            lines.push(format!("  {}", subtitle));
+fn render_popup_actions(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            popup
+                .actions
+                .iter()
+                .map(|_| Constraint::Length(14))
+                .collect::<Vec<_>>(),
+        )
+        .split(area);
+    for (idx, action) in popup.actions.iter().enumerate() {
+        let active = idx == popup.selected;
+        let paragraph = Paragraph::new(Line::from(Span::styled(
+            action.clone(),
             if active {
-                lines.push(format!("  {}", detail));
-            }
-            if idx + 1 != view.cards.len() {
-                lines.push(frame_rule(width));
-            }
+                Style::default()
+                    .fg(DARK_TEXT)
+                    .bg(ACCENT_SECONDARY)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                muted_style()
+            },
+        )))
+        .alignment(Alignment::Center)
+        .block(compact_block(None, active));
+        if let Some(area) = chunks.get(idx) {
+            frame.render_widget(paragraph, *area);
         }
-        lines.push(frame_bottom(width));
-        lines
     }
+}
 
-    fn build_right_panel_lines(&self, view: &DashboardView, width: usize) -> Vec<String> {
-        match view.active_tab {
-            DashboardTab::Overview => return build_overview_right_panel_lines(view, width),
-            DashboardTab::Core => return build_core_right_panel_lines(view, width),
-            DashboardTab::Deploy => return build_deploy_right_panel_lines(view, width),
-            DashboardTab::Plugins => return build_plugins_right_panel_lines(view, width),
-            _ => {}
-        }
+fn compact_block(title: Option<&str>, focused: bool) -> Block<'_> {
+    styled_block(title, focused)
+}
 
-        let mut lines = vec![
-            frame_top(&view.detail_title, width),
-            frame_line(&view.detail_subtitle, width),
-            frame_rule(width),
-            frame_line(":: 状态摘要", width),
-        ];
-        for line in &view.detail_lines {
-            lines.push(frame_line(line, width));
+fn ethereal_block(title: Option<&str>, focused: bool) -> Block<'_> {
+    styled_block(title, focused).padding(Padding::symmetric(1, 1))
+}
+
+fn styled_block(title: Option<&str>, focused: bool) -> Block<'_> {
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if focused {
+            ACCENT_PRIMARY
+        } else {
+            BORDER_MUTED
+        }))
+        .style(Style::default().fg(TEXT_PRIMARY));
+    if let Some(title) = title {
+        block = block.title(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    block
+}
+
+fn selected_style() -> Style {
+    Style::default()
+        .fg(DARK_TEXT)
+        .bg(ACCENT_SECONDARY)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn muted_style() -> Style {
+    Style::default().fg(TEXT_MUTED)
+}
+
+fn status_dot(kind: StatusKind) -> &'static str {
+    match kind {
+        StatusKind::Running => "●",
+        StatusKind::Stopped => "●",
+        StatusKind::Warning => "●",
+        StatusKind::Neutral => "●",
+    }
+}
+
+fn status_color(kind: StatusKind) -> Color {
+    match kind {
+        StatusKind::Running => STATUS_OK,
+        StatusKind::Stopped => STATUS_ERROR,
+        StatusKind::Warning => STATUS_WARN,
+        StatusKind::Neutral => ACCENT_SECONDARY,
+    }
+}
+
+fn deployment_steps() -> &'static [(PlanField, &'static str)] {
+    &[
+        (PlanField::InstallPath, "目录"),
+        (PlanField::MaiBotBranch, "分支"),
+        (PlanField::InstallMode, "模式"),
+        (PlanField::PythonEnv, "核心配置"),
+        (PlanField::GithubProxy, "镜像源"),
+    ]
+}
+
+fn deploy_step_title(fallback: &str) -> &str {
+    match fallback {
+        "GitHub 线路" | "GitHub 镜像" | "GitHub 代理" => "选择 GitHub 镜像源",
+        "安装路径" => "选择安装目录",
+        "MaiBot 分支" => "选择主程序分支",
+        "安装模式" => "选择部署模式",
+        "Python 环境" | "虚拟环境" => "配置核心环境",
+        "PyPI 镜像源" => "选择 PyPI 镜像源",
+        "协议端" => "选择协议端服务",
+        _ => fallback,
+    }
+}
+
+fn selected_deploy_description(view: &DashboardView) -> Option<String> {
+    if let Some(choice) = view.detail_choices.iter().find(|choice| choice.active) {
+        return Some(choice.detail.clone());
+    }
+    view.cards
+        .get(view.selected)
+        .map(|card| card.detail.clone())
+        .filter(|text| !text.is_empty())
+}
+
+fn action_label_for_card(card: &DashboardCard) -> String {
+    match card.id {
+        "core-start" => "启动".to_string(),
+        "core-stop" => "停止".to_string(),
+        "core-console" => "控制台".to_string(),
+        "core-logs" => "日志".to_string(),
+        "napcat" | "llbot" => "控制".to_string(),
+        "napcat-todo" | "llbot-todo" => "说明".to_string(),
+        "plugin-item" => "维护".to_string(),
+        "plugin-center" => "管理".to_string(),
+        "plugins-empty" | "workspace" => "部署".to_string(),
+        _ => "打开".to_string(),
+    }
+}
+
+fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
+    let card = view.cards.get(view.selected)?;
+    let actions = match view.active_tab {
+        DashboardTab::Core => {
+            let primary = match card.id {
+                "core-start" => "启动",
+                "core-stop" => "停止",
+                "core-console" => "控制台",
+                "core-logs" => "日志",
+                _ => "执行",
+            };
+            vec![
+                primary.to_string(),
+                "更多控制".to_string(),
+                "取消".to_string(),
+            ]
         }
-        if !view.action_lines.is_empty() {
-            lines.push(frame_rule(width));
-            lines.push(frame_line(":: 下一步", width));
-            for action in &view.action_lines {
-                lines.push(frame_line(&format!("◇ {action}"), width));
+        DashboardTab::Protocol => {
+            if card.id.ends_with("-todo") {
+                vec!["查看说明".to_string(), "取消".to_string()]
+            } else {
+                vec![
+                    "启动".to_string(),
+                    "停止".to_string(),
+                    "日志".to_string(),
+                    "更多控制".to_string(),
+                    "取消".to_string(),
+                ]
             }
         }
-        lines.push(frame_bottom(width));
-        lines
-    }
+        DashboardTab::Plugins => {
+            if card.id == "plugin-item" {
+                vec![
+                    "修复依赖".to_string(),
+                    "卸载".to_string(),
+                    "取消".to_string(),
+                ]
+            } else {
+                vec!["打开插件中心".to_string(), "取消".to_string()]
+            }
+        }
+        DashboardTab::Overview => vec!["打开".to_string(), "取消".to_string()],
+        DashboardTab::Access => vec!["打开".to_string(), "取消".to_string()],
+        DashboardTab::About => vec!["取消".to_string()],
+        DashboardTab::Deploy => return None,
+    };
+    let mut lines = vec![format!("状态: {}", card.badge), card.detail.clone()];
+    lines.extend(view.detail_lines.iter().take(8).cloned());
+    Some(DashboardPopup {
+        title: card.title.clone(),
+        subtitle: card.subtitle.clone(),
+        lines,
+        actions,
+        selected: 0,
+    })
+}
 
-    fn draw_dashboard_status_bar(&self, view: &DashboardView) {
-        let total = content_width().saturating_sub(2);
-        let left = truncate_display(
-            &format!("{} {}", view.active_tab.icon(), view.status_message),
-            total / 2,
-        );
-        let right = truncate_display(&view.context_hint, total / 2);
-        let gap = total.saturating_sub(display_width(&left) + display_width(&right));
-        wln!(
-            "  {}{}{}",
-            style(left).black().on_green().bold(),
-            style(" ".repeat(gap.max(1))).on_blue(),
-            style(right).white().on_blue().bold()
-        );
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
+}
+
+struct DashboardTerminalGuard;
+
+impl Drop for DashboardTerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, Show, LeaveAlternateScreen);
+        let _ = stdout.flush();
     }
 }
 
@@ -794,15 +1163,401 @@ struct ActionMenuGuard;
 
 impl Drop for ActionMenuGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let mut stdout = io::stdout();
-        let _ = execute!(stdout, Show);
+        restore_terminal_state();
     }
 }
 
 struct ActionMenuDrawState {
     start_row: u16,
     rows: usize,
+}
+
+fn is_key_input(kind: KeyEventKind) -> bool {
+    matches!(kind, KeyEventKind::Press | KeyEventKind::Repeat)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DashboardInputAction {
+    Idle,
+    Redraw,
+    Rebuild,
+    OpenPopup,
+    Event(DashboardEvent),
+}
+
+fn refresh_dashboard_view<F>(state: &mut DashboardState, render: &mut F) -> Result<DashboardView>
+where
+    F: FnMut(&DashboardState) -> Result<DashboardView>,
+{
+    sync_app_mode(state);
+    let mut view = render(state)?;
+    view.popup = state.popup.clone();
+    Ok(view)
+}
+
+fn sync_app_mode(state: &mut DashboardState) {
+    state.mode = if state.popup.is_some() {
+        AppMode::PopupActive
+    } else {
+        match state.focus {
+            DashboardFocus::Sidebar => AppMode::Navigation,
+            DashboardFocus::Content => AppMode::ContentFocused,
+        }
+    };
+}
+
+fn sync_cached_dashboard_view(view: &mut DashboardView, state: &mut DashboardState) {
+    sync_app_mode(state);
+    view.mode = state.mode;
+    view.focus = state.focus;
+    view.popup = state.popup.clone();
+    if view.active_tab != state.active_tab {
+        return;
+    }
+
+    let selected = state.selected_for_len(view.cards.len());
+    let selected_changed = view.selected != selected;
+    view.selected = selected;
+    if selected_changed {
+        if let Some(card) = view.cards.get(selected) {
+            view.detail_title = card.title.clone();
+            view.detail_subtitle = card.subtitle.clone();
+        }
+        if view.active_tab == DashboardTab::Deploy {
+            sync_deploy_detail_choices(view, state);
+        } else {
+            view.detail_lines.clear();
+            view.detail_choices.clear();
+            view.action_lines.clear();
+        }
+    }
+}
+
+fn sync_deploy_detail_choices(view: &mut DashboardView, state: &DashboardState) {
+    view.detail_lines.clear();
+    view.action_lines.clear();
+    let Some(plan) = state.deploy_plan.as_ref() else {
+        view.detail_choices.clear();
+        return;
+    };
+    let Some(card) = view.cards.get(view.selected) else {
+        view.detail_choices.clear();
+        return;
+    };
+    let Some(field) = deploy_card_field(card.id) else {
+        view.detail_choices.clear();
+        return;
+    };
+    view.detail_choices = planner_choices_for_plan(plan, field)
+        .into_iter()
+        .enumerate()
+        .map(|(idx, label)| DashboardChoice {
+            detail: deploy_choice_detail_for_cache(field, idx, &label),
+            active: planner_choice_active_for_plan(plan, field, idx),
+            label,
+        })
+        .collect();
+}
+
+fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> Vec<String> {
+    match field {
+        PlanField::InstallPath => vec![plan.install_path.display().to_string()],
+        PlanField::InstallMode => vec![
+            InstallMode::Normal.label().to_string(),
+            InstallMode::Clean.label().to_string(),
+        ],
+        PlanField::PythonEnv => vec![
+            PythonEnv::System.label().to_string(),
+            PythonEnv::Uv.label().to_string(),
+        ],
+        PlanField::VenvMode => {
+            if plan.install_mode == InstallMode::Clean {
+                vec!["固定: 删除并重建环境".to_string()]
+            } else {
+                vec![
+                    VenvMode::Keep.label(plan.python_env).to_string(),
+                    VenvMode::Recreate.label(plan.python_env).to_string(),
+                ]
+            }
+        }
+        PlanField::MaiBotBranch => vec!["main".to_string(), "dev".to_string()],
+        PlanField::GithubProxy => {
+            let mut choices = vec!["自动测速选择".to_string(), "官方直连".to_string()];
+            choices.extend(github_mirrors().iter().map(|mirror| (*mirror).to_string()));
+            if !plan.github_proxy.is_empty()
+                && plan.github_proxy != "auto"
+                && plan.github_proxy != "direct"
+                && !github_mirrors()
+                    .iter()
+                    .any(|mirror| *mirror == plan.github_proxy)
+            {
+                choices.push(format!("自定义: {}", plan.github_proxy));
+            }
+            choices.push("输入自定义镜像".to_string());
+            choices
+        }
+        PlanField::PipSource => {
+            let mut choices = vec![
+                "系统默认".to_string(),
+                "清华源".to_string(),
+                "阿里云源".to_string(),
+                "腾讯源".to_string(),
+                "中国科大源".to_string(),
+            ];
+            if !plan.pip_display.is_empty()
+                && !["系统默认", "清华源", "阿里云源", "腾讯源", "中国科大源"]
+                    .contains(&plan.pip_display.as_str())
+            {
+                choices.push(format!("当前: {}", plan.pip_display));
+            }
+            choices.push("输入自定义 PyPI".to_string());
+            choices
+        }
+        PlanField::BotProtocols => vec![
+            BotProtocol::NapCat.label().to_string(),
+            BotProtocol::LuckyLilliaBot.label().to_string(),
+            "暂不安装协议端".to_string(),
+        ],
+        PlanField::DockerMirror => vec![
+            DockerMirror::OneMs.label().to_string(),
+            DockerMirror::Xuanyuan.label().to_string(),
+            DockerMirror::Official.label().to_string(),
+            DockerMirror::Keep.label().to_string(),
+        ],
+    }
+}
+
+fn planner_choice_active_for_plan(plan: &InstallPlan, field: PlanField, idx: usize) -> bool {
+    match field {
+        PlanField::InstallPath => idx == 0,
+        PlanField::InstallMode => {
+            matches!(
+                (plan.install_mode, idx),
+                (InstallMode::Normal, 0) | (InstallMode::Clean, 1)
+            )
+        }
+        PlanField::PythonEnv => {
+            matches!(
+                (plan.python_env, idx),
+                (PythonEnv::System, 0) | (PythonEnv::Uv, 1)
+            )
+        }
+        PlanField::VenvMode => {
+            if plan.install_mode == InstallMode::Clean {
+                idx == 0
+            } else {
+                matches!(
+                    (plan.venv_mode, idx),
+                    (VenvMode::Keep, 0) | (VenvMode::Recreate, 1)
+                )
+            }
+        }
+        PlanField::MaiBotBranch => {
+            (idx == 0 && plan.maibot_branch != "dev") || (idx == 1 && plan.maibot_branch == "dev")
+        }
+        PlanField::GithubProxy => {
+            (idx == 0 && plan.github_proxy == "auto")
+                || (idx == 1 && plan.github_proxy == "direct")
+                || github_mirrors()
+                    .get(idx.saturating_sub(2))
+                    .is_some_and(|mirror| *mirror == plan.github_proxy)
+        }
+        PlanField::PipSource => {
+            matches!(
+                (plan.pip_display.as_str(), idx),
+                ("系统默认", 0)
+                    | ("清华源", 1)
+                    | ("阿里云源", 2)
+                    | ("腾讯源", 3)
+                    | ("中国科大源", 4)
+            )
+        }
+        PlanField::BotProtocols => {
+            (idx == 0 && plan.bot_protocols.as_slice() == [BotProtocol::NapCat])
+                || (idx == 1 && plan.bot_protocols.as_slice() == [BotProtocol::LuckyLilliaBot])
+                || (idx == 2 && plan.bot_protocols.is_empty())
+        }
+        PlanField::DockerMirror => {
+            matches!(
+                (plan.docker_mirror, idx),
+                (DockerMirror::OneMs, 0)
+                    | (DockerMirror::Xuanyuan, 1)
+                    | (DockerMirror::Official, 2)
+                    | (DockerMirror::Keep, 3)
+            )
+        }
+    }
+}
+
+fn deploy_choice_detail_for_cache(field: PlanField, idx: usize, label: &str) -> String {
+    match field {
+        PlanField::InstallPath => "打开路径输入框".to_string(),
+        PlanField::MaiBotBranch => {
+            if idx == 0 {
+                "推荐稳定环境使用。".to_string()
+            } else {
+                "适合跟进新功能和预发布改动。".to_string()
+            }
+        }
+        PlanField::InstallMode => {
+            if idx == 0 {
+                "保留现有工作区并执行更新/修复。".to_string()
+            } else {
+                "清空目标目录后重新部署。".to_string()
+            }
+        }
+        PlanField::PythonEnv => {
+            if idx == 0 {
+                "使用本机 Python 解释器。".to_string()
+            } else {
+                "由 uv 管理隔离环境与 Python 版本。".to_string()
+            }
+        }
+        PlanField::VenvMode => {
+            if label.contains("固定") {
+                "由当前安装模式自动锁定。".to_string()
+            } else if idx == 0 {
+                "尽量复用现有环境，减少重装时间。".to_string()
+            } else {
+                "重建环境以消除历史依赖残留。".to_string()
+            }
+        }
+        PlanField::GithubProxy => {
+            if idx == 0 {
+                "执行时测速后自动选最快线路。".to_string()
+            } else if idx == 1 {
+                "直接访问官方 GitHub。".to_string()
+            } else if label.contains("自定义") {
+                "选择后会提示输入自定义镜像地址。".to_string()
+            } else {
+                "切换到预设 GitHub 镜像源。".to_string()
+            }
+        }
+        PlanField::PipSource => {
+            if idx == 0 {
+                "保持系统默认 Python 包源。".to_string()
+            } else if label.contains("自定义") {
+                "选择后会提示输入自定义 PyPI 地址。".to_string()
+            } else {
+                "为 pip 和 uv 设置统一镜像源。".to_string()
+            }
+        }
+        PlanField::BotProtocols => match idx {
+            0 => "默认推荐，启用 NapCatQQ Shell。".to_string(),
+            1 => "切换到 LuckyLilliaBot Desktop。".to_string(),
+            _ => "暂不安装附加协议端。".to_string(),
+        },
+        PlanField::DockerMirror => "当前平台可能不使用 Docker。".to_string(),
+    }
+}
+
+fn handle_dashboard_key(
+    state: &mut DashboardState,
+    view: &DashboardView,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> DashboardInputAction {
+    if code == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
+        return DashboardInputAction::Event(DashboardEvent::Exit);
+    }
+
+    if code == KeyCode::Char('1') && modifiers.contains(KeyModifiers::CONTROL) {
+        if state.focus == DashboardFocus::Sidebar {
+            return DashboardInputAction::Idle;
+        }
+        state.focus = DashboardFocus::Sidebar;
+        return DashboardInputAction::Redraw;
+    }
+
+    if let Some(popup) = state.popup.as_mut() {
+        match code {
+            KeyCode::Esc => {
+                state.popup = None;
+                DashboardInputAction::Redraw
+            }
+            KeyCode::Up | KeyCode::Left => {
+                popup.selected = wrap_index(popup.selected, popup.actions.len(), -1);
+                DashboardInputAction::Redraw
+            }
+            KeyCode::Down | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                popup.selected = wrap_index(popup.selected, popup.actions.len(), 1);
+                DashboardInputAction::Redraw
+            }
+            KeyCode::Enter => {
+                let cancel = popup
+                    .actions
+                    .get(popup.selected)
+                    .is_none_or(|action| action == "取消");
+                if cancel {
+                    state.popup = None;
+                    DashboardInputAction::Redraw
+                } else {
+                    DashboardInputAction::Event(DashboardEvent::Activate)
+                }
+            }
+            _ => DashboardInputAction::Idle,
+        }
+    } else {
+        match code {
+            KeyCode::Tab | KeyCode::BackTab => {
+                state.toggle_focus();
+                DashboardInputAction::Redraw
+            }
+            KeyCode::Esc => {
+                if state.focus == DashboardFocus::Content {
+                    state.focus = DashboardFocus::Sidebar;
+                    DashboardInputAction::Redraw
+                } else {
+                    DashboardInputAction::Idle
+                }
+            }
+            KeyCode::Up => match state.focus {
+                DashboardFocus::Sidebar => {
+                    state.prev_tab();
+                    DashboardInputAction::Rebuild
+                }
+                DashboardFocus::Content => {
+                    state.move_selection(view.cards.len(), -1);
+                    DashboardInputAction::Redraw
+                }
+            },
+            KeyCode::Down => match state.focus {
+                DashboardFocus::Sidebar => {
+                    state.next_tab();
+                    DashboardInputAction::Rebuild
+                }
+                DashboardFocus::Content => {
+                    state.move_selection(view.cards.len(), 1);
+                    DashboardInputAction::Redraw
+                }
+            },
+            KeyCode::Enter => match state.focus {
+                DashboardFocus::Sidebar => {
+                    state.focus = DashboardFocus::Content;
+                    DashboardInputAction::Redraw
+                }
+                DashboardFocus::Content => {
+                    if view.active_tab == DashboardTab::Deploy {
+                        if let Some(selected) = view.cards.get(view.selected) {
+                            if deploy_card_field(selected.id).is_some_and(|field| {
+                                field != PlanField::InstallPath && !view.detail_choices.is_empty()
+                            }) {
+                                DashboardInputAction::Event(DashboardEvent::AdjustRight)
+                            } else {
+                                DashboardInputAction::Event(DashboardEvent::Activate)
+                            }
+                        } else {
+                            DashboardInputAction::Idle
+                        }
+                    } else {
+                        DashboardInputAction::OpenPopup
+                    }
+                }
+            },
+            KeyCode::Backspace => DashboardInputAction::Event(DashboardEvent::ClearSearch),
+            _ => DashboardInputAction::Idle,
+        }
+    }
 }
 
 fn record_printed_line() {
@@ -825,469 +1580,11 @@ fn printed_rows() -> u16 {
     PRINTED_ROWS.load(Ordering::Relaxed)
 }
 
-fn style_left_panel_line(view: &DashboardView, line: &str, width: usize) -> StyledObject<String> {
-    let padded = pad_right(line, width);
-    if is_active_panel_line(view, line) {
-        match view.active_tab {
-            DashboardTab::Core => style(padded).black().on_green().bright().bold(),
-            DashboardTab::Deploy => style(padded).black().on_yellow().bright().bold(),
-            _ => style(padded).black().on_cyan().bright().bold(),
-        }
-    } else if line.starts_with('+') {
-        style(padded).cyan().bright().bold()
-    } else if line.starts_with("| /") {
-        style(padded).yellow().bright()
-    } else if line.trim().is_empty() || line.starts_with("  ") {
-        style(padded).white().dim()
-    } else {
-        style(padded).white().bright()
+fn wrap_index(current: usize, len: usize, delta: isize) -> usize {
+    if len == 0 {
+        return 0;
     }
-}
-
-fn style_right_panel_line(view: &DashboardView, line: &str, width: usize) -> StyledObject<String> {
-    let padded = pad_right(line, width);
-    if let Some(section) = line.strip_prefix("| :: ") {
-        let rendered = format!("| {section}");
-        match view.active_tab {
-            DashboardTab::Core => style(pad_right(&rendered, width)).green().bright().bold(),
-            DashboardTab::Deploy => style(pad_right(&rendered, width)).yellow().bright().bold(),
-            _ => style(pad_right(&rendered, width)).magenta().bright().bold(),
-        }
-    } else if line.starts_with('+') {
-        style(padded).cyan().bright().bold()
-    } else if line.trim().is_empty() {
-        style(padded).white().dim()
-    } else if line.starts_with("| ✓ ") {
-        style(padded).black().on_green().bright().bold()
-    } else if line.starts_with("| ○ ") {
-        style(padded).yellow().bright()
-    } else if line.starts_with("| · ") {
-        style(padded).white().dim()
-    } else {
-        style(padded).white().bright()
-    }
-}
-
-fn is_active_panel_line(view: &DashboardView, line: &str) -> bool {
-    match view.active_tab {
-        DashboardTab::Overview => line.starts_with("| >"),
-        DashboardTab::Core => line.starts_with("> "),
-        DashboardTab::Deploy => line.starts_with("> "),
-        _ => line.starts_with("> "),
-    }
-}
-
-fn build_overview_left_panel_lines(view: &DashboardView, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    lines.push(frame_top("服务卡片", width));
-    lines.push(frame_line("运行态 / 摘要 / 可进入模块", width));
-    lines.push(frame_rule(width));
-    let search = if view.search_query.is_empty() {
-        "/ 搜索服务、协议端或插件".to_string()
-    } else {
-        format!(
-            "/ {}",
-            truncate_display(&view.search_query, width.saturating_sub(4))
-        )
-    };
-    lines.push(frame_line(&search, width));
-    lines.push(frame_rule(width));
-
-    if view.cards.is_empty() {
-        lines.push(frame_line(&view.empty_title, width));
-        lines.push(frame_line(&view.empty_detail, width));
-        lines.push(frame_bottom(width));
-        return lines;
-    }
-
-    for (idx, card) in view.cards.iter().enumerate() {
-        let active = idx == view.selected;
-        let prefix = if active { ">" } else { " " };
-        let title = truncate_display(
-            &format!("{prefix} {} {}", card.icon, card.title),
-            width.saturating_sub(2),
-        );
-        let badge = truncate_display(
-            &format!("{} {}", status_glyph(card.kind), card.badge),
-            width.saturating_sub(4),
-        );
-        lines.push(frame_line(&title, width));
-        lines.push(frame_line(&format!("状态  {badge}"), width));
-        lines.push(frame_line(
-            &format!(
-                "摘要  {}",
-                truncate_display(&card.subtitle, width.saturating_sub(8))
-            ),
-            width,
-        ));
-        if active {
-            lines.push(frame_line(
-                &format!(
-                    "入口  {}",
-                    truncate_display(&card.detail, width.saturating_sub(8))
-                ),
-                width,
-            ));
-        }
-        if idx + 1 != view.cards.len() {
-            lines.push(frame_rule(width));
-        }
-    }
-    lines.push(frame_bottom(width));
-    lines
-}
-
-fn build_core_left_panel_lines(view: &DashboardView, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    lines.push(frame_top("核心控制块", width));
-    lines.push(frame_line("启动 / 停止 / 控制台 / 日志", width));
-    lines.push(frame_rule(width));
-    let search = if view.search_query.is_empty() {
-        "/ 搜索核心动作".to_string()
-    } else {
-        format!(
-            "/ {}",
-            truncate_display(&view.search_query, width.saturating_sub(4))
-        )
-    };
-    lines.push(frame_line(&search, width));
-    lines.push(frame_rule(width));
-
-    for (idx, card) in view.cards.iter().enumerate() {
-        let active = idx == view.selected;
-        let prefix = if active { "> " } else { "  " };
-        let title = truncate_display(
-            &format!("{} {}", card.icon, card.title),
-            width.saturating_sub(3),
-        );
-        let subtitle = truncate_display(&card.subtitle, width.saturating_sub(3));
-        let badge = truncate_display(
-            &format!("{} {}", status_glyph(card.kind), card.badge),
-            width.saturating_sub(3),
-        );
-        let detail = truncate_display(&card.detail, width.saturating_sub(3));
-        lines.push(format!("{prefix}{title}"));
-        lines.push(format!("  {badge}"));
-        lines.push(format!("  {subtitle}"));
-        if active {
-            lines.push(format!("  {detail}"));
-        }
-        if idx + 1 != view.cards.len() {
-            lines.push(frame_rule(width));
-        }
-    }
-    lines.push(frame_bottom(width));
-    lines
-}
-
-fn build_deploy_left_panel_lines(view: &DashboardView, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    lines.push(frame_top("步骤指示器", width));
-    lines.push(frame_line("目录 -> 分支 -> 模式 -> 环境 -> 镜像", width));
-    lines.push(frame_rule(width));
-    let search = if view.search_query.is_empty() {
-        "/ 搜索步骤或动作".to_string()
-    } else {
-        format!(
-            "/ {}",
-            truncate_display(&view.search_query, width.saturating_sub(4))
-        )
-    };
-    lines.push(frame_line(&search, width));
-    lines.push(frame_rule(width));
-
-    for (idx, card) in view.cards.iter().enumerate() {
-        let active = idx == view.selected;
-        let selector = if active { ">" } else { " " };
-        let step = match card.id {
-            "deploy-start" => "GO".to_string(),
-            "deploy-reset" => "DF".to_string(),
-            "deploy-back" => "BK".to_string(),
-            _ => format!("{:02}", idx + 1),
-        };
-        let title = truncate_display(&card.title, width.saturating_sub(7));
-        let subtitle = truncate_display(&card.subtitle, width.saturating_sub(6));
-        let badge = truncate_display(
-            &format!("{} {}", status_glyph(card.kind), card.badge),
-            width.saturating_sub(4),
-        );
-        let rail = if matches!(card.id, "deploy-start" | "deploy-reset" | "deploy-back") {
-            "◆"
-        } else {
-            "│"
-        };
-        lines.push(format!("{selector} {rail} [{step}] {title}"));
-        lines.push(format!("  当前值  {subtitle}"));
-        lines.push(format!("  交互项  {badge}"));
-        if active {
-            let detail = truncate_display(&card.detail, width.saturating_sub(3));
-            lines.push(format!("  说明    {detail}"));
-        }
-        if idx + 1 != view.cards.len() {
-            lines.push(frame_rule(width));
-        }
-    }
-    lines.push(frame_bottom(width));
-    lines
-}
-
-fn build_core_right_panel_lines(view: &DashboardView, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let status_line = view
-        .detail_lines
-        .iter()
-        .find(|line| line.contains("当前状态"))
-        .cloned()
-        .unwrap_or_else(|| {
-            format!(
-                "{} {}",
-                status_glyph(StatusKind::Neutral),
-                view.detail_subtitle
-            )
-        });
-    lines.push(frame_top("核心状态面板", width));
-    lines.push(frame_line(&status_line, width));
-    lines.push(frame_rule(width));
-    lines.push(frame_line(":: 运行快照", width));
-    lines.push(frame_line(&view.detail_title, width));
-    lines.push(frame_line(&view.detail_subtitle, width));
-    for line in view.detail_lines.iter().take(5) {
-        lines.push(frame_line(line, width));
-    }
-    lines.push(frame_rule(width));
-    lines.push(frame_line(":: 动作块", width));
-    lines.push(frame_line("Tab 在顶部标签与动作区间切换焦点", width));
-    for (idx, card) in view.cards.iter().enumerate() {
-        let selected = idx == view.selected;
-        let lead = if selected { "▣" } else { "□" };
-        let badge = if selected {
-            "当前焦点"
-        } else {
-            &card.badge
-        };
-        let block = format!(
-            "{lead} {} {}  {}",
-            card.icon,
-            card.title,
-            status_glyph(card.kind)
-        );
-        lines.push(frame_line(&block, width));
-        lines.push(frame_line(
-            &format!(
-                "   {}",
-                truncate_display(&card.subtitle, width.saturating_sub(5))
-            ),
-            width,
-        ));
-        lines.push(frame_line(
-            &format!("   {}", truncate_display(badge, width.saturating_sub(5))),
-            width,
-        ));
-    }
-    if !view.action_lines.is_empty() {
-        lines.push(frame_rule(width));
-        lines.push(frame_line(":: 执行提示", width));
-        for action in &view.action_lines {
-            lines.push(frame_line(&format!("◇ {action}"), width));
-        }
-    }
-    lines.push(frame_bottom(width));
-    lines
-}
-
-fn build_overview_right_panel_lines(view: &DashboardView, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let status = view
-        .cards
-        .get(view.selected)
-        .map(|card| format!("{} {}  {}", card.icon, card.title, status_glyph(card.kind)))
-        .unwrap_or_else(|| view.detail_title.clone());
-    lines.push(frame_top("服务详情", width));
-    lines.push(frame_line(&status, width));
-    lines.push(frame_rule(width));
-    lines.push(frame_line(":: 运行状态", width));
-    lines.push(frame_line(&view.detail_subtitle, width));
-    for line in view.detail_lines.iter().take(5) {
-        lines.push(frame_line(line, width));
-    }
-    if view.detail_lines.len() > 5 {
-        lines.push(frame_rule(width));
-        lines.push(frame_line(":: 日志与环境", width));
-        for line in view.detail_lines.iter().skip(5) {
-            lines.push(frame_line(line, width));
-        }
-    }
-    if !view.action_lines.is_empty() {
-        lines.push(frame_rule(width));
-        lines.push(frame_line(":: 快捷动作", width));
-        for action in &view.action_lines {
-            lines.push(frame_line(&format!("◇ {action}"), width));
-        }
-    }
-    lines.push(frame_bottom(width));
-    lines
-}
-
-fn build_deploy_right_panel_lines(view: &DashboardView, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let selected = view.cards.get(view.selected);
-    let is_action = selected
-        .is_some_and(|card| matches!(card.id, "deploy-start" | "deploy-reset" | "deploy-back"));
-    lines.push(frame_top("步骤编辑器", width));
-    lines.push(frame_line(&view.detail_title, width));
-    lines.push(frame_rule(width));
-    if is_action {
-        lines.push(frame_line(":: 当前动作", width));
-        lines.push(frame_line(
-            &format!("目标: {}", view.detail_subtitle),
-            width,
-        ));
-    } else {
-        lines.push(frame_line(":: 当前值", width));
-        lines.push(frame_line(
-            &format!("已选: {}", view.detail_subtitle),
-            width,
-        ));
-    }
-    for line in view.detail_lines.iter().take(4) {
-        lines.push(frame_line(line, width));
-    }
-    if !is_action {
-        lines.push(frame_rule(width));
-        lines.push(frame_line(":: 可选值", width));
-        if view.detail_choices.is_empty() {
-            lines.push(frame_line("当前项没有额外候选值。", width));
-        } else {
-            for choice in &view.detail_choices {
-                let marker = if choice.active { "✓" } else { "○" };
-                lines.push(frame_line(
-                    &format!(
-                        "{marker} {}",
-                        truncate_display(&choice.label, width.saturating_sub(8))
-                    ),
-                    width,
-                ));
-                lines.push(frame_line(
-                    &format!(
-                        "· {}",
-                        truncate_display(&choice.detail, width.saturating_sub(8))
-                    ),
-                    width,
-                ));
-            }
-        }
-        lines.push(frame_rule(width));
-        lines.push(frame_line(":: 可选操作", width));
-        if let Some(card) = selected {
-            lines.push(frame_line(&format!("主操作: {}", card.badge), width));
-            if card.badge.contains("输入") {
-                lines.push(frame_line("Enter 打开路径输入框", width));
-            } else {
-                lines.push(frame_line("← / → 切换当前配置值", width));
-            }
-            lines.push(frame_line(
-                &format!(
-                    "高亮步骤: {}",
-                    truncate_display(&card.title, width.saturating_sub(10))
-                ),
-                width,
-            ));
-        }
-    }
-    if view.detail_lines.len() > 4 {
-        lines.push(frame_rule(width));
-        lines.push(frame_line(":: 配置说明", width));
-        for line in view.detail_lines.iter().skip(4) {
-            lines.push(frame_line(line, width));
-        }
-    }
-    if !view.action_lines.is_empty() {
-        lines.push(frame_rule(width));
-        lines.push(frame_line(":: 执行队列", width));
-        for action in &view.action_lines {
-            lines.push(frame_line(&format!("◇ {action}"), width));
-        }
-    }
-    lines.push(frame_bottom(width));
-    lines
-}
-
-fn build_plugins_left_panel_lines(view: &DashboardView, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    lines.push(frame_top("插件卡片", width));
-    lines.push(frame_line("名称 / 状态 / 摘要", width));
-    lines.push(frame_rule(width));
-    let search = if view.search_query.is_empty() {
-        "/ 搜索插件名称或作者".to_string()
-    } else {
-        format!(
-            "/ {}",
-            truncate_display(&view.search_query, width.saturating_sub(4))
-        )
-    };
-    lines.push(frame_line(&search, width));
-    lines.push(frame_rule(width));
-
-    if view.cards.is_empty() {
-        lines.push(frame_line(&view.empty_title, width));
-        lines.push(frame_line(&view.empty_detail, width));
-        lines.push(frame_bottom(width));
-        return lines;
-    }
-
-    for (idx, card) in view.cards.iter().enumerate() {
-        let active = idx == view.selected;
-        let title = truncate_display(
-            &format!("{} {}", card.icon, card.title),
-            width.saturating_sub(3),
-        );
-        let badge = truncate_display(
-            &format!("{} {}", status_glyph(card.kind), card.badge),
-            width.saturating_sub(3),
-        );
-        let subtitle = truncate_display(&card.subtitle, width.saturating_sub(3));
-        let detail = truncate_display(&card.detail, width.saturating_sub(3));
-        lines.push(format!("{} {}", if active { ">" } else { " " }, title));
-        lines.push(format!("  {}", badge));
-        lines.push(format!("  {}", subtitle));
-        if active {
-            lines.push(format!("  {}", detail));
-        }
-        if idx + 1 != view.cards.len() {
-            lines.push(frame_rule(width));
-        }
-    }
-    lines.push(frame_bottom(width));
-    lines
-}
-
-fn build_plugins_right_panel_lines(view: &DashboardView, width: usize) -> Vec<String> {
-    let mut lines = vec![
-        frame_top("插件详情", width),
-        frame_line(&view.detail_title, width),
-        frame_rule(width),
-        frame_line(":: 插件摘要", width),
-        frame_line(&view.detail_subtitle, width),
-    ];
-    for line in view.detail_lines.iter().take(5) {
-        lines.push(frame_line(line, width));
-    }
-    if view.detail_lines.len() > 5 {
-        lines.push(frame_rule(width));
-        lines.push(frame_line(":: 维护信息", width));
-        for line in view.detail_lines.iter().skip(5) {
-            lines.push(frame_line(line, width));
-        }
-    }
-    if !view.action_lines.is_empty() {
-        lines.push(frame_rule(width));
-        lines.push(frame_line(":: 可执行项", width));
-        for action in &view.action_lines {
-            lines.push(frame_line(&format!("◇ {action}"), width));
-        }
-    }
-    lines.push(frame_bottom(width));
-    lines
+    (current as isize + delta).rem_euclid(len as isize) as usize
 }
 
 struct ActionMenuDrawInput<'a, 'b> {
@@ -1314,69 +1611,130 @@ fn draw_action_menu(
         timeout_hint,
     } = input;
     let (term_width, term_height) = size().unwrap_or((80, 24));
-    let term_height = term_height.max(1);
     let term_width = term_width.max(20);
     let max_width = usize::from(term_width).min(PANEL_WIDTH);
     let content_width = max_width.saturating_sub(4).max(10);
-    let detail_width = max_width.saturating_sub(30).max(8);
-    let mut lines = Vec::with_capacity(actions.len() + 4);
+    let label_width = if content_width < 34 {
+        (content_width / 2).clamp(8, 14)
+    } else {
+        18
+    };
+    let detail_width = content_width.saturating_sub(label_width + 3);
+    let protected_rows = origin.1.min(if term_height < 12 { 1 } else { 3 });
+    let available_from_origin = if origin.1 < term_height {
+        usize::from(term_height - origin.1)
+    } else {
+        0
+    };
+    let fallback_rows = usize::from(term_height.saturating_sub(protected_rows)).max(1);
+    let max_menu_rows = if available_from_origin >= 5 {
+        available_from_origin
+    } else {
+        fallback_rows
+    }
+    .min(usize::from(term_height))
+    .max(1);
 
-    lines.push(String::new());
+    let fixed_rows = 3_usize;
+    let mut visible_actions = max_menu_rows
+        .saturating_sub(fixed_rows)
+        .max(1)
+        .min(actions.len());
+    let mut action_start = scroll_start(actions.len(), visible_actions, selected);
+    for _ in 0..4 {
+        let ellipsis_rows = usize::from(action_start > 0)
+            + usize::from(action_start + visible_actions < actions.len());
+        let next_visible = max_menu_rows
+            .saturating_sub(fixed_rows + ellipsis_rows)
+            .max(1)
+            .min(actions.len());
+        let next_start = scroll_start(actions.len(), next_visible, selected);
+        if next_visible == visible_actions && next_start == action_start {
+            break;
+        }
+        visible_actions = next_visible;
+        action_start = next_start;
+    }
+    let action_end = (action_start + visible_actions).min(actions.len());
+    let has_upper_ellipsis = action_start > 0;
+    let has_lower_ellipsis = action_end < actions.len();
+    let mut lines = Vec::with_capacity(max_menu_rows);
+
     lines.push(format!(
         "  {} {}",
         style("▌").green().bright().bold(),
-        style(truncate_display(prompt, content_width))
-            .cyan()
-            .bright()
-            .bold()
+        style(prompt).cyan().bright().bold()
     ));
     lines.push(format!(
         "  {}",
         style("─".repeat(content_width)).blue().bright()
     ));
-    for (index, action) in actions.iter().enumerate() {
+
+    if has_upper_ellipsis {
+        lines.push(format!(
+            "  {}",
+            style(pad_right("... 上方还有操作 ...", content_width))
+                .yellow()
+                .bright()
+        ));
+    }
+    for (index, action) in actions
+        .iter()
+        .enumerate()
+        .skip(action_start)
+        .take(action_end.saturating_sub(action_start))
+    {
         let active = index == selected;
-        let cursor = if active { "▸" } else { " " };
-        let title = format!("{} {}", action.marker(), pad_right(action.label, 16));
-        let detail = truncate_display(action.detail, detail_width);
-        if active {
-            lines.push(format!(
-                "  {} {} {}",
-                style(cursor).green().bright().bold(),
-                style(&title).yellow().bright().bold(),
-                style(detail).white().bright().bold()
-            ));
+        let cursor = if active { "›" } else { " " };
+        let title = truncate_display(
+            &format!("{} {}", action.marker(), action.label),
+            label_width,
+        );
+        let row = if detail_width > 4 {
+            format!(
+                "{cursor} {} {}",
+                pad_right(&title, label_width),
+                truncate_display(action.detail, detail_width)
+            )
         } else {
-            lines.push(format!(
-                "  {} {} {}",
-                style(cursor).blue().bright(),
-                style(&title).cyan().bright(),
-                style(detail).white().bright()
-            ));
-        }
+            format!("{cursor} {title}")
+        };
+        let row = pad_right(&row, content_width);
+        lines.push(if active {
+            format!("  {}", style(row).black().on_yellow().bright().bold())
+        } else {
+            format!("  {}", style(row).cyan().bright())
+        });
+    }
+    if has_lower_ellipsis {
+        lines.push(format!(
+            "  {}",
+            style(pad_right("... 下方还有操作 ...", content_width))
+                .yellow()
+                .bright()
+        ));
     }
     let footer = if let Some((default, remaining)) = timeout_hint {
-        format!(
-            "↑/↓ 或 j/k 移动  Enter 执行  Esc 返回  ·  {remaining}s 后默认：{}",
-            actions[default].label
-        )
+        format!("{remaining}s 后默认：{}", actions[default].label)
     } else {
-        "↑/↓ 或 j/k 移动  Enter 执行  Esc 返回".to_string()
+        String::new()
     };
-    lines.push(format!(
-        "  {}",
-        style(truncate_display(&footer, content_width))
-            .blue()
-            .bright()
-            .bold()
-    ));
+    if !footer.is_empty() {
+        lines.push(format!(
+            "  {}",
+            style(truncate_display(&footer, content_width))
+                .blue()
+                .bright()
+                .bold()
+        ));
+    }
 
     let rows_needed = lines.len().max(last_drawn_rows).max(1);
-    let available_from_origin = usize::from(term_height.saturating_sub(origin.1));
-    let start_row = if rows_needed <= available_from_origin {
+    let printable_rows = lines.len().min(usize::from(term_height));
+    let start_row = if available_from_origin >= printable_rows {
         origin.1
     } else {
-        term_height.saturating_sub(rows_needed as u16)
+        term_height.saturating_sub(printable_rows as u16)
     };
     let clear_rows = rows_needed.min(usize::from(term_height));
     let clear_start_row = previous_start_row.min(start_row);
@@ -1385,10 +1743,9 @@ fn draw_action_menu(
         .max(start_row.saturating_add(clear_rows as u16))
         .min(term_height);
     for row in clear_start_row..clear_end_row {
-        queue!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
+        queue!(stdout, MoveTo(0, row), TermClear(ClearType::CurrentLine))
             .context("清理动作菜单行失败")?;
     }
-    let printable_rows = lines.len().min(usize::from(term_height));
     for (row, line) in lines.iter().take(printable_rows).enumerate() {
         queue!(
             stdout,
@@ -1397,6 +1754,12 @@ fn draw_action_menu(
         )
         .context("绘制动作菜单行失败")?;
     }
+    let active_screen_row = start_row
+        .saturating_add(2)
+        .saturating_add(u16::from(has_upper_ellipsis))
+        .saturating_add(selected.saturating_sub(action_start) as u16)
+        .min(term_height.saturating_sub(1));
+    queue!(stdout, MoveTo(2, active_screen_row)).context("移动动作菜单光标失败")?;
     Ok(ActionMenuDrawState {
         start_row,
         rows: lines.len(),
@@ -1409,7 +1772,7 @@ fn clear_action_menu(stdout: &mut io::Stdout, start_row: u16, rows: usize) -> Re
         .saturating_add(rows as u16)
         .min(term_height.max(1));
     for row in start_row..clear_end_row {
-        queue!(stdout, MoveTo(0, row), Clear(ClearType::CurrentLine))
+        queue!(stdout, MoveTo(0, row), TermClear(ClearType::CurrentLine))
             .context("清理动作菜单行失败")?;
     }
     Ok(())
@@ -1426,24 +1789,6 @@ fn print_centered_line(text: &str, primary: bool) {
         style(text).white().bright()
     };
     wln!("{}{}", " ".repeat(left), text);
-}
-
-fn frame_top(title: &str, width: usize) -> String {
-    let inner = width.saturating_sub(4).max(4);
-    format!("+ {}", truncate_display(title, inner))
-}
-
-fn frame_line(text: &str, width: usize) -> String {
-    let inner = width.saturating_sub(3).max(1);
-    format!("| {}", truncate_display(text, inner))
-}
-
-fn frame_rule(width: usize) -> String {
-    format!("+{}", "-".repeat(width.saturating_sub(1)))
-}
-
-fn frame_bottom(width: usize) -> String {
-    format!("+{}", "=".repeat(width.saturating_sub(1)))
 }
 
 fn pad_right(input: &str, width: usize) -> String {
@@ -1467,7 +1812,7 @@ fn truncate_display(input: &str, max_width: usize) -> String {
     let marker_width = 1;
     let limit = max_width.saturating_sub(marker_width);
     for ch in input.chars() {
-        let w = UnicodeWidthChar::width(ch).unwrap_or(1);
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
         if used + w > limit {
             break;
         }
@@ -1478,11 +1823,340 @@ fn truncate_display(input: &str, max_width: usize) -> String {
     out
 }
 
-fn status_glyph(kind: StatusKind) -> &'static str {
-    match kind {
-        StatusKind::Running => "󰄬",
-        StatusKind::Stopped => "󰅖",
-        StatusKind::Warning => "󰀪",
-        StatusKind::Neutral => "󰋽",
+fn scroll_start(total: usize, visible: usize, active: usize) -> usize {
+    if total <= visible || visible == 0 {
+        return 0;
+    }
+    let half = visible / 2;
+    active.saturating_sub(half).min(total - visible)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    fn render_buffer_text<F>(width: u16, height: u16, draw: F) -> String
+    where
+        F: Fn(&mut Frame<'_>),
+    {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test backend should initialize");
+        terminal
+            .draw(|frame| draw(frame))
+            .expect("test render should succeed");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    fn compact_visible_text(text: &str) -> String {
+        text.chars().filter(|ch| !ch.is_whitespace()).collect()
+    }
+
+    fn sample_dashboard_view(selected: usize) -> DashboardView {
+        let cards = vec![
+            DashboardCard {
+                id: "core-start",
+                icon: "C",
+                title: "启动 MaiBot".to_string(),
+                subtitle: "核心服务进程状态".to_string(),
+                badge: "可启动".to_string(),
+                detail: "核心服务详情".to_string(),
+                kind: StatusKind::Running,
+            },
+            DashboardCard {
+                id: "napcat",
+                icon: "N",
+                title: "NapCatQQ".to_string(),
+                subtitle: "协议端服务状态".to_string(),
+                badge: "未运行".to_string(),
+                detail: "协议端详情".to_string(),
+                kind: StatusKind::Stopped,
+            },
+        ];
+        DashboardView {
+            mode: AppMode::ContentFocused,
+            active_tab: DashboardTab::Core,
+            focus: DashboardFocus::Content,
+            popup: None,
+            page_title: "核心服务".to_string(),
+            page_subtitle: String::new(),
+            list_title: String::new(),
+            list_subtitle: String::new(),
+            detail_title: cards[selected].title.clone(),
+            detail_subtitle: cards[selected].subtitle.clone(),
+            detail_lines: vec!["状态: 正常".to_string()],
+            detail_choices: Vec::new(),
+            action_lines: Vec::new(),
+            cards,
+            selected,
+            search_query: String::new(),
+            status_message: "就绪".to_string(),
+            context_hint: String::new(),
+            empty_title: "没有匹配项".to_string(),
+            empty_detail: "清空筛选后重试".to_string(),
+        }
+    }
+
+    #[test]
+    fn padding_and_truncation_respect_display_columns() {
+        let padded = pad_right("LuckyLilliaBot 未运行", 28);
+        assert_eq!(display_width(&padded), 28);
+
+        let truncated = truncate_display("󰏗 插件中心：长长长长长长长长", 12);
+        assert!(display_width(&truncated) <= 12);
+        assert!(truncated.ends_with('…'));
+    }
+
+    #[test]
+    fn compact_three_line_blocks_keep_visible_text() {
+        let header = render_buffer_text(80, 3, |frame| {
+            render_header(frame, Rect::new(0, 0, 80, 3));
+        });
+        assert!(header.contains(APP_HEADER_TITLE));
+        assert!(header.contains(APP_VERSION));
+
+        let popup = DashboardPopup {
+            title: "启动 MaiBot".to_string(),
+            subtitle: "核心服务进程状态".to_string(),
+            lines: vec!["状态: 可启动".to_string()],
+            actions: vec![
+                "启动".to_string(),
+                "更多控制".to_string(),
+                "取消".to_string(),
+            ],
+            selected: 0,
+        };
+        let actions = render_buffer_text(60, 3, |frame| {
+            render_popup_actions(frame, Rect::new(0, 0, 60, 3), &popup);
+        });
+        let actions = compact_visible_text(&actions);
+        assert!(actions.contains("启动"));
+        assert!(actions.contains("更多控制"));
+        assert!(actions.contains("取消"));
+
+        let deploy_view = DashboardView {
+            mode: AppMode::ContentFocused,
+            active_tab: DashboardTab::Deploy,
+            focus: DashboardFocus::Content,
+            popup: None,
+            page_title: "部署与更新".to_string(),
+            page_subtitle: String::new(),
+            list_title: String::new(),
+            list_subtitle: String::new(),
+            detail_title: "安装路径".to_string(),
+            detail_subtitle: "当前路径".to_string(),
+            detail_lines: Vec::new(),
+            detail_choices: Vec::new(),
+            action_lines: Vec::new(),
+            cards: vec![
+                DashboardCard {
+                    id: "deploy-path",
+                    icon: "P",
+                    title: "安装路径".to_string(),
+                    subtitle: "当前路径".to_string(),
+                    badge: "路径".to_string(),
+                    detail: "路径详情".to_string(),
+                    kind: StatusKind::Neutral,
+                },
+                DashboardCard {
+                    id: "deploy-branch",
+                    icon: "B",
+                    title: "MaiBot 分支".to_string(),
+                    subtitle: "main".to_string(),
+                    badge: "分支".to_string(),
+                    detail: "分支详情".to_string(),
+                    kind: StatusKind::Neutral,
+                },
+            ],
+            selected: 0,
+            search_query: String::new(),
+            status_message: "就绪".to_string(),
+            context_hint: String::new(),
+            empty_title: String::new(),
+            empty_detail: String::new(),
+        };
+        let steps = render_buffer_text(96, 3, |frame| {
+            render_step_bar(frame, Rect::new(0, 0, 96, 3), &deploy_view);
+        });
+        let steps = compact_visible_text(&steps);
+        assert!(steps.contains("目录"));
+        assert!(steps.contains("分支"));
+        assert!(steps.contains("核心配置"));
+        assert!(steps.contains("镜像源"));
+    }
+
+    #[test]
+    fn dashboard_navigation_uses_sidebar_and_content_focus() {
+        let view = sample_dashboard_view(0);
+        let mut state = DashboardState::default();
+        state.active_tab = DashboardTab::Overview;
+        state.focus = DashboardFocus::Sidebar;
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
+            DashboardInputAction::Rebuild
+        );
+        assert_eq!(state.active_tab, DashboardTab::Deploy);
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Tab, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        assert_eq!(state.focus, DashboardFocus::Content);
+        sync_app_mode(&mut state);
+        assert_eq!(state.mode, AppMode::ContentFocused);
+    }
+
+    #[test]
+    fn content_navigation_uses_cached_redraw_path() {
+        let view = sample_dashboard_view(0);
+        let mut state = DashboardState::default();
+        state.active_tab = DashboardTab::Core;
+        state.focus = DashboardFocus::Content;
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        assert_eq!(state.selected(), 1);
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Char('1'), KeyModifiers::CONTROL),
+            DashboardInputAction::Redraw
+        );
+        assert_eq!(state.focus, DashboardFocus::Sidebar);
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Char('q'), KeyModifiers::CONTROL),
+            DashboardInputAction::Event(DashboardEvent::Exit)
+        );
+    }
+
+    #[test]
+    fn deploy_navigation_refreshes_choices_without_rebuild() {
+        let mut view = DashboardView {
+            mode: AppMode::ContentFocused,
+            active_tab: DashboardTab::Deploy,
+            focus: DashboardFocus::Content,
+            popup: None,
+            page_title: "部署与更新".to_string(),
+            page_subtitle: String::new(),
+            list_title: String::new(),
+            list_subtitle: String::new(),
+            detail_title: "安装路径".to_string(),
+            detail_subtitle: "当前路径".to_string(),
+            detail_lines: Vec::new(),
+            detail_choices: Vec::new(),
+            action_lines: Vec::new(),
+            cards: vec![
+                DashboardCard {
+                    id: "deploy-path",
+                    icon: "P",
+                    title: "安装路径".to_string(),
+                    subtitle: "当前路径".to_string(),
+                    badge: "路径".to_string(),
+                    detail: "路径详情".to_string(),
+                    kind: StatusKind::Neutral,
+                },
+                DashboardCard {
+                    id: "deploy-branch",
+                    icon: "B",
+                    title: "MaiBot 分支".to_string(),
+                    subtitle: "main".to_string(),
+                    badge: "分支".to_string(),
+                    detail: "分支详情".to_string(),
+                    kind: StatusKind::Neutral,
+                },
+            ],
+            selected: 0,
+            search_query: String::new(),
+            status_message: "就绪".to_string(),
+            context_hint: String::new(),
+            empty_title: String::new(),
+            empty_detail: String::new(),
+        };
+        let mut state = DashboardState::default();
+        state.active_tab = DashboardTab::Deploy;
+        state.focus = DashboardFocus::Content;
+        state.deploy_plan = Some(InstallPlan {
+            maibot_branch: "main".to_string(),
+            github_proxy: "auto".to_string(),
+            pip_display: "系统默认".to_string(),
+            bot_protocols: vec![BotProtocol::NapCat],
+            ..InstallPlan::default()
+        });
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        sync_cached_dashboard_view(&mut view, &mut state);
+
+        assert_eq!(view.selected, 1);
+        assert_eq!(view.detail_title, "MaiBot 分支");
+        assert_eq!(view.detail_choices.len(), 2);
+        assert!(view.detail_choices[0].active);
+        assert_eq!(view.detail_choices[0].label, "main");
+    }
+
+    #[test]
+    fn content_enter_requests_popup_then_popup_can_activate() {
+        let view = sample_dashboard_view(0);
+        let mut state = DashboardState::default();
+        state.active_tab = DashboardTab::Core;
+        state.focus = DashboardFocus::Content;
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::OpenPopup
+        );
+        state.popup = popup_for_selection(&view);
+        assert!(state.popup.is_some());
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Right, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        assert_eq!(state.popup.as_ref().map(|popup| popup.selected), Some(1));
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::Event(DashboardEvent::Activate)
+        );
+    }
+
+    #[test]
+    fn protocol_popup_keeps_unsupported_platform_actions_clear() {
+        let mut view = sample_dashboard_view(0);
+        view.active_tab = DashboardTab::Protocol;
+        view.cards = vec![DashboardCard {
+            id: "napcat-todo",
+            icon: "N",
+            title: "NapCatQQ".to_string(),
+            subtitle: "macOS 暂未适配".to_string(),
+            badge: "TODO".to_string(),
+            detail: "会明确返回 unsupported，而不是假装可用。".to_string(),
+            kind: StatusKind::Warning,
+        }];
+        view.selected = 0;
+        let unsupported = popup_for_selection(&view).expect("unsupported protocol popup");
+        assert_eq!(unsupported.actions, vec!["查看说明", "取消"]);
+
+        view.cards[0].id = "napcat";
+        let supported = popup_for_selection(&view).expect("supported protocol popup");
+        assert_eq!(
+            supported.actions,
+            vec!["启动", "停止", "日志", "更多控制", "取消"]
+        );
+    }
+
+    #[test]
+    fn wrap_index_handles_empty_and_edges() {
+        assert_eq!(wrap_index(0, 0, 1), 0);
+        assert_eq!(wrap_index(0, 4, -1), 3);
+        assert_eq!(wrap_index(3, 4, 1), 0);
     }
 }

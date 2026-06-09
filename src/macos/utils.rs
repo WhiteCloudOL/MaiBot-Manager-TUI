@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+use unicode_width::UnicodeWidthStr;
 
 pub fn list_plugins(dir: &Path) -> Result<Vec<String>> {
     if !dir.exists() {
@@ -225,9 +226,7 @@ pub fn shell_escape_raw(s: &str) -> String {
 }
 
 pub fn display_width(s: &str) -> usize {
-    s.chars()
-        .map(|c| if c.is_ascii() || c.is_control() { 1 } else { 2 })
-        .sum()
+    UnicodeWidthStr::width(s)
 }
 
 pub fn pad_left(s: &str, width: usize) -> String {

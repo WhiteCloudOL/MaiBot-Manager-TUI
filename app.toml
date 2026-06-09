@@ -5,7 +5,7 @@
 version = "0.3.0"
 
 # 标头显示内容，修改后会被烘焙进二进制。
-header_title = "MaiBot Manager TUI"
+header_title = "MaiBot-Manager-TUI"
 header_subtitle = "Rust · MaiBot管理面板"
 header_credit = "作者：清蒸云鸭 · LICENSE：AGPL-3.0"
 header_docs = "文档站: https://docs.meowyun.cn/index.html"
