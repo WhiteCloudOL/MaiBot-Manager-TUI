@@ -9,8 +9,8 @@ use std::{
 };
 
 use crate::model::{
-    DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardState, DashboardTab,
-    DashboardView, InstallPlan, PlanField, StatusKind, deploy_card_field,
+    DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardPopup, DashboardState,
+    DashboardTab, DashboardView, InstallPlan, PlanField, StatusKind, deploy_card_field,
 };
 use crate::theme::AppTheme;
 use crate::ui::{ActionItem, StatusCard};
@@ -961,7 +961,9 @@ impl App {
                         self.invalidate_dashboard_cache();
                     }
                     Some("protocol") => {
-                        self.handle_menu_result(self.manage_bot_protocol_menu())?;
+                        state.active_tab = DashboardTab::Protocol;
+                        state.focus = DashboardFocus::Content;
+                        state.set_status_message("已打开协议端能力说明");
                     }
                     Some("plugins") => {
                         self.handle_menu_result(self.manage_plugins_menu())?;
@@ -1027,15 +1029,16 @@ impl App {
                 let selected = cards.get(state.selected_for_len(cards.len()));
                 match selected.map(|card| card.id) {
                     Some("napcat-note") => {
-                        self.handle_menu_result(self.print_napcat_status())?;
+                        state.popup = Some(macos_protocol_popup("NapCatQQ"));
                         state.set_status_message("已显示 NapCat 的 macOS 说明");
                     }
                     Some("llbot-note") => {
-                        self.handle_menu_result(self.print_llbot_status())?;
+                        state.popup = Some(macos_protocol_popup("LuckyLilliaBot"));
                         state.set_status_message("已显示 LLBot 的 macOS 说明");
                     }
                     _ => {
-                        self.handle_menu_result(self.manage_bot_protocol_menu())?;
+                        state.popup = Some(macos_protocol_overview_popup());
+                        state.set_status_message("已显示协议端能力说明");
                     }
                 }
             }
@@ -1044,14 +1047,15 @@ impl App {
                 let selected = cards.get(state.selected_for_len(cards.len()));
                 match selected.map(|card| card.id) {
                     Some("access-summary") => {
-                        self.handle_menu_result(self.show_access_info())?;
-                        state.set_status_message("已查看访问汇总");
+                        state.popup = Some(self.dashboard_access_summary_popup());
+                        state.set_status_message("已生成访问汇总");
                     }
                     Some("init") => {
                         self.handle_menu_result(self.initialize_maibot_access_config())?;
                         state.set_status_message("已执行访问初始化流程");
                     }
                     Some("access-note") => {
+                        state.popup = Some(macos_access_note_popup());
                         state.set_status_message("macOS 当前仅支持 MaiBot WebUI 访问配置");
                     }
                     _ => {
@@ -1124,6 +1128,12 @@ impl App {
             },
             DashboardTab::Protocol => {
                 match selected.map(|card| card.id) {
+                    Some("napcat-note") if action_idx == 0 => {
+                        state.popup = Some(macos_protocol_popup("NapCatQQ"));
+                    }
+                    Some("llbot-note") if action_idx == 0 => {
+                        state.popup = Some(macos_protocol_popup("LuckyLilliaBot"));
+                    }
                     Some("napcat") => match action_idx {
                         0 => {
                             self.handle_menu_result(self.start_napcat())?;
@@ -1171,7 +1181,11 @@ impl App {
             },
             DashboardTab::Access => match selected.map(|card| card.id) {
                 Some("access-summary") if action_idx == 0 => {
-                    self.handle_menu_result(self.show_access_info())?;
+                    state.popup = Some(self.dashboard_access_summary_popup());
+                    state.set_status_message("已生成访问汇总");
+                }
+                Some("access-note") if action_idx == 0 => {
+                    state.popup = Some(macos_access_note_popup());
                 }
                 Some("init") if action_idx == 0 => {
                     self.handle_menu_result(self.initialize_maibot_access_config())?;
@@ -1373,6 +1387,48 @@ fn filter_cards(cards: Vec<DashboardCard>, search: &str) -> Vec<DashboardCard> {
             hay.contains(&needle)
         })
         .collect()
+}
+
+fn macos_protocol_popup(name: &str) -> DashboardPopup {
+    DashboardPopup {
+        title: name.to_string(),
+        subtitle: "macOS 当前的协议端能力说明".to_string(),
+        lines: vec![
+            "当前版本先集中管理 MaiBot 核心、访问配置和插件。".to_string(),
+            format!("{name} 的安装、启停和日志入口暂未接入 macOS。"),
+            "界面会保留说明入口，并隐藏不可执行的启停操作。".to_string(),
+        ],
+        actions: vec!["取消".to_string()],
+        selected: 0,
+    }
+}
+
+fn macos_protocol_overview_popup() -> DashboardPopup {
+    DashboardPopup {
+        title: "协议端服务".to_string(),
+        subtitle: "macOS 当前的协议端能力说明".to_string(),
+        lines: vec![
+            "当前版本先集中管理 MaiBot 核心、访问配置和插件。".to_string(),
+            "NapCatQQ 与 LuckyLilliaBot 的安装、启停和日志入口暂未接入 macOS。".to_string(),
+            "协议端页面会保留说明入口，并隐藏不可执行的启停操作。".to_string(),
+        ],
+        actions: vec!["取消".to_string()],
+        selected: 0,
+    }
+}
+
+fn macos_access_note_popup() -> DashboardPopup {
+    DashboardPopup {
+        title: "访问策略说明".to_string(),
+        subtitle: "macOS 当前仅管理 MaiBot WebUI".to_string(),
+        lines: vec![
+            "访问汇总会展示 MaiBot WebUI 地址与访问密钥。".to_string(),
+            "NapCat 与 LuckyLilliaBot 的访问配置会随对应管理能力一起开放。".to_string(),
+            "这样可以避免把尚不可执行的协议端操作混入当前面板。".to_string(),
+        ],
+        actions: vec!["取消".to_string()],
+        selected: 0,
+    }
 }
 
 fn deploy_fields() -> &'static [PlanField] {

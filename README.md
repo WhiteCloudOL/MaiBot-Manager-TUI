@@ -26,7 +26,7 @@
 * **MaiBot 管理**：Linux 使用 `screen` 后台会话；Windows 使用独立进程 / 窗口启动；macOS 使用后台子进程，退出管理器后核心仍继续运行。首次启动需要确认 EULA 时，TUI 会提供交互终端选项，10 秒未选择则默认后台启动。
 * **LLBot / Napcat 安装**：Linux 使用 LLBot CLI + NapCat Docker；Windows 使用 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限；macOS 当前保留清晰的平台能力说明入口。
 * **依赖自检**：Linux 自动检测包管理器并补装基础工具；Windows 缺少 Git / uv / Python 时会优先下载便携工具到 MaiBot 安装目录；macOS 缺少 Homebrew 时会调用官方脚本安装，并通过 Homebrew 补齐 Git / uv / Python。
-* **配置访问**：集中查看当前平台已支持的 WebUI 地址与密钥；初始化访问配置带二次确认。
+* **配置访问**：集中查看当前平台已支持的 WebUI 地址与密钥；TUI 内使用居中弹窗展示汇总，CLI 直接输出文本；初始化访问配置带二次确认。
 * **插件管理**：安装、卸载插件并按需补装依赖。
 
 
@@ -258,7 +258,7 @@ chmod +x ./maibot-manager-linux-arm64
 
 底部状态栏会统一显示当前可用按键，界面其他区域不会重复散落快捷键提示。部署页使用横向步骤条：`←/→` 切换安装配置项，`↑/↓` 调整当前配置项的候选值，`F5` 开始安装/更新，`Ctrl+R` 将当前表单恢复为推荐默认值。`Ctrl+1` 可从内容区或弹窗快速回到侧边栏。
 
-核心服务、协议端和插件中心使用全宽表格呈现，列为名称、状态、版本与快捷操作；按 `Enter` 后会弹出居中的操作对话框，底层表格保持干净。界面使用 Nerd Font 友好的图标和 Nord 柔和状态色显示状态；没有 Nerd Font 时文字标签仍可读。
+核心服务、协议端和插件中心使用全宽表格呈现，列为名称、状态、版本与快捷操作；按 `Enter` 后会弹出居中的操作对话框，底层表格保持干净。访问汇总、平台能力说明等纯信息内容会留在 TUI 弹窗内展示，不会切回旧式回车返回页面。界面使用 Nerd Font 友好的图标和 Nord 柔和状态色显示状态；没有 Nerd Font 时文字标签仍可读。
 
 TUI 全局使用 Nord 冷色调：背景 `#2E3440`、常规文本 `#D8DEE9`、焦点边框 `#88C0D0`、选中行 `#81A1C1`、运行/警告/错误分别为 `#A3BE8C`、`#EBCB8B`、`#BF616A`。
 
@@ -406,7 +406,7 @@ maibot llbot password <新密码>   # 写入 LLBot WebUI 密码文件
 ### 4. 配置与访问 (Access)
 
 ```bash
-maibot access show              # 查看配置地址与密钥
+maibot access show              # 直接输出配置地址与密钥
 maibot access init              # 绑定 WebUI 到 0.0.0.0（Linux/Windows 同时启用 Napcat Adapter，macOS 保留核心配置能力）
 maibot access init --yes        # 跳过交互确认直接应用（适合确信防火墙安全的脚本环境）
 
@@ -494,6 +494,7 @@ wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-T
 wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 72 --rows 28 --mode narrow"
 wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 132 --rows 42 --mode tabs"
 wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 100 --rows 34 --mode deploy"
+wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI && python3 scripts/verify_tui_capture.py --cwd /mnt/d/Coding/GithubProject/MaiBot-Manager-TUI --exe ./target/debug/maibot-manager-tui --cols 132 --rows 30 --mode access"
 
 ```
 

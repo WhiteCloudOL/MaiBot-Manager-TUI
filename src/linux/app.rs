@@ -1229,8 +1229,8 @@ impl App {
                 let selected = cards.get(state.selected_for_len(cards.len()));
                 match selected.map(|card| card.id) {
                     Some("access-summary") => {
-                        self.handle_menu_result(self.show_access_info())?;
-                        state.set_status_message("已查看访问汇总");
+                        state.popup = Some(self.dashboard_access_summary_popup());
+                        state.set_status_message("已生成访问汇总");
                     }
                     Some("access-init") => {
                         self.handle_menu_result(self.initialize_maibot_access_config())?;
@@ -1361,7 +1361,8 @@ impl App {
             },
             DashboardTab::Access => match selected.map(|card| card.id) {
                 Some("access-summary") if action_idx == 0 => {
-                    self.handle_menu_result(self.show_access_info())?;
+                    state.popup = Some(self.dashboard_access_summary_popup());
+                    state.set_status_message("已生成访问汇总");
                 }
                 Some("access-init") if action_idx == 0 => {
                     self.handle_menu_result(self.initialize_maibot_access_config())?;

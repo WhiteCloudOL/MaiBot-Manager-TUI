@@ -1,4 +1,7 @@
-use crate::{app::App, plugins::NAPCAT_ADAPTER_PLUGIN_ID, theme::AppTheme, ui::ActionItem};
+use crate::{
+    app::App, model::DashboardPopup, plugins::NAPCAT_ADAPTER_PLUGIN_ID, theme::AppTheme,
+    ui::ActionItem,
+};
 use anyhow::{Result, anyhow, bail};
 use dialoguer::{Confirm, Input, Select};
 use regex::Regex;
@@ -7,6 +10,41 @@ use std::{fs, path::PathBuf};
 use toml_edit::{DocumentMut, Item, Value as TomlValue, value};
 
 const CHAT_TABLE: &str = "chat";
+
+#[derive(Debug)]
+struct AccessInfoReport {
+    subtitle: &'static str,
+    ip_label: &'static str,
+    public_ip: String,
+    endpoints: Vec<AccessEndpoint>,
+}
+
+#[derive(Debug)]
+struct AccessEndpoint {
+    title: &'static str,
+    fields: Vec<(&'static str, String)>,
+}
+
+impl AccessInfoReport {
+    fn popup_lines(&self) -> Vec<String> {
+        let mut lines = vec![format!("{} {}", self.ip_label, self.public_ip)];
+        if self.endpoints.is_empty() {
+            lines.push(String::new());
+            lines.push("未找到可展示的 WebUI 入口。".to_string());
+            lines.push("请确认安装目录内的配置文件已经生成。".to_string());
+            return lines;
+        }
+
+        for endpoint in &self.endpoints {
+            lines.push(String::new());
+            lines.push(endpoint.title.to_string());
+            for (label, value) in &endpoint.fields {
+                lines.push(format!("{label} {value}"));
+            }
+        }
+        lines
+    }
+}
 
 impl App {
     fn napcat_adapter_dir(&self) -> Result<PathBuf> {
@@ -54,12 +92,52 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn dashboard_access_summary_popup(&self) -> DashboardPopup {
+        match self.access_info_report() {
+            Ok(report) => DashboardPopup {
+                title: "访问汇总".to_string(),
+                subtitle: report.subtitle.to_string(),
+                lines: report.popup_lines(),
+                actions: vec!["取消".to_string()],
+                selected: 0,
+            },
+            Err(error) => DashboardPopup {
+                title: "访问汇总".to_string(),
+                subtitle: "暂时无法读取访问入口".to_string(),
+                lines: vec![
+                    format!("无法读取访问配置: {error}"),
+                    "请先完成部署，并确认安装目录仍可访问。".to_string(),
+                ],
+                actions: vec!["取消".to_string()],
+                selected: 0,
+            },
+        }
+    }
+
     pub(crate) fn print_access_info(&self) -> Result<()> {
+        let report = self.access_info_report()?;
+        self.print_section("访问汇总", report.subtitle);
+        self.print_kv(report.ip_label, &report.public_ip);
+        for endpoint in &report.endpoints {
+            self.print_line();
+            if let Some((_, value)) = endpoint.fields.first() {
+                self.print_kv(endpoint.title, value);
+                for (label, value) in endpoint.fields.iter().skip(1) {
+                    self.print_kv(label, value);
+                }
+            }
+        }
+        if report.endpoints.is_empty() {
+            self.print_hint("未找到可展示的 WebUI 入口，请确认配置文件已经生成。");
+        }
+        Ok(())
+    }
+
+    fn access_info_report(&self) -> Result<AccessInfoReport> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
         let public_ip = self.get_public_ip().unwrap_or_else(|_| "127.0.0.1".into());
-        self.print_section("访问汇总", "集中查看 MaiBot、NapCat 与 LLBot 的访问入口");
-        self.print_kv("本机 / 公网 IP", &public_ip);
+        let mut endpoints = Vec::new();
 
         let bot_cfg = root.join("MaiBot").join("config").join("bot_config.toml");
         let webui_json = root.join("MaiBot").join("data").join("webui.json");
@@ -81,35 +159,50 @@ impl App {
             } else {
                 public_ip.clone()
             };
-            self.print_line();
-            self.print_kv("MaiBot WebUI", &format!("http://{display_host}:{port}"));
-            self.print_kv("密钥", &token);
+            endpoints.push(AccessEndpoint {
+                title: "MaiBot WebUI",
+                fields: vec![
+                    ("地址", format!("http://{display_host}:{port}")),
+                    ("密钥", token),
+                ],
+            });
         }
 
         let napcat_cfg = root.join("NapCat").join("config").join("webui.json");
         if napcat_cfg.exists() {
             let data: Value = serde_json::from_str(&fs::read_to_string(napcat_cfg)?)?;
-            self.print_line();
-            self.print_kv(
-                "NapCat WebUI",
-                &format!(
-                    "http://{}:{}",
-                    public_ip,
-                    data["port"].as_i64().unwrap_or(6099)
-                ),
-            );
-            self.print_kv("密钥", data["token"].as_str().unwrap_or("(未设置)"));
+            endpoints.push(AccessEndpoint {
+                title: "NapCat WebUI",
+                fields: vec![
+                    (
+                        "地址",
+                        format!(
+                            "http://{}:{}",
+                            public_ip,
+                            data["port"].as_i64().unwrap_or(6099)
+                        ),
+                    ),
+                    (
+                        "密钥",
+                        data["token"].as_str().unwrap_or("(未设置)").to_string(),
+                    ),
+                ],
+            });
         }
 
         let llbot_settings = root.join("LLBot").join("app_settings.json");
         if llbot_settings.exists() {
-            self.print_line();
-            self.print_kv(
-                "LuckyLilliaBot Desktop",
-                &root.join("LLBot").display().to_string(),
-            );
+            endpoints.push(AccessEndpoint {
+                title: "LuckyLilliaBot Desktop",
+                fields: vec![("目录", root.join("LLBot").display().to_string())],
+            });
         }
-        Ok(())
+        Ok(AccessInfoReport {
+            subtitle: "集中查看 MaiBot、NapCat 与 LLBot 的访问入口",
+            ip_label: "本机 / 公网 IP",
+            public_ip,
+            endpoints,
+        })
     }
 
     pub(crate) fn print_adapter_config(&self) -> Result<()> {

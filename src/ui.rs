@@ -1233,6 +1233,17 @@ fn selected_deploy_description(view: &DashboardView) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
+fn direct_info_popup_card(view: &DashboardView) -> bool {
+    let Some(card) = view.cards.get(view.selected) else {
+        return false;
+    };
+    match view.active_tab {
+        DashboardTab::Access => card.id == "access-summary" || card.id.ends_with("-note"),
+        DashboardTab::Protocol => card.id.ends_with("-note"),
+        _ => false,
+    }
+}
+
 fn action_label_for_card(card: &DashboardCard) -> String {
     match card.id {
         "core-start" => "启动".to_string(),
@@ -1290,7 +1301,13 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
             }
         }
         DashboardTab::Overview => vec!["打开".to_string(), "取消".to_string()],
-        DashboardTab::Access => vec!["打开".to_string(), "取消".to_string()],
+        DashboardTab::Access => {
+            if card.id.ends_with("-note") {
+                vec!["查看说明".to_string(), "取消".to_string()]
+            } else {
+                vec!["打开".to_string(), "取消".to_string()]
+            }
+        }
         DashboardTab::About => return None,
         DashboardTab::Deploy => return None,
     };
@@ -1854,6 +1871,8 @@ fn handle_dashboard_key(
                     } else {
                         if view.active_tab == DashboardTab::About {
                             DashboardInputAction::Idle
+                        } else if direct_info_popup_card(view) {
+                            DashboardInputAction::Event(DashboardEvent::Activate)
                         } else {
                             DashboardInputAction::OpenPopup
                         }
@@ -2786,6 +2805,39 @@ mod tests {
         assert_eq!(
             supported.actions,
             vec!["启动", "停止", "日志", "更多控制", "取消"]
+        );
+    }
+
+    #[test]
+    fn info_cards_activate_directly_inside_dashboard() {
+        let mut view = sample_dashboard_view(0);
+        view.active_tab = DashboardTab::Access;
+        view.cards = vec![DashboardCard {
+            id: "access-summary",
+            icon: "A",
+            title: "访问汇总".to_string(),
+            subtitle: "MaiBot WebUI".to_string(),
+            badge: "可查看".to_string(),
+            detail: "集中查看访问入口。".to_string(),
+            kind: StatusKind::Neutral,
+        }];
+        view.selected = 0;
+
+        let mut state = DashboardState::default();
+        state.active_tab = DashboardTab::Access;
+        state.focus = DashboardFocus::Content;
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::Event(DashboardEvent::Activate)
+        );
+
+        view.cards[0].id = "access-note";
+        let popup = popup_for_selection(&view).expect("access note popup action");
+        assert_eq!(popup.actions, vec!["查看说明", "取消"]);
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::Event(DashboardEvent::Activate)
         );
     }
 

@@ -108,6 +108,7 @@ The desktop experience has moved from the legacy vertical menu to a modern ratat
 - Wide terminals render a two-column workspace; narrow terminals must degrade to stacked panels without overflowing. Readability bugs in either layout are regressions.
 - The dashboard can show "running but config/path not recorded" as a warning state. Do not display contradictory copy such as "running" plus "not installed"; prefer "配置待同步" / "configuration pending sync".
 - The `About` tab is read-only: Enter should not exit the manager. Top-level exit is `Ctrl+C`.
+- Pure information pages opened from the ratatui dashboard, such as access summaries or platform capability notes, must stay inside centered `DashboardPopup` modals. CLI commands such as `maibot access show` should continue to print plain text and exit without any popup behavior.
 - Content-row movement and popup opening must use cached redraw paths and must not trigger platform probes, filesystem scans, or shell commands. Rebuilds should happen when changing sidebar sections or after actions that can alter runtime state.
 - Platform dashboard caches should keep short-lived runtime snapshots and plugin card snapshots. Linux status probes must stay bounded by Rust-side timeouts and should batch `screen` session checks when possible.
 - `scripts/verify_tui_capture.py` is the PTY smoke-test helper for final screen snapshots. Keep it able to allocate a controlling terminal, set rows/cols, drive key timelines, and report `overflow`.
@@ -129,7 +130,7 @@ The desktop experience has moved from the legacy vertical menu to a modern ratat
   `cargo build --release --target x86_64-pc-windows-msvc --target-dir target\windows-verify`,
   then run `target\windows-verify\x86_64-pc-windows-msvc\release\maibot-manager-tui.exe --help`
   and `target\windows-verify\x86_64-pc-windows-msvc\release\maibot-manager-tui.exe tui`.
-- Use WSL for Linux reality checks from Windows: `cargo build`, `cargo check --target x86_64-unknown-linux-musl`, and `scripts/verify_tui_capture.py` in `wide`, `narrow`, `tabs`, and `deploy` modes.
+- Use WSL for Linux reality checks from Windows: `cargo build`, `cargo check --target x86_64-unknown-linux-musl`, and `scripts/verify_tui_capture.py` in `wide`, `narrow`, `tabs`, `deploy`, and `access` modes.
 - Inspect PTY capture output for `overflow: false`, visible rounded blocks, expected sidebar/content/footer structure, deployment footer shortcuts, no internal metadata text, and no contradictory running/installed state text.
 - Manually sanity-check raw-mode navigation paths for sidebar/content focus, deployment left-right/up-down behavior, centered modals, install planner, service actions, and `Ctrl+C` terminal restoration.
 - Treat readability regressions in narrow terminals as bugs even though the optimized target is a modern wide terminal.
