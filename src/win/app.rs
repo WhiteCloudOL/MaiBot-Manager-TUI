@@ -265,13 +265,13 @@ impl App {
             ),
             DashboardTab::About => (
                 "关于",
-                "构建信息、文档入口和运行环境说明。",
+                "版本、文档、作者与许可信息。",
                 "信息面板",
-                "帮助新用户快速理解当前环境",
+                "清晰查看软件信息",
                 selected.map(|card| card.title.as_str()).unwrap_or("关于"),
                 selected
                     .map(|card| card.subtitle.as_str())
-                    .unwrap_or("可在这里确认版本、文档和平台约束。"),
+                    .unwrap_or("可在这里确认版本、文档和当前平台。"),
             ),
         }
     }
@@ -655,37 +655,37 @@ impl App {
             DashboardCard {
                 id: "version",
                 icon: "󰎆",
-                title: format!("MaiBot Manager {}", crate::model::APP_VERSION),
-                subtitle: "当前构建版本".to_string(),
+                title: "MaiBot Manager".to_string(),
+                subtitle: format!("版本 {}", crate::model::APP_VERSION),
                 badge: "版本".to_string(),
-                detail: crate::model::APP_HEADER_SUBTITLE.to_string(),
+                detail: "用于安装、更新和管理 MaiBot。".to_string(),
                 kind: StatusKind::Neutral,
             },
             DashboardCard {
                 id: "docs",
                 icon: "󰈙",
-                title: "文档与仓库".to_string(),
+                title: "帮助与文档".to_string(),
                 subtitle: crate::model::APP_HEADER_DOCS.to_string(),
-                badge: "帮助".to_string(),
-                detail: "项目文档与使用说明入口。".to_string(),
+                badge: "文档".to_string(),
+                detail: "查看使用说明、安装指引和常见问题。".to_string(),
                 kind: StatusKind::Neutral,
             },
             DashboardCard {
                 id: "credits",
                 icon: "󰨔",
-                title: "作者与许可证".to_string(),
+                title: "作者与许可".to_string(),
                 subtitle: crate::model::APP_HEADER_CREDIT.to_string(),
                 badge: "许可".to_string(),
-                detail: "项目信息集中展示，标题栏保持清爽。".to_string(),
+                detail: "感谢使用 MaiBot Manager。".to_string(),
                 kind: StatusKind::Neutral,
             },
             DashboardCard {
                 id: "platform",
                 icon: "󰍹",
-                title: "Windows 10/11 工作流".to_string(),
-                subtitle: "独立控制台 + PID + Shell IR".to_string(),
+                title: "当前平台".to_string(),
+                subtitle: "Windows 10/11".to_string(),
                 badge: "平台".to_string(),
-                detail: "协议端使用 GitHub Release 资产下载。".to_string(),
+                detail: "支持独立窗口运行和图形化协议端管理。".to_string(),
                 kind: StatusKind::Neutral,
             },
         ]
@@ -734,7 +734,7 @@ impl App {
                                         "尚未生成"
                                     }
                                 ));
-                                lines.push("控制方式: 独立控制台 + PID 停止".to_string());
+                                lines.push("控制方式: 独立控制台运行，可从管理器停止".to_string());
                                 lines.push("常用动作: 启动 / 停止 / 查看实时日志".to_string());
                                 if let Some(snippet) = read_log_summary(&log_path, 2) {
                                     lines.push(format!("日志摘要: {snippet}"));
@@ -974,10 +974,12 @@ impl App {
                 }
             }
             DashboardTab::About => {
-                lines.push(format!("标题: {}", crate::model::APP_HEADER_TITLE));
-                lines.push(format!("副标题: {}", crate::model::APP_HEADER_SUBTITLE));
-                lines.push(format!("作者与许可证: {}", crate::model::APP_HEADER_CREDIT));
-                lines.push(format!("文档: {}", crate::model::APP_HEADER_DOCS));
+                lines.push(format!("应用: {}", crate::model::APP_HEADER_TITLE));
+                lines.push(format!("版本: {}", crate::model::APP_VERSION));
+                lines.push(format!("说明: {}", crate::model::APP_HEADER_SUBTITLE));
+                lines.push(crate::model::APP_HEADER_CREDIT.to_string());
+                lines.push(crate::model::APP_HEADER_DOCS.to_string());
+                lines.push("平台: Windows 10/11".to_string());
             }
         }
         Ok(lines)
@@ -1075,7 +1077,7 @@ impl App {
             }
             DashboardTab::About => {
                 actions.push("只读信息页".to_string());
-                actions.push("构建信息与运行环境说明".to_string());
+                actions.push("版本、文档、作者与许可信息".to_string());
             }
         }
         actions

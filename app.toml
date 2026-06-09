@@ -6,12 +6,12 @@ version = "0.3.0"
 
 # 标头显示内容，修改后会被烘焙进二进制。
 header_title = "MaiBot-Manager-TUI"
-header_subtitle = "Rust · MaiBot管理面板"
-header_credit = "作者：清蒸云鸭 · LICENSE：AGPL-3.0"
-header_docs = "文档站: https://docs.meowyun.cn/index.html"
+header_subtitle = "MaiBot 管理面板"
+header_credit = "作者：清蒸云鸭 · 许可：AGPL-3.0"
+header_docs = "文档：https://docs.meowyun.cn/index.html"
 
 # 兼容旧字段：header_subtitle 为空时使用 build_label
-build_label = "Rust · MaiBot管理面板"
+build_label = "MaiBot 管理面板"
 
 # 测速时使用的目标文件，用于评估各镜像的真实下载延迟
 github_test_path = "https://raw.githubusercontent.com/Mai-with-u/MaiBot/refs/heads/main/README.md"

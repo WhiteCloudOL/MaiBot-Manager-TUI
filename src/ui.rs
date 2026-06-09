@@ -614,6 +614,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
 fn render_content(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
     match view.active_tab {
         DashboardTab::Deploy => render_deployment(frame, area, view),
+        DashboardTab::About => render_about(frame, area, view),
         DashboardTab::Core | DashboardTab::Protocol | DashboardTab::Plugins => {
             render_table_view(frame, area, view)
         }
@@ -669,6 +670,120 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
 
 fn render_table_view(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
     render_table(frame, area, view, view.page_title.as_str());
+}
+
+fn render_about(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let outer = ethereal_block(Some("关于"), view.focus == DashboardFocus::Content);
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
+
+    let (direction, constraints) = if inner.width < 72 {
+        (
+            Direction::Vertical,
+            [Constraint::Percentage(44), Constraint::Percentage(56)],
+        )
+    } else {
+        (
+            Direction::Horizontal,
+            [Constraint::Percentage(38), Constraint::Percentage(62)],
+        )
+    };
+    let chunks = Layout::default()
+        .direction(direction)
+        .constraints(constraints)
+        .split(inner);
+    render_about_list(frame, chunks[0], view);
+    render_about_detail(frame, chunks[1], view);
+}
+
+fn render_about_list(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let items = if view.cards.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            view.empty_title.clone(),
+            muted_style(),
+        )))]
+    } else {
+        view.cards
+            .iter()
+            .map(|card| {
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled(
+                            card.icon,
+                            Style::default()
+                                .fg(ACCENT_SECONDARY)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("  "),
+                        Span::styled(
+                            card.title.clone(),
+                            Style::default()
+                                .fg(TEXT_PRIMARY)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]),
+                    Line::from(Span::styled(card.subtitle.clone(), muted_style())),
+                ])
+            })
+            .collect()
+    };
+    let mut state = ListState::default();
+    if !view.cards.is_empty() {
+        state.select(Some(view.selected.min(view.cards.len() - 1)));
+    }
+    let list = List::new(items)
+        .block(compact_block(Some("信息"), false))
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .highlight_style(selected_style())
+        .highlight_symbol("");
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_about_detail(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let selected = view.cards.get(view.selected);
+    let mut lines = Vec::new();
+    if let Some(card) = selected {
+        lines.push(Line::from(vec![
+            Span::styled(
+                card.icon,
+                Style::default()
+                    .fg(ACCENT_SECONDARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                card.title.clone(),
+                Style::default()
+                    .fg(ACCENT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            card.subtitle.clone(),
+            muted_style(),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            card.detail.clone(),
+            Style::default().fg(TEXT_PRIMARY),
+        )));
+        lines.push(Line::from(""));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            view.empty_detail.clone(),
+            muted_style(),
+        )));
+    } else {
+        for line in &view.detail_lines {
+            lines.push(Line::from(Span::styled(line.clone(), muted_style())));
+        }
+    }
+    let paragraph = Paragraph::new(Text::from(lines))
+        .block(compact_block(Some("详情"), false))
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
 }
 
 fn render_table(frame: &mut Frame<'_>, area: Rect, view: &DashboardView, title: &str) {
@@ -1119,7 +1234,7 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
         }
         DashboardTab::Overview => vec!["打开".to_string(), "取消".to_string()],
         DashboardTab::Access => vec!["打开".to_string(), "取消".to_string()],
-        DashboardTab::About => vec!["取消".to_string()],
+        DashboardTab::About => return None,
         DashboardTab::Deploy => return None,
     };
     let mut lines = vec![format!("状态: {}", card.badge), card.detail.clone()];
@@ -1229,6 +1344,8 @@ fn sync_cached_dashboard_view(view: &mut DashboardView, state: &mut DashboardSta
         }
         if view.active_tab == DashboardTab::Deploy {
             sync_deploy_detail_choices(view, state);
+        } else if view.active_tab == DashboardTab::About {
+            view.detail_choices.clear();
         } else {
             view.detail_lines.clear();
             view.detail_choices.clear();
@@ -1554,7 +1671,11 @@ fn handle_dashboard_key(
                             DashboardInputAction::Idle
                         }
                     } else {
-                        DashboardInputAction::OpenPopup
+                        if view.active_tab == DashboardTab::About {
+                            DashboardInputAction::Idle
+                        } else {
+                            DashboardInputAction::OpenPopup
+                        }
                     }
                 }
             },
@@ -2013,6 +2134,54 @@ mod tests {
     }
 
     #[test]
+    fn about_page_uses_information_layout_not_service_table() {
+        let mut view = sample_dashboard_view(0);
+        view.active_tab = DashboardTab::About;
+        view.page_title = "关于".to_string();
+        view.detail_lines = vec![
+            "应用: MaiBot-Manager-TUI".to_string(),
+            "版本: 0.3.0".to_string(),
+            "作者: 清蒸云鸭".to_string(),
+            "许可: AGPL-3.0".to_string(),
+            "文档: https://docs.meowyun.cn/index.html".to_string(),
+        ];
+        view.cards = vec![
+            DashboardCard {
+                id: "version",
+                icon: "V",
+                title: "MaiBot Manager".to_string(),
+                subtitle: "版本 0.3.0".to_string(),
+                badge: "版本".to_string(),
+                detail: "用于安装、更新和管理 MaiBot。".to_string(),
+                kind: StatusKind::Neutral,
+            },
+            DashboardCard {
+                id: "credits",
+                icon: "C",
+                title: "作者与许可".to_string(),
+                subtitle: "清蒸云鸭 · AGPL-3.0".to_string(),
+                badge: "许可".to_string(),
+                detail: "感谢使用 MaiBot Manager。".to_string(),
+                kind: StatusKind::Neutral,
+            },
+        ];
+
+        let rendered = render_buffer_text(96, 24, |frame| {
+            render_content(frame, Rect::new(0, 0, 96, 24), &view);
+        });
+        let visible = compact_visible_text(&rendered);
+        assert!(visible.contains("信息"));
+        assert!(visible.contains("详情"));
+        assert!(visible.contains("MaiBotManager"));
+        assert!(visible.contains("作者与许可"));
+        assert!(visible.contains("文档:https://docs.meowyun.cn/index.html"));
+        assert!(!visible.contains("服务名称"));
+        assert!(!visible.contains("当前状态"));
+        assert!(!visible.contains("运行模式"));
+        assert!(!visible.contains("打开"));
+    }
+
+    #[test]
     fn dashboard_navigation_uses_sidebar_and_content_focus() {
         let view = sample_dashboard_view(0);
         let mut state = DashboardState::default();
@@ -2141,6 +2310,21 @@ mod tests {
             handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
             DashboardInputAction::Event(DashboardEvent::Activate)
         );
+    }
+
+    #[test]
+    fn about_page_enter_stays_read_only_without_popup() {
+        let mut view = sample_dashboard_view(0);
+        view.active_tab = DashboardTab::About;
+        let mut state = DashboardState::default();
+        state.active_tab = DashboardTab::About;
+        state.focus = DashboardFocus::Content;
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::Idle
+        );
+        assert!(popup_for_selection(&view).is_none());
     }
 
     #[test]

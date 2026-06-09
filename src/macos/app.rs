@@ -147,7 +147,7 @@ impl App {
             ),
             DashboardTab::Core => (
                 "核心服务管理",
-                "聚焦 MaiBot 核心进程、日志与 PID 管理。",
+                "聚焦 MaiBot 核心进程、日志与启停控制。",
                 "核心动作",
                 "启动、停止、交互终端与日志",
                 selected
@@ -195,13 +195,13 @@ impl App {
             ),
             DashboardTab::About => (
                 "关于",
-                "构建信息、文档入口和运行环境说明。",
+                "版本、文档、作者与许可信息。",
                 "信息面板",
-                "帮助新用户快速理解当前环境",
+                "清晰查看软件信息",
                 selected.map(|card| card.title.as_str()).unwrap_or("关于"),
                 selected
                     .map(|card| card.subtitle.as_str())
-                    .unwrap_or("可在这里确认版本、文档和平台约束。"),
+                    .unwrap_or("可在这里确认版本、文档和当前平台。"),
             ),
         }
     }
@@ -477,37 +477,37 @@ impl App {
             DashboardCard {
                 id: "version",
                 icon: "󰎆",
-                title: format!("MaiBot Manager {}", crate::model::APP_VERSION),
-                subtitle: "当前构建版本".to_string(),
+                title: "MaiBot Manager".to_string(),
+                subtitle: format!("版本 {}", crate::model::APP_VERSION),
                 badge: "版本".to_string(),
-                detail: crate::model::APP_HEADER_SUBTITLE.to_string(),
+                detail: "用于安装、更新和管理 MaiBot。".to_string(),
                 kind: StatusKind::Neutral,
             },
             DashboardCard {
                 id: "docs",
                 icon: "󰈙",
-                title: "文档与仓库".to_string(),
+                title: "帮助与文档".to_string(),
                 subtitle: crate::model::APP_HEADER_DOCS.to_string(),
-                badge: "帮助".to_string(),
-                detail: "项目文档与使用说明入口。".to_string(),
+                badge: "文档".to_string(),
+                detail: "查看使用说明、安装指引和常见问题。".to_string(),
                 kind: StatusKind::Neutral,
             },
             DashboardCard {
                 id: "credits",
                 icon: "󰨔",
-                title: "作者与许可证".to_string(),
+                title: "作者与许可".to_string(),
                 subtitle: crate::model::APP_HEADER_CREDIT.to_string(),
                 badge: "许可".to_string(),
-                detail: "项目信息集中展示，标题栏保持清爽。".to_string(),
+                detail: "感谢使用 MaiBot Manager。".to_string(),
                 kind: StatusKind::Neutral,
             },
             DashboardCard {
                 id: "platform",
                 icon: "󰍹",
-                title: "macOS 原生工作流".to_string(),
-                subtitle: "Homebrew + zsh + 后台子进程".to_string(),
+                title: "当前平台".to_string(),
+                subtitle: "macOS".to_string(),
                 badge: "平台".to_string(),
-                detail: "协议端仍明确保持 TODO 状态。".to_string(),
+                detail: "支持核心服务管理，协议端能力会在界面中明确标注。".to_string(),
                 kind: StatusKind::Neutral,
             },
         ]
@@ -755,10 +755,12 @@ impl App {
                 }
             }
             DashboardTab::About => {
-                lines.push(format!("标题: {}", crate::model::APP_HEADER_TITLE));
-                lines.push(format!("副标题: {}", crate::model::APP_HEADER_SUBTITLE));
-                lines.push(format!("作者与许可证: {}", crate::model::APP_HEADER_CREDIT));
-                lines.push(format!("文档: {}", crate::model::APP_HEADER_DOCS));
+                lines.push(format!("应用: {}", crate::model::APP_HEADER_TITLE));
+                lines.push(format!("版本: {}", crate::model::APP_VERSION));
+                lines.push(format!("说明: {}", crate::model::APP_HEADER_SUBTITLE));
+                lines.push(crate::model::APP_HEADER_CREDIT.to_string());
+                lines.push(crate::model::APP_HEADER_DOCS.to_string());
+                lines.push("平台: macOS".to_string());
             }
         }
         Ok(lines)
@@ -785,10 +787,8 @@ impl App {
                 actions.push("当前动作块会复用核心服务逻辑".to_string());
                 if let Some(card) = selected {
                     match card.id {
-                        "core-start" => {
-                            actions.push("将启动后台子进程并写入 pid/log 文件".to_string())
-                        }
-                        "core-stop" => actions.push("将结束后台进程组并清理 pid 文件".to_string()),
+                        "core-start" => actions.push("将启动 MaiBot 并保留日志记录".to_string()),
+                        "core-stop" => actions.push("将停止正在运行的 MaiBot 核心服务".to_string()),
                         "core-console" => actions.push("将打开 Terminal.app 交互窗口".to_string()),
                         "core-logs" => actions.push("将直接进入日志跟随视图".to_string()),
                         _ => {}
@@ -843,7 +843,7 @@ impl App {
             }
             DashboardTab::About => {
                 actions.push("只读信息页".to_string());
-                actions.push("构建信息与运行环境说明".to_string());
+                actions.push("版本、文档、作者与许可信息".to_string());
             }
         }
         actions
@@ -1353,11 +1353,8 @@ impl App {
         let pid_path = PathBuf::from(&cfg.mai_path).join("logs").join("maibot.pid");
         let maibot_pid = pid_running(&pid_path).unwrap_or(None);
         let mut cards = Vec::new();
-        cards.push(if let Some(pid) = maibot_pid {
-            StatusCard::running(
-                "MaiBot",
-                format!("后台子进程 PID {pid} · 日志写入 logs/maibot.log"),
-            )
+        cards.push(if maibot_pid.is_some() {
+            StatusCard::running("MaiBot", "后台运行中 · 日志写入 logs/maibot.log")
         } else {
             StatusCard::stopped("MaiBot", "核心后台进程未运行")
         });
