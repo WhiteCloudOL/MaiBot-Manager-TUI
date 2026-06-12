@@ -141,6 +141,7 @@ impl App {
                 DashboardEvent::ResetDeployPlan => {
                     let reset = self.build_recommended_defaults();
                     dashboard.deploy_plan = Some(reset);
+                    dashboard.deploy_choice_cursor = None;
                     dashboard.set_status_message("已恢复推荐默认部署配置");
                 }
                 DashboardEvent::RunDeployPlan => {
@@ -193,6 +194,7 @@ impl App {
             detail_subtitle: detail_subtitle.to_string(),
             detail_lines,
             detail_choices,
+            detail_selected: 0,
             action_lines,
             cards: std::mem::take(&mut cards),
             selected,

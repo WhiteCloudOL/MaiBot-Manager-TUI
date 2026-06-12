@@ -1001,11 +1001,7 @@ fn render_current_step_options(frame: &mut Frame<'_>, area: Rect, view: &Dashboa
             .collect::<Vec<_>>()
     };
     let mut state = ListState::default();
-    let selected_choice = view
-        .detail_choices
-        .iter()
-        .position(|choice| choice.active)
-        .unwrap_or(0);
+    let selected_choice = view.detail_selected;
     if !items.is_empty() {
         state.select(Some(selected_choice.min(items.len() - 1)));
     }
@@ -1021,11 +1017,34 @@ fn render_current_step_options(frame: &mut Frame<'_>, area: Rect, view: &Dashboa
 }
 
 fn render_deploy_summary(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
-    let summary = view
+    let summary = deploy_summary_lines(view, area.height);
+    let paragraph = Paragraph::new(Text::from(summary))
+        .block(ethereal_block(Some("配置总览"), false))
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
+}
+
+fn deploy_summary_lines(view: &DashboardView, height: u16) -> Vec<Line<'static>> {
+    let deploy_cards = view
         .cards
         .iter()
         .filter(|card| deploy_card_field(card.id).is_some())
-        .take(6)
+        .collect::<Vec<_>>();
+    let visible_rows = usize::from(height.saturating_sub(2)).max(1);
+    let current_index = deploy_cards
+        .iter()
+        .position(|card| {
+            view.cards
+                .get(view.selected)
+                .is_some_and(|selected| selected.id == card.id)
+        })
+        .unwrap_or_else(|| view.selected.min(deploy_cards.len().saturating_sub(1)));
+    let start = scroll_start(deploy_cards.len(), visible_rows, current_index);
+    deploy_cards
+        .into_iter()
+        .skip(start)
+        .take(visible_rows)
         .map(|card| {
             Line::from(vec![
                 Span::styled(card.title.clone(), muted_style()),
@@ -1033,12 +1052,7 @@ fn render_deploy_summary(frame: &mut Frame<'_>, area: Rect, view: &DashboardView
                 Span::styled(card.subtitle.clone(), Style::default().fg(TEXT_PRIMARY)),
             ])
         })
-        .collect::<Vec<_>>();
-    let paragraph = Paragraph::new(Text::from(summary))
-        .block(ethereal_block(Some("配置总览"), false))
-        .style(Style::default().fg(TEXT_PRIMARY))
-        .wrap(Wrap { trim: true });
-    frame.render_widget(paragraph, area);
+        .collect()
 }
 
 fn render_deploy_description(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
@@ -1061,7 +1075,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
         }
         AppMode::ContentFocused => {
             if view.active_tab == DashboardTab::Deploy {
-                "[←/→] 配置   [↑/↓] 选项   [Enter] 输入/编辑   [F5] 安装/更新   [Ctrl+R] 默认   [Ctrl+1] 导航   [Ctrl+Q] 退出"
+                "[←/→] 配置   [↑/↓] 候选   [Enter] 确认/输入   [F5] 安装/更新   [Ctrl+R] 默认   [Ctrl+1] 导航   [Ctrl+Q] 退出"
             } else {
                 "[↑/↓] 选择   [Tab] 面板   [Enter] 打开   [Esc] 返回   [Ctrl+1] 导航   [Ctrl+Q] 退出"
             }
@@ -1423,7 +1437,7 @@ fn deploy_step_title(fallback: &str) -> &str {
 }
 
 fn selected_deploy_description(view: &DashboardView) -> Option<String> {
-    if let Some(choice) = view.detail_choices.iter().find(|choice| choice.active) {
+    if let Some(choice) = view.detail_choices.get(view.detail_selected) {
         return Some(choice.detail.clone());
     }
     view.cards
@@ -1701,14 +1715,17 @@ fn sync_deploy_detail_choices(view: &mut DashboardView, state: &DashboardState) 
     view.action_lines.clear();
     let Some(plan) = state.deploy_plan.as_ref() else {
         view.detail_choices.clear();
+        view.detail_selected = 0;
         return;
     };
     let Some(card) = view.cards.get(view.selected) else {
         view.detail_choices.clear();
+        view.detail_selected = 0;
         return;
     };
     let Some(field) = deploy_card_field(card.id) else {
         view.detail_choices.clear();
+        view.detail_selected = 0;
         return;
     };
     view.detail_choices = planner_choices_for_plan(plan, field)
@@ -1720,6 +1737,8 @@ fn sync_deploy_detail_choices(view: &mut DashboardView, state: &DashboardState) 
             label,
         })
         .collect();
+    view.detail_selected =
+        deploy_choice_cursor_index(state, plan, field, view.detail_choices.len());
 }
 
 fn cached_planner_field_value(plan: &InstallPlan, field: PlanField) -> String {
@@ -1899,6 +1918,30 @@ fn planner_choice_active_for_plan(plan: &InstallPlan, field: PlanField, idx: usi
     }
 }
 
+fn active_deploy_choice_index(plan: &InstallPlan, field: PlanField) -> usize {
+    planner_choices_for_plan(plan, field)
+        .iter()
+        .enumerate()
+        .find_map(|(idx, _)| planner_choice_active_for_plan(plan, field, idx).then_some(idx))
+        .unwrap_or(0)
+}
+
+fn deploy_choice_cursor_index(
+    state: &DashboardState,
+    plan: &InstallPlan,
+    field: PlanField,
+    len: usize,
+) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    state
+        .deploy_choice_cursor
+        .filter(|cursor| cursor.field == field)
+        .map(|cursor| cursor.index.min(len - 1))
+        .unwrap_or_else(|| active_deploy_choice_index(plan, field).min(len - 1))
+}
+
 fn deploy_choice_detail_for_cache(field: PlanField, idx: usize, label: &str) -> String {
     match field {
         PlanField::InstallPath => "打开路径输入框".to_string(),
@@ -2044,7 +2087,7 @@ fn handle_dashboard_key(
                 }
                 DashboardFocus::Content => {
                     if view.active_tab == DashboardTab::Deploy {
-                        adjust_deploy_choice(state, view, -1)
+                        move_deploy_choice_cursor(state, view, -1)
                     } else {
                         state.move_selection(view.cards.len(), -1);
                         DashboardInputAction::Redraw
@@ -2058,7 +2101,7 @@ fn handle_dashboard_key(
                 }
                 DashboardFocus::Content => {
                     if view.active_tab == DashboardTab::Deploy {
-                        adjust_deploy_choice(state, view, 1)
+                        move_deploy_choice_cursor(state, view, 1)
                     } else {
                         state.move_selection(view.cards.len(), 1);
                         DashboardInputAction::Redraw
@@ -2100,21 +2143,7 @@ fn handle_dashboard_key(
                 }
                 DashboardFocus::Content => {
                     if view.active_tab == DashboardTab::Deploy {
-                        if let Some(selected) = view.cards.get(view.selected) {
-                            if let Some(field) = deploy_card_field(selected.id) {
-                                if deploy_field_uses_input(field) {
-                                    state.popup =
-                                        deploy_input_popup(state.deploy_plan.as_ref(), field);
-                                    DashboardInputAction::Redraw
-                                } else {
-                                    DashboardInputAction::Idle
-                                }
-                            } else {
-                                DashboardInputAction::Idle
-                            }
-                        } else {
-                            DashboardInputAction::Idle
-                        }
+                        confirm_deploy_choice(state, view)
                     } else {
                         if view.active_tab == DashboardTab::About {
                             DashboardInputAction::Idle
@@ -2186,7 +2215,7 @@ fn handle_dashboard_input_popup_key(
     }
 }
 
-fn adjust_deploy_choice(
+fn move_deploy_choice_cursor(
     state: &mut DashboardState,
     view: &DashboardView,
     delta: isize,
@@ -2206,32 +2235,29 @@ fn adjust_deploy_choice(
     let Some(field) = deploy_card_field(card.id) else {
         return DashboardInputAction::Idle;
     };
-    let current_idx = view
-        .detail_choices
-        .iter()
-        .position(|choice| choice.active)
-        .unwrap_or(0);
-    let next = wrap_index(current_idx, view.detail_choices.len(), delta);
-    let requests_input = state
-        .deploy_plan
-        .as_ref()
-        .is_some_and(|plan| deploy_choice_requests_input(plan, field, next));
-    if requests_input {
-        state.popup = deploy_input_popup(state.deploy_plan.as_ref(), field);
-    } else {
-        let Some(plan) = state.deploy_plan.as_mut() else {
-            return DashboardInputAction::Idle;
-        };
-        apply_cached_planner_choice(plan, field, next);
-    }
+    let next = wrap_index(view.detail_selected, view.detail_choices.len(), delta);
+    state.deploy_choice_cursor = Some(DeployChoiceCursor { field, index: next });
     DashboardInputAction::Redraw
 }
 
-fn deploy_field_uses_input(field: PlanField) -> bool {
-    matches!(
-        field,
-        PlanField::InstallPath | PlanField::GithubProxy | PlanField::PipSource
-    )
+fn confirm_deploy_choice(state: &mut DashboardState, view: &DashboardView) -> DashboardInputAction {
+    let Some(card) = view.cards.get(view.selected) else {
+        return DashboardInputAction::Idle;
+    };
+    let Some(field) = deploy_card_field(card.id) else {
+        return DashboardInputAction::Idle;
+    };
+    let idx = view.detail_selected;
+    if field == PlanField::InstallPath || deploy_choice_requests_input_from_view(view, idx) {
+        state.popup = deploy_input_popup(state.deploy_plan.as_ref(), field);
+        return DashboardInputAction::Redraw;
+    }
+    let Some(plan) = state.deploy_plan.as_mut() else {
+        return DashboardInputAction::Idle;
+    };
+    apply_cached_planner_choice(plan, field, idx);
+    state.deploy_choice_cursor = Some(DeployChoiceCursor { field, index: idx });
+    DashboardInputAction::Redraw
 }
 
 fn deploy_choice_requests_input(plan: &InstallPlan, field: PlanField, idx: usize) -> bool {
@@ -2244,6 +2270,12 @@ fn deploy_choice_requests_input(plan: &InstallPlan, field: PlanField, idx: usize
             .is_some_and(|choice| choice == "输入自定义 PyPI"),
         _ => false,
     }
+}
+
+fn deploy_choice_requests_input_from_view(view: &DashboardView, idx: usize) -> bool {
+    view.detail_choices
+        .get(idx)
+        .is_some_and(|choice| choice.label == "输入自定义镜像" || choice.label == "输入自定义 PyPI")
 }
 
 fn deploy_input_popup(plan: Option<&InstallPlan>, field: PlanField) -> Option<DashboardPopup> {
@@ -2354,6 +2386,10 @@ fn apply_deploy_input_value(state: &mut DashboardState, field: PlanField, value:
         }
         _ => None,
     };
+    state.deploy_choice_cursor = state.deploy_plan.as_ref().map(|plan| DeployChoiceCursor {
+        field,
+        index: active_deploy_choice_index(plan, field),
+    });
     if let Some(message) = status_message {
         state.set_status_message(message);
     }
@@ -2793,6 +2829,7 @@ mod tests {
             detail_subtitle: cards[selected].subtitle.clone(),
             detail_lines: vec!["状态: 正常".to_string()],
             detail_choices: Vec::new(),
+            detail_selected: 0,
             action_lines: Vec::new(),
             cards,
             selected,
@@ -2849,6 +2886,7 @@ mod tests {
             detail_subtitle: "当前路径".to_string(),
             detail_lines: Vec::new(),
             detail_choices: Vec::new(),
+            detail_selected: 0,
             action_lines: Vec::new(),
             cards: vec![
                 DashboardCard {
@@ -3041,7 +3079,7 @@ mod tests {
     }
 
     #[test]
-    fn deploy_left_right_switch_steps_and_up_down_adjust_choices() {
+    fn deploy_left_right_switch_steps_and_up_down_browse_choices() {
         let mut view = DashboardView {
             mode: AppMode::ContentFocused,
             active_tab: DashboardTab::Deploy,
@@ -3052,6 +3090,7 @@ mod tests {
             detail_subtitle: "当前路径".to_string(),
             detail_lines: Vec::new(),
             detail_choices: Vec::new(),
+            detail_selected: 0,
             action_lines: Vec::new(),
             cards: vec![
                 DashboardCard {
@@ -3108,13 +3147,30 @@ mod tests {
         assert_eq!(view.detail_choices.len(), 2);
         assert!(view.detail_choices[0].active);
         assert_eq!(view.detail_choices[0].label, "main");
+        assert_eq!(view.detail_selected, 0);
 
         assert_eq!(
             handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
             DashboardInputAction::Redraw
         );
         sync_cached_dashboard_view(&mut view, &mut state);
+        assert!(view.detail_choices[0].active);
+        assert_eq!(view.detail_selected, 1);
+        assert_eq!(
+            state
+                .deploy_plan
+                .as_ref()
+                .map(|plan| plan.maibot_branch.as_str()),
+            Some("main")
+        );
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        sync_cached_dashboard_view(&mut view, &mut state);
         assert!(view.detail_choices[1].active);
+        assert_eq!(view.detail_selected, 1);
         assert_eq!(
             state
                 .deploy_plan
@@ -3190,6 +3246,7 @@ mod tests {
             detail_subtitle: "自动测速".to_string(),
             detail_lines: Vec::new(),
             detail_choices: Vec::new(),
+            detail_selected: 0,
             action_lines: Vec::new(),
             cards: vec![DashboardCard {
                 id: "deploy-github",
@@ -3225,7 +3282,31 @@ mod tests {
             DashboardInputAction::Redraw
         );
         sync_cached_dashboard_view(&mut view, &mut state);
+        assert!(view.detail_choices[0].active);
+        assert_eq!(view.detail_selected, 1);
+        assert_eq!(
+            state
+                .deploy_plan
+                .as_ref()
+                .expect("deploy plan")
+                .github_proxy,
+            ""
+        );
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        sync_cached_dashboard_view(&mut view, &mut state);
         assert!(view.detail_choices[1].active);
+        assert_eq!(
+            state
+                .deploy_plan
+                .as_ref()
+                .expect("deploy plan")
+                .github_proxy,
+            "https://github.com"
+        );
 
         assert_eq!(
             handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
@@ -3233,6 +3314,22 @@ mod tests {
         );
         sync_cached_dashboard_view(&mut view, &mut state);
         assert!(state.popup.is_none());
+        assert!(view.detail_choices[1].active);
+        assert_eq!(view.detail_selected, 2);
+        assert_eq!(
+            state
+                .deploy_plan
+                .as_ref()
+                .expect("deploy plan")
+                .github_proxy,
+            "https://github.com"
+        );
+
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        sync_cached_dashboard_view(&mut view, &mut state);
         assert!(view.detail_choices[2].active);
         assert_eq!(
             state
@@ -3244,17 +3341,131 @@ mod tests {
         );
 
         let plan = state.deploy_plan.as_ref().expect("deploy plan");
-        let input_idx = planner_choices_for_plan(plan, PlanField::GithubProxy).len() - 1;
-        assert!(deploy_choice_requests_input(
-            plan,
-            PlanField::GithubProxy,
-            input_idx
-        ));
         assert!(planner_choice_active_for_plan(
             plan,
             PlanField::GithubProxy,
             2
         ));
+
+        let input_idx = planner_choices_for_plan(plan, PlanField::GithubProxy)
+            .iter()
+            .position(|choice| choice == "输入自定义镜像")
+            .expect("custom github choice should be visible");
+        assert!(deploy_choice_requests_input(
+            plan,
+            PlanField::GithubProxy,
+            input_idx
+        ));
+        state.deploy_choice_cursor = Some(DeployChoiceCursor {
+            field: PlanField::GithubProxy,
+            index: input_idx,
+        });
+        sync_cached_dashboard_view(&mut view, &mut state);
+        assert_eq!(view.detail_selected, input_idx);
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::Redraw
+        );
+        assert!(
+            state
+                .popup
+                .as_ref()
+                .is_some_and(|popup| popup.input.is_some())
+        );
+    }
+
+    #[test]
+    fn deploy_render_keeps_custom_github_and_docker_visible() {
+        let github_choices =
+            planner_choices_for_plan(&InstallPlan::default(), PlanField::GithubProxy);
+        let input_idx = github_choices
+            .iter()
+            .position(|choice| choice == "输入自定义镜像")
+            .expect("custom github choice should exist");
+        let github_view = DashboardView {
+            mode: AppMode::ContentFocused,
+            active_tab: DashboardTab::Deploy,
+            focus: DashboardFocus::Content,
+            popup: None,
+            page_title: "部署与更新".to_string(),
+            detail_title: "GitHub".to_string(),
+            detail_subtitle: "自动测速".to_string(),
+            detail_lines: Vec::new(),
+            detail_choices: github_choices
+                .into_iter()
+                .enumerate()
+                .map(|(idx, label)| DashboardChoice {
+                    detail: deploy_choice_detail_for_cache(PlanField::GithubProxy, idx, &label),
+                    active: idx == 0,
+                    label,
+                })
+                .collect(),
+            detail_selected: input_idx,
+            action_lines: Vec::new(),
+            cards: vec![DashboardCard {
+                id: "deploy-github",
+                icon: "G",
+                title: "GitHub".to_string(),
+                subtitle: "自动测速".to_string(),
+                badge: "单选".to_string(),
+                detail: "GitHub 详情".to_string(),
+                kind: StatusKind::Neutral,
+            }],
+            selected: 0,
+            empty_title: String::new(),
+            empty_detail: String::new(),
+        };
+        let rendered = render_buffer_text(96, 12, |frame| {
+            render_current_step_options(frame, Rect::new(0, 0, 96, 12), &github_view);
+        });
+        let visible = compact_visible_text(&rendered);
+        assert!(visible.contains("输入自定义镜像"));
+
+        let mut docker_view = DashboardView {
+            mode: AppMode::ContentFocused,
+            active_tab: DashboardTab::Deploy,
+            focus: DashboardFocus::Content,
+            popup: None,
+            page_title: "部署与更新".to_string(),
+            detail_title: "Docker".to_string(),
+            detail_subtitle: "保持不变".to_string(),
+            detail_lines: Vec::new(),
+            detail_choices: Vec::new(),
+            detail_selected: 0,
+            action_lines: Vec::new(),
+            cards: Vec::new(),
+            selected: 8,
+            empty_title: String::new(),
+            empty_detail: String::new(),
+        };
+        for (id, title, subtitle) in [
+            ("deploy-path", "目录", "~/maimai"),
+            ("deploy-branch", "分支", "main"),
+            ("deploy-mode", "模式", "正常更新/修复"),
+            ("deploy-python", "Python", "uv"),
+            ("deploy-venv", "环境", "保留"),
+            ("deploy-github", "GitHub", "自动测速"),
+            ("deploy-pypi", "PyPI", "系统默认"),
+            ("deploy-bots", "协议端", "NapCatQQ"),
+            ("deploy-docker", "Docker", "docker.1ms.run"),
+        ] {
+            docker_view.cards.push(DashboardCard {
+                id,
+                icon: "D",
+                title: title.to_string(),
+                subtitle: subtitle.to_string(),
+                badge: "单选".to_string(),
+                detail: String::new(),
+                kind: StatusKind::Neutral,
+            });
+        }
+        let visible = deploy_summary_lines(&docker_view, 8)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<String>();
+        let visible = compact_visible_text(&visible);
+        assert!(visible.contains("Docker"));
+        assert!(visible.contains("docker.1ms.run"));
     }
 
     #[test]

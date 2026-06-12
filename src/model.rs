@@ -215,6 +215,7 @@ pub struct AppState {
     pub search_query: String,
     pub status_message_override: Option<String>,
     pub deploy_plan: Option<InstallPlan>,
+    pub deploy_choice_cursor: Option<DeployChoiceCursor>,
     pub popup: Option<DashboardPopup>,
     selections: [usize; 7],
 }
@@ -347,6 +348,7 @@ pub struct DashboardView {
     pub detail_subtitle: String,
     pub detail_lines: Vec<String>,
     pub detail_choices: Vec<DashboardChoice>,
+    pub detail_selected: usize,
     pub action_lines: Vec<String>,
     pub cards: Vec<DashboardCard>,
     pub selected: usize,
@@ -374,6 +376,12 @@ pub enum PlanField {
     PipSource,
     BotProtocols,
     DockerMirror,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeployChoiceCursor {
+    pub field: PlanField,
+    pub index: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
