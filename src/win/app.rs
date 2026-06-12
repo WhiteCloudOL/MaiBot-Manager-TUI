@@ -1186,24 +1186,7 @@ impl App {
                     _ => {}
                 };
             }
-            DashboardTab::Deploy => {
-                let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
-                let selected = cards.get(state.selected_for_len(cards.len()));
-                if let Some(plan) = state.deploy_plan.as_ref() {
-                    let Some(field) = selected.and_then(|card| deploy_card_field(card.id)) else {
-                        return Ok(true);
-                    };
-                    if field == PlanField::InstallPath {
-                        let mut new_plan = plan.clone();
-                        self.edit_install_path(&mut new_plan)?;
-                        state.deploy_plan = Some(new_plan.clone());
-                        state.set_status_message(format!(
-                            "目录已更新为 {}",
-                            new_plan.install_path.display()
-                        ));
-                    }
-                }
-            }
+            DashboardTab::Deploy => {}
             DashboardTab::Core => {
                 let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
                 let selected = cards.get(state.selected_for_len(cards.len()));

@@ -292,13 +292,30 @@ impl AppState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DashboardPopup {
     pub title: String,
     pub subtitle: String,
     pub lines: Vec<String>,
     pub actions: Vec<String>,
     pub selected: usize,
+    pub purpose: DashboardPopupPurpose,
+    pub input: Option<DashboardInput>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum DashboardPopupPurpose {
+    #[default]
+    Action,
+    DeployInput(PlanField),
+    CoreStartMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DashboardInput {
+    pub label: String,
+    pub value: String,
+    pub placeholder: String,
 }
 
 #[derive(Clone, Debug)]

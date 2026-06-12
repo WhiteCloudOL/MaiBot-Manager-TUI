@@ -10,8 +10,9 @@ use std::{
 };
 
 use crate::model::{
-    DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardState, DashboardTab,
-    DashboardView, InstallPlan, PlanField, StatusKind, deploy_card_field,
+    DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardPopup,
+    DashboardPopupPurpose, DashboardState, DashboardTab, DashboardView, InstallPlan, PlanField,
+    StatusKind, deploy_card_field,
 };
 use crate::theme::AppTheme;
 use crate::ui::{ActionItem, StatusCard};
@@ -1148,7 +1149,7 @@ impl App {
 
     fn activate_dashboard_selection(&mut self, state: &mut DashboardState) -> Result<bool> {
         if let Some(popup) = state.popup.take() {
-            return self.activate_dashboard_popup(state, popup.selected);
+            return self.activate_dashboard_popup(state, popup);
         }
         match state.active_tab {
             DashboardTab::Overview => {
@@ -1179,32 +1180,13 @@ impl App {
                     _ => {}
                 };
             }
-            DashboardTab::Deploy => {
-                let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
-                let selected = cards.get(state.selected_for_len(cards.len()));
-                if let Some(plan) = state.deploy_plan.as_ref() {
-                    let Some(field) = selected.and_then(|card| deploy_card_field(card.id)) else {
-                        return Ok(true);
-                    };
-                    if field == PlanField::InstallPath {
-                        let mut new_plan = plan.clone();
-                        self.edit_install_path(&mut new_plan)?;
-                        state.deploy_plan = Some(new_plan.clone());
-                        state.set_status_message(format!(
-                            "目录已更新为 {}",
-                            new_plan.install_path.display()
-                        ));
-                    }
-                }
-            }
+            DashboardTab::Deploy => {}
             DashboardTab::Core => {
                 let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
                 let selected = cards.get(state.selected_for_len(cards.len()));
                 match selected.map(|card| card.id) {
                     Some("core-start") => {
-                        self.handle_menu_result(self.start_maibot_core(false))?;
-                        self.invalidate_dashboard_cache();
-                        state.set_status_message("已请求启动 MaiBot 核心");
+                        state.popup = Some(linux_core_start_popup());
                     }
                     Some("core-stop") => {
                         self.handle_menu_result(self.stop_maibot_core())?;
@@ -1292,8 +1274,9 @@ impl App {
     fn activate_dashboard_popup(
         &mut self,
         state: &mut DashboardState,
-        action_idx: usize,
+        popup: DashboardPopup,
     ) -> Result<bool> {
+        let action_idx = popup.selected;
         let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
         let selected = cards.get(state.selected_for_len(cards.len()));
         match state.active_tab {
@@ -1311,7 +1294,16 @@ impl App {
                 Some("core-start") if action_idx == 0 => {
                     self.handle_menu_result(self.start_maibot_core(false))?;
                     self.invalidate_dashboard_cache();
-                    state.set_status_message("已请求启动 MaiBot 核心");
+                    state.set_status_message("已请求后台启动 MaiBot 核心");
+                }
+                Some("core-start") if action_idx == 1 => {
+                    self.handle_menu_result(self.start_maibot_core(true))?;
+                    self.invalidate_dashboard_cache();
+                    state.set_status_message("已启动并进入 MaiBot 控制台");
+                }
+                Some("core-start") if action_idx == 2 => {
+                    self.handle_menu_result(self.manage_maibot_menu())?;
+                    self.invalidate_dashboard_cache();
                 }
                 Some("core-stop") if action_idx == 0 => {
                     self.handle_menu_result(self.stop_maibot_core())?;
@@ -1658,6 +1650,27 @@ fn deploy_fields() -> &'static [PlanField] {
         PlanField::BotProtocols,
         PlanField::DockerMirror,
     ]
+}
+
+fn linux_core_start_popup() -> DashboardPopup {
+    DashboardPopup {
+        title: "启动 MaiBot".to_string(),
+        subtitle: "选择启动方式".to_string(),
+        lines: vec![
+            "后台启动会创建 screen: maibot 并立即返回管理器。".to_string(),
+            "启动并进入终端会在 screen 中显示前台输出，适合首次启动确认 EULA。".to_string(),
+            "这里不会判断是否首次启动，请按当前需要选择。".to_string(),
+        ],
+        actions: vec![
+            "后台启动".to_string(),
+            "启动并进入终端".to_string(),
+            "更多控制".to_string(),
+            "取消".to_string(),
+        ],
+        selected: 0,
+        purpose: DashboardPopupPurpose::CoreStartMode,
+        ..DashboardPopup::default()
+    }
 }
 
 fn planner_field_detail(field: PlanField) -> &'static str {

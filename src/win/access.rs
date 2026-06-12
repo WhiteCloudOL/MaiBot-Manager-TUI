@@ -100,6 +100,7 @@ impl App {
                 lines: report.popup_lines(),
                 actions: vec!["取消".to_string()],
                 selected: 0,
+                ..DashboardPopup::default()
             },
             Err(error) => DashboardPopup {
                 title: "访问汇总".to_string(),
@@ -110,6 +111,7 @@ impl App {
                 ],
                 actions: vec!["取消".to_string()],
                 selected: 0,
+                ..DashboardPopup::default()
             },
         }
     }

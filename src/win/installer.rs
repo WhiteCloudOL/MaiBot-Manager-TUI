@@ -207,8 +207,8 @@ impl App {
             }
             PlanField::GithubProxy => {
                 let mut items = vec!["自动测速选择最佳线路".into(), "官方直连".into()];
-                items.extend(github_mirrors().iter().map(|v| (*v).to_string()));
                 items.push("自定义镜像源".into());
+                items.extend(github_mirrors().iter().map(|v| (*v).to_string()));
                 items
             }
             PlanField::PipSource => vec![
@@ -306,14 +306,16 @@ impl App {
                     plan.github_proxy.is_empty()
                 } else if choice_idx == 1 {
                     plan.github_proxy == "https://github.com"
-                } else if choice_idx >= 2 && choice_idx < 2 + github_mirrors().len() {
-                    plan.github_proxy == github_mirrors()[choice_idx - 2]
-                } else {
+                } else if choice_idx == 2 {
                     !plan.github_proxy.is_empty()
                         && plan.github_proxy != "https://github.com"
                         && !github_mirrors()
                             .iter()
                             .any(|mirror| *mirror == plan.github_proxy)
+                } else if choice_idx >= 3 && choice_idx < 3 + github_mirrors().len() {
+                    plan.github_proxy == github_mirrors()[choice_idx - 3]
+                } else {
+                    false
                 }
             }
             PlanField::PipSource => match choice_idx {
@@ -453,10 +455,7 @@ impl App {
             PlanField::GithubProxy => match choice_idx {
                 0 => plan.github_proxy.clear(),
                 1 => plan.github_proxy = "https://github.com".into(),
-                idx if idx >= 2 && idx < 2 + github_mirrors().len() => {
-                    plan.github_proxy = github_mirrors()[idx - 2].to_string();
-                }
-                _ => {
+                2 => {
                     let input: String = self.with_prompt_mode(|| {
                         Input::with_theme(&self.theme)
                             .with_prompt("输入自定义镜像源")
@@ -465,6 +464,10 @@ impl App {
                     })?;
                     plan.github_proxy = normalize_url(&input);
                 }
+                idx if idx >= 3 && idx < 3 + github_mirrors().len() => {
+                    plan.github_proxy = github_mirrors()[idx - 3].to_string();
+                }
+                _ => {}
             },
             PlanField::PipSource => match choice_idx {
                 0 => {
