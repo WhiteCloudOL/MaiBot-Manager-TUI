@@ -233,6 +233,15 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn manage_llbot_password(&self) -> Result<()> {
+        self.with_prompt_mode(|| {
+            let password: String = dialoguer::Input::with_theme(&self.theme)
+                .with_prompt("新的 LLBot WebUI 密码")
+                .interact_text()?;
+            self.set_llbot_password(&password)
+        })
+    }
+
     pub(crate) fn manage_bot_protocol_menu(&self) -> Result<()> {
         self.require_config()?;
         loop {

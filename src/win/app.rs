@@ -141,7 +141,6 @@ impl App {
                 DashboardEvent::ResetDeployPlan => {
                     let reset = self.build_recommended_defaults();
                     dashboard.deploy_plan = Some(reset);
-                    dashboard.deploy_choice_cursor = None;
                     dashboard.set_status_message("已恢复推荐默认部署配置");
                 }
                 DashboardEvent::RunDeployPlan => {
@@ -155,6 +154,9 @@ impl App {
                     dashboard.deploy_plan = Some(plan);
                     dashboard.set_status_message("安装流程已执行");
                     self.invalidate_dashboard_cache();
+                }
+                DashboardEvent::AttachTerminal { .. } => {
+                    // Not supported on this platform — ignore
                 }
                 DashboardEvent::Exit => break,
             }
@@ -194,7 +196,6 @@ impl App {
             detail_subtitle: detail_subtitle.to_string(),
             detail_lines,
             detail_choices,
-            detail_selected: 0,
             action_lines,
             cards: std::mem::take(&mut cards),
             selected,
@@ -1188,7 +1189,24 @@ impl App {
                     _ => {}
                 };
             }
-            DashboardTab::Deploy => {}
+            DashboardTab::Deploy => {
+                let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
+                let selected = cards.get(state.selected_for_len(cards.len()));
+                if let Some(plan) = state.deploy_plan.as_ref() {
+                    let Some(field) = selected.and_then(|card| deploy_card_field(card.id)) else {
+                        return Ok(true);
+                    };
+                    if field == PlanField::InstallPath {
+                        let mut new_plan = plan.clone();
+                        self.edit_install_path(&mut new_plan)?;
+                        state.deploy_plan = Some(new_plan.clone());
+                        state.set_status_message(format!(
+                            "目录已更新为 {}",
+                            new_plan.install_path.display()
+                        ));
+                    }
+                }
+            }
             DashboardTab::Core => {
                 let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
                 let selected = cards.get(state.selected_for_len(cards.len()));

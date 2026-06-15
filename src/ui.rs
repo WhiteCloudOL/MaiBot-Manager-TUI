@@ -2,7 +2,7 @@ use crate::{
     app::App,
     model::*,
     terminal::restore_terminal_state,
-    utils::{display_width, normalize_path, normalize_url, pad_left},
+    utils::{display_width, pad_left},
 };
 use anyhow::{Context, Result};
 use crossterm::{
@@ -24,12 +24,11 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, BorderType, Borders, Cell, Clear as TuiClear, List, ListItem, ListState, Padding,
-        Paragraph, Row, Table, TableState, Wrap,
+        Block, BorderType, Borders, Clear as TuiClear, List, ListItem, ListState, Padding,
+        Paragraph, Wrap,
     },
 };
 use std::{
-    fs,
     io::{self, Write},
     sync::atomic::{AtomicU16, Ordering},
     time::{Duration, Instant},
@@ -41,17 +40,21 @@ const PANEL_WIDTH: usize = 76;
 const KEY_WIDTH: usize = 14;
 const MENU_REDRAW_TICK: Duration = Duration::from_millis(100);
 
-const BG_BASE: Color = Color::Rgb(46, 52, 64);
-const TEXT_PRIMARY: Color = Color::Rgb(216, 222, 233);
-const TEXT_MUTED: Color = Color::Rgb(172, 181, 197);
-const ACCENT_PRIMARY: Color = Color::Rgb(136, 192, 208);
-const ACCENT_SECONDARY: Color = Color::Rgb(129, 161, 193);
-const STATUS_OK: Color = Color::Rgb(163, 190, 140);
-const STATUS_WARN: Color = Color::Rgb(235, 203, 139);
-const STATUS_ERROR: Color = Color::Rgb(191, 97, 106);
-const SURFACE_DIM: Color = Color::Rgb(59, 66, 82);
-const BORDER_MUTED: Color = Color::Rgb(76, 86, 106);
-const DARK_TEXT: Color = Color::Rgb(46, 52, 64);
+const BG_BASE: Color = Color::Rgb(22, 17, 12);
+const SURFACE_DIM: Color = Color::Rgb(30, 24, 16);
+const SURFACE_RAISED: Color = Color::Rgb(56, 46, 32);
+const TEXT_PRIMARY: Color = Color::Rgb(236, 220, 176);
+const TEXT_MUTED: Color = Color::Rgb(160, 136, 104);
+const TEXT_DIM: Color = Color::Rgb(96, 78, 56);
+const DARK_TEXT: Color = Color::Rgb(22, 17, 12);
+const ACCENT_PRIMARY: Color = Color::Rgb(226, 152, 28);
+const ACCENT_SECONDARY: Color = Color::Rgb(206, 88, 36);
+const ACCENT_TERTIARY: Color = Color::Rgb(180, 148, 82);
+const STATUS_OK: Color = Color::Rgb(152, 195, 62);
+const STATUS_WARN: Color = Color::Rgb(226, 192, 44);
+const STATUS_ERROR: Color = Color::Rgb(198, 58, 54);
+const BORDER_MUTED: Color = Color::Rgb(72, 56, 36);
+const BORDER_ACTIVE: Color = Color::Rgb(226, 152, 28);
 
 fn content_width() -> usize {
     let (term_width, _) = size().unwrap_or((80, 24));
@@ -571,7 +574,7 @@ fn render_dashboard(frame: &mut Frame<'_>, view: &DashboardView) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
@@ -586,24 +589,49 @@ fn render_dashboard(frame: &mut Frame<'_>, view: &DashboardView) {
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect) {
-    let block = compact_block(None, false);
-    let title = Line::from(Span::styled(
-        format!("{APP_HEADER_TITLE}  v{APP_VERSION}"),
-        Style::default()
-            .fg(ACCENT_PRIMARY)
-            .add_modifier(Modifier::BOLD),
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(BORDER_MUTED))
+        .style(Style::default().bg(SURFACE_DIM));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(inner);
+
+    let title = Line::from(vec![
+        Span::styled(
+            format!("  {APP_HEADER_TITLE}"),
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  v{APP_VERSION}"),
+            Style::default().fg(ACCENT_TERTIARY),
+        ),
+    ]);
+    let subtitle = Line::from(Span::styled(
+        APP_HEADER_SUBTITLE,
+        Style::default().fg(TEXT_DIM),
     ));
-    let paragraph = Paragraph::new(title)
-        .alignment(Alignment::Center)
-        .block(block)
-        .style(Style::default());
-    frame.render_widget(paragraph, area);
+    frame.render_widget(
+        Paragraph::new(title).alignment(Alignment::Center),
+        chunks[0],
+    );
+    frame.render_widget(
+        Paragraph::new(subtitle).alignment(Alignment::Center),
+        chunks[1],
+    );
 }
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+        .constraints([Constraint::Percentage(22), Constraint::Percentage(78)])
         .margin(1)
         .split(area);
     render_sidebar(frame, chunks[0], view);
@@ -611,22 +639,26 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
 }
 
 fn render_sidebar(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let focused = view.focus == DashboardFocus::Sidebar;
     let items = DashboardTab::SIDEBAR
         .iter()
         .map(|tab| {
-            ListItem::new(Line::from(Span::styled(
-                tab.label(),
-                Style::default().fg(TEXT_MUTED),
-            )))
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    tab.icon(),
+                    Style::default()
+                        .fg(ACCENT_SECONDARY)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(tab.label(), Style::default().fg(TEXT_MUTED)),
+            ]))
         })
         .collect::<Vec<_>>();
     let mut state = ListState::default();
     state.select(Some(view.active_tab.sidebar_index()));
     let list = List::new(items)
-        .block(ethereal_block(
-            Some("导航"),
-            view.focus == DashboardFocus::Sidebar,
-        ))
+        .block(ethereal_block(Some("导航"), focused))
         .style(Style::default().fg(TEXT_PRIMARY))
         .highlight_style(selected_style())
         .highlight_symbol("");
@@ -809,70 +841,75 @@ fn render_about_detail(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) 
 }
 
 fn render_table(frame: &mut Frame<'_>, area: Rect, view: &DashboardView, title: &str) {
-    let rows = if view.cards.is_empty() {
-        vec![Row::new(vec![
-            Cell::from(view.empty_title.clone()),
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(view.empty_detail.clone()),
+    let items = if view.cards.is_empty() {
+        vec![ListItem::new(vec![
+            Line::from(Span::styled(
+                view.empty_title.clone(),
+                Style::default().fg(TEXT_MUTED),
+            )),
+            Line::from(Span::styled(
+                view.empty_detail.clone(),
+                Style::default().fg(TEXT_DIM),
+            )),
         ])]
     } else {
         view.cards
             .iter()
             .map(|card| {
-                Row::new(vec![
-                    Cell::from(Line::from(vec![
-                        Span::styled(
-                            card.icon,
-                            Style::default()
-                                .fg(ACCENT_SECONDARY)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            status_dot(card.kind),
-                            Style::default().fg(status_color(card.kind)),
-                        ),
-                        Span::raw("  "),
-                        Span::styled(card.title.clone(), Style::default().fg(TEXT_PRIMARY)),
-                    ])),
-                    Cell::from(Line::from(Span::styled(
-                        card.badge.clone(),
-                        Style::default().fg(status_color(card.kind)),
-                    ))),
-                    Cell::from(card.subtitle.clone()),
-                    Cell::from(action_label_for_card(card)),
-                ])
+                let badge_color = status_color(card.kind);
+                let line1 = Line::from(vec![
+                    Span::styled(
+                        card.icon,
+                        Style::default()
+                            .fg(ACCENT_SECONDARY)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        status_dot(card.kind),
+                        Style::default()
+                            .fg(badge_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        card.title.clone(),
+                        Style::default()
+                            .fg(TEXT_PRIMARY)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("[{}]", card.badge),
+                        Style::default().fg(badge_color),
+                    ),
+                ]);
+                let line2 = Line::from(vec![
+                    Span::raw("     "),
+                    Span::styled(card.subtitle.clone(), Style::default().fg(TEXT_MUTED)),
+                ]);
+                ListItem::new(vec![line1, line2])
             })
             .collect::<Vec<_>>()
     };
-    let header = Row::new(vec!["服务名称", "当前状态", "版本", "快捷操作"])
-        .style(
-            Style::default()
-                .fg(ACCENT_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        )
-        .height(1);
-    let widths = [
-        Constraint::Percentage(28),
-        Constraint::Percentage(16),
-        Constraint::Percentage(32),
-        Constraint::Percentage(24),
-    ];
-    let mut state = TableState::default();
+    let mut state = ListState::default();
     if !view.cards.is_empty() {
         state.select(Some(view.selected.min(view.cards.len() - 1)));
     }
-    let table = Table::new(rows, widths)
-        .header(header)
+    let list = List::new(items)
         .block(ethereal_block(
             Some(title),
             view.focus == DashboardFocus::Content,
         ))
-        .row_highlight_style(selected_style())
-        .highlight_symbol("")
-        .style(Style::default().fg(TEXT_PRIMARY));
-    frame.render_stateful_widget(table, area, &mut state);
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .highlight_style(
+            Style::default()
+                .fg(DARK_TEXT)
+                .bg(SURFACE_RAISED)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("");
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 fn render_deployment(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
@@ -1001,7 +1038,11 @@ fn render_current_step_options(frame: &mut Frame<'_>, area: Rect, view: &Dashboa
             .collect::<Vec<_>>()
     };
     let mut state = ListState::default();
-    let selected_choice = view.detail_selected;
+    let selected_choice = view
+        .detail_choices
+        .iter()
+        .position(|choice| choice.active)
+        .unwrap_or(0);
     if !items.is_empty() {
         state.select(Some(selected_choice.min(items.len() - 1)));
     }
@@ -1017,34 +1058,11 @@ fn render_current_step_options(frame: &mut Frame<'_>, area: Rect, view: &Dashboa
 }
 
 fn render_deploy_summary(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
-    let summary = deploy_summary_lines(view, area.height);
-    let paragraph = Paragraph::new(Text::from(summary))
-        .block(ethereal_block(Some("配置总览"), false))
-        .style(Style::default().fg(TEXT_PRIMARY))
-        .wrap(Wrap { trim: true });
-    frame.render_widget(paragraph, area);
-}
-
-fn deploy_summary_lines(view: &DashboardView, height: u16) -> Vec<Line<'static>> {
-    let deploy_cards = view
+    let summary = view
         .cards
         .iter()
         .filter(|card| deploy_card_field(card.id).is_some())
-        .collect::<Vec<_>>();
-    let visible_rows = usize::from(height.saturating_sub(2)).max(1);
-    let current_index = deploy_cards
-        .iter()
-        .position(|card| {
-            view.cards
-                .get(view.selected)
-                .is_some_and(|selected| selected.id == card.id)
-        })
-        .unwrap_or_else(|| view.selected.min(deploy_cards.len().saturating_sub(1)));
-    let start = scroll_start(deploy_cards.len(), visible_rows, current_index);
-    deploy_cards
-        .into_iter()
-        .skip(start)
-        .take(visible_rows)
+        .take(6)
         .map(|card| {
             Line::from(vec![
                 Span::styled(card.title.clone(), muted_style()),
@@ -1052,7 +1070,12 @@ fn deploy_summary_lines(view: &DashboardView, height: u16) -> Vec<Line<'static>>
                 Span::styled(card.subtitle.clone(), Style::default().fg(TEXT_PRIMARY)),
             ])
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let paragraph = Paragraph::new(Text::from(summary))
+        .block(ethereal_block(Some("配置总览"), false))
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
 }
 
 fn render_deploy_description(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
@@ -1069,32 +1092,30 @@ fn render_deploy_description(frame: &mut Frame<'_>, area: Rect, view: &Dashboard
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let width = usize::from(area.width);
+
+    // Show status message override prominently if set
+    if let Some(status_msg) = &view.popup.as_ref().and(None::<&str>) {
+        let _ = status_msg;
+    }
+
     let prompt = match view.mode {
         AppMode::Navigation => {
             "[↑/↓] 导航   [Tab] 面板   [Enter] 确认   [Esc] 返回   [Ctrl+Q] 退出"
         }
         AppMode::ContentFocused => {
             if view.active_tab == DashboardTab::Deploy {
-                "[←/→] 配置   [↑/↓] 候选   [Enter] 确认/输入   [F5] 安装/更新   [Ctrl+R] 默认   [Ctrl+1] 导航   [Ctrl+Q] 退出"
+                "[←/→] 配置   [↑/↓] 选项   [Enter] 编辑   [F5] 安装/更新   [Ctrl+R] 默认   [Ctrl+1] 导航   [Ctrl+Q] 退出"
             } else {
                 "[↑/↓] 选择   [Tab] 面板   [Enter] 打开   [Esc] 返回   [Ctrl+1] 导航   [Ctrl+Q] 退出"
             }
         }
         AppMode::PopupActive => {
-            if view
-                .popup
-                .as_ref()
-                .is_some_and(|popup| popup.input.is_some())
-            {
-                "[输入] 编辑   [Enter] 确认   [Esc] 取消   [Ctrl+U] 清空   [Ctrl+Q] 退出"
-            } else {
-                "[←/→] 操作   [Enter] 执行   [Esc] 关闭   [Ctrl+1] 导航   [Ctrl+Q] 退出"
-            }
+            "[←/→] 操作   [Enter] 执行   [Esc] 关闭   [Ctrl+1] 导航   [Ctrl+Q] 退出"
         }
     };
     let branch = "分支: main";
     let mut text = prompt.to_string();
-    let width = usize::from(area.width);
     let branch_width = display_width(branch);
     let prompt_width = display_width(prompt);
     if width > branch_width + 2 {
@@ -1105,7 +1126,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
         .alignment(Alignment::Center)
         .style(
             Style::default()
-                .fg(TEXT_PRIMARY)
+                .fg(ACCENT_TERTIARY)
                 .bg(SURFACE_DIM)
                 .add_modifier(Modifier::BOLD),
         );
@@ -1115,7 +1136,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
 fn render_popup(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
     frame.render_widget(TuiClear, area);
     frame.render_widget(
-        Block::default().style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM)),
+        Block::default().style(Style::default().fg(TEXT_PRIMARY).bg(BG_BASE)),
         area,
     );
     let block = modal_block(Some(popup.title.as_str()));
@@ -1140,35 +1161,6 @@ fn render_popup(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
     for line in &popup.lines {
         lines.push(popup_body_line(line));
     }
-    if let Some(input) = &popup.input {
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.push(Line::from(Span::styled(
-            input.label.clone(),
-            Style::default()
-                .fg(ACCENT_SECONDARY)
-                .bg(SURFACE_DIM)
-                .add_modifier(Modifier::BOLD),
-        )));
-        let value = if input.value.is_empty() {
-            input.placeholder.as_str()
-        } else {
-            input.value.as_str()
-        };
-        let input_style = if input.value.is_empty() {
-            muted_style().bg(SURFACE_DIM)
-        } else {
-            Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM)
-        };
-        lines.push(Line::from(Span::styled(
-            format!(
-                " {} ",
-                truncate_display(value, usize::from(chunks[0].width.saturating_sub(4)))
-            ),
-            input_style,
-        )));
-    }
     let body = Paragraph::new(Text::from(lines))
         .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
         .wrap(Wrap { trim: true });
@@ -1184,22 +1176,34 @@ fn render_popup_actions(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopu
         return;
     }
     let chunks = popup_action_areas(area, &popup.actions);
+    let last_idx = popup.actions.len().saturating_sub(1);
     for (idx, action) in popup.actions.iter().enumerate() {
         let active = idx == popup.selected;
-        let paragraph = Paragraph::new(Line::from(Span::styled(
-            action.clone(),
-            if active {
-                Style::default()
-                    .fg(DARK_TEXT)
-                    .bg(ACCENT_SECONDARY)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                muted_style()
-            },
-        )))
-        .alignment(Alignment::Center)
-        .style(Style::default().bg(SURFACE_DIM))
-        .block(popup_action_block(active));
+        let is_destructive = action.contains("删除")
+            || action.contains("移除")
+            || action.contains("卸载")
+            || action.contains("停止");
+        let is_cancel = action == "取消" || idx == last_idx;
+        let text_style = if active {
+            Style::default()
+                .fg(DARK_TEXT)
+                .bg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD)
+        } else if is_destructive {
+            Style::default().fg(STATUS_ERROR)
+        } else if is_cancel {
+            Style::default().fg(TEXT_DIM)
+        } else if idx == 0 {
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            muted_style()
+        };
+        let paragraph = Paragraph::new(Line::from(Span::styled(action.clone(), text_style)))
+            .alignment(Alignment::Center)
+            .style(Style::default().bg(SURFACE_DIM))
+            .block(popup_action_block(active));
         if let Some(area) = chunks.get(idx) {
             frame.render_widget(paragraph, *area);
         }
@@ -1218,7 +1222,7 @@ fn modal_block(title: Option<&str>) -> Block<'_> {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT_PRIMARY))
+        .border_style(Style::default().fg(BORDER_ACTIVE))
         .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
         .padding(Padding::symmetric(2, 1));
     if let Some(title) = title {
@@ -1237,7 +1241,7 @@ fn popup_action_block(active: bool) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if active { ACCENT_PRIMARY } else { BORDER_MUTED }))
+        .border_style(Style::default().fg(if active { BORDER_ACTIVE } else { BORDER_MUTED }))
         .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
 }
 
@@ -1288,7 +1292,7 @@ fn popup_line_looks_like_heading(line: &str) -> bool {
 }
 
 fn popup_area(popup: &DashboardPopup, area: Rect) -> Rect {
-    let mut longest = popup
+    let longest = popup
         .lines
         .iter()
         .chain(std::iter::once(&popup.title))
@@ -1296,12 +1300,6 @@ fn popup_area(popup: &DashboardPopup, area: Rect) -> Rect {
         .map(|line| display_width(line))
         .max()
         .unwrap_or(36);
-    if let Some(input) = &popup.input {
-        longest = longest
-            .max(display_width(&input.label))
-            .max(display_width(&input.value))
-            .max(display_width(&input.placeholder));
-    }
     let action_width = popup
         .actions
         .iter()
@@ -1316,17 +1314,7 @@ fn popup_area(popup: &DashboardPopup, area: Rect) -> Rect {
         .lines
         .iter()
         .map(|line| wrapped_line_count(line, body_width))
-        .sum::<usize>()
-        + popup.input.as_ref().map_or(0, |input| {
-            2 + wrapped_line_count(
-                if input.value.is_empty() {
-                    &input.placeholder
-                } else {
-                    &input.value
-                },
-                body_width,
-            )
-        });
+        .sum::<usize>();
     let action_height = if popup.actions.is_empty() {
         0_usize
     } else {
@@ -1383,7 +1371,7 @@ fn wrapped_line_count(line: &str, width: usize) -> usize {
 fn selected_style() -> Style {
     Style::default()
         .fg(DARK_TEXT)
-        .bg(ACCENT_SECONDARY)
+        .bg(ACCENT_PRIMARY)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -1437,7 +1425,7 @@ fn deploy_step_title(fallback: &str) -> &str {
 }
 
 fn selected_deploy_description(view: &DashboardView) -> Option<String> {
-    if let Some(choice) = view.detail_choices.get(view.detail_selected) {
+    if let Some(choice) = view.detail_choices.iter().find(|choice| choice.active) {
         return Some(choice.detail.clone());
     }
     view.cards
@@ -1457,55 +1445,55 @@ fn direct_info_popup_card(view: &DashboardView) -> bool {
     }
 }
 
-fn action_label_for_card(card: &DashboardCard) -> String {
-    match card.id {
-        "core-start" => "启动".to_string(),
-        "core-stop" => "停止".to_string(),
-        "core-console" => "控制台".to_string(),
-        "core-logs" => "日志".to_string(),
-        "napcat" | "llbot" => "控制".to_string(),
-        "napcat-note" | "llbot-note" => "说明".to_string(),
-        "plugin-item" => "维护".to_string(),
-        "plugin-center" => "管理".to_string(),
-        "plugins-empty" | "workspace" => "部署".to_string(),
-        _ => "打开".to_string(),
-    }
-}
-
 fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
     let card = view.cards.get(view.selected)?;
     let mut actions = match view.active_tab {
-        DashboardTab::Core => {
-            if card.id == "core-start" {
-                vec![
-                    "后台启动".to_string(),
-                    "启动并进入终端".to_string(),
-                    "更多控制".to_string(),
-                    "取消".to_string(),
-                ]
-            } else {
-                let primary = match card.id {
-                    "core-stop" => "停止",
-                    "core-console" => "控制台",
-                    "core-logs" => "日志",
-                    _ => "执行",
-                };
-                vec![
-                    primary.to_string(),
-                    "更多控制".to_string(),
-                    "取消".to_string(),
-                ]
-            }
-        }
+        DashboardTab::Core => match card.id {
+            "core-start" => vec![
+                "后台启动".to_string(),
+                "启动并进入终端".to_string(),
+                "取消".to_string(),
+            ],
+            "core-stop" => vec![
+                "确认停止 MaiBot".to_string(),
+                "取消".to_string(),
+            ],
+            "core-console" => vec![
+                "进入 screen 控制台".to_string(),
+                "取消".to_string(),
+            ],
+            "core-logs" => vec![
+                "查看最近 100 行".to_string(),
+                "实时跟随日志".to_string(),
+                "取消".to_string(),
+            ],
+            _ => vec!["执行".to_string(), "取消".to_string()],
+        },
         DashboardTab::Protocol => {
             if card.id.ends_with("-note") {
                 vec!["查看说明".to_string(), "取消".to_string()]
+            } else if card.id == "napcat" {
+                vec![
+                    "启动".to_string(),
+                    "停止".to_string(),
+                    "重启".to_string(),
+                    "查看日志".to_string(),
+                    "重建容器".to_string(),
+                    "取消".to_string(),
+                ]
+            } else if card.id == "llbot" {
+                vec![
+                    "启动".to_string(),
+                    "停止".to_string(),
+                    "重启".to_string(),
+                    "进入控制台".to_string(),
+                    "修改密码".to_string(),
+                    "取消".to_string(),
+                ]
             } else {
                 vec![
                     "启动".to_string(),
                     "停止".to_string(),
-                    "日志".to_string(),
-                    "更多控制".to_string(),
                     "取消".to_string(),
                 ]
             }
@@ -1525,6 +1513,8 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
         DashboardTab::Access => {
             if card.id.ends_with("-note") {
                 vec!["查看说明".to_string(), "取消".to_string()]
+            } else if card.id == "access-init" {
+                vec!["确认执行".to_string(), "取消".to_string()]
             } else {
                 vec!["打开".to_string(), "取消".to_string()]
             }
@@ -1535,19 +1525,12 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
     ensure_popup_actions(&mut actions);
     let mut lines = vec![format!("状态: {}", card.badge), card.detail.clone()];
     lines.extend(view.detail_lines.iter().take(8).cloned());
-    let purpose = if view.active_tab == DashboardTab::Core && card.id == "core-start" {
-        DashboardPopupPurpose::CoreStartMode
-    } else {
-        DashboardPopupPurpose::Action
-    };
     Some(DashboardPopup {
         title: card.title.clone(),
         subtitle: card.subtitle.clone(),
         lines,
         actions,
         selected: 0,
-        purpose,
-        ..DashboardPopup::default()
     })
 }
 
@@ -1572,7 +1555,6 @@ fn inline_info_loading_popup(view: &DashboardView) -> DashboardPopup {
         lines: vec!["请稍候。".to_string()],
         actions: Vec::new(),
         selected: 0,
-        ..DashboardPopup::default()
     }
 }
 
@@ -1622,7 +1604,7 @@ fn is_key_input(kind: KeyEventKind) -> bool {
     matches!(kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum DashboardInputAction {
     Idle,
     Redraw,
@@ -1639,9 +1621,6 @@ where
     sync_app_mode(state);
     let mut view = render(state)?;
     view.popup = state.popup.clone();
-    if view.active_tab == DashboardTab::Deploy {
-        sync_cached_dashboard_view(&mut view, state);
-    }
     Ok(view)
 }
 
@@ -1715,17 +1694,14 @@ fn sync_deploy_detail_choices(view: &mut DashboardView, state: &DashboardState) 
     view.action_lines.clear();
     let Some(plan) = state.deploy_plan.as_ref() else {
         view.detail_choices.clear();
-        view.detail_selected = 0;
         return;
     };
     let Some(card) = view.cards.get(view.selected) else {
         view.detail_choices.clear();
-        view.detail_selected = 0;
         return;
     };
     let Some(field) = deploy_card_field(card.id) else {
         view.detail_choices.clear();
-        view.detail_selected = 0;
         return;
     };
     view.detail_choices = planner_choices_for_plan(plan, field)
@@ -1737,8 +1713,6 @@ fn sync_deploy_detail_choices(view: &mut DashboardView, state: &DashboardState) 
             label,
         })
         .collect();
-    view.detail_selected =
-        deploy_choice_cursor_index(state, plan, field, view.detail_choices.len());
 }
 
 fn cached_planner_field_value(plan: &InstallPlan, field: PlanField) -> String {
@@ -1802,8 +1776,13 @@ fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> Vec<String>
         PlanField::GithubProxy => {
             let mut choices = vec!["自动测速选择".to_string(), "官方直连".to_string()];
             choices.extend(github_mirrors().iter().map(|mirror| (*mirror).to_string()));
-            if !custom_github_proxy_value(plan).is_empty() {
-                choices.push(format!("当前自定义: {}", plan.github_proxy));
+            if !plan.github_proxy.is_empty()
+                && plan.github_proxy != "https://github.com"
+                && !github_mirrors()
+                    .iter()
+                    .any(|mirror| *mirror == plan.github_proxy)
+            {
+                choices.push(format!("自定义: {}", plan.github_proxy));
             }
             choices.push("输入自定义镜像".to_string());
             choices
@@ -1876,16 +1855,11 @@ fn planner_choice_active_for_plan(plan: &InstallPlan, field: PlanField, idx: usi
             (idx == 0 && plan.maibot_branch != "dev") || (idx == 1 && plan.maibot_branch == "dev")
         }
         PlanField::GithubProxy => {
-            let label = planner_choices_for_plan(plan, field)
-                .get(idx)
-                .cloned()
-                .unwrap_or_default();
             (idx == 0 && plan.github_proxy.is_empty())
                 || (idx == 1 && plan.github_proxy == "https://github.com")
-                || label.starts_with("当前自定义: ")
                 || github_mirrors()
-                    .iter()
-                    .any(|mirror| *mirror == plan.github_proxy && *mirror == label)
+                    .get(idx.saturating_sub(2))
+                    .is_some_and(|mirror| *mirror == plan.github_proxy)
         }
         PlanField::PipSource => {
             matches!(
@@ -1897,9 +1871,7 @@ fn planner_choice_active_for_plan(plan: &InstallPlan, field: PlanField, idx: usi
                     | ("清华大学", _, 3)
                     | ("中国科学技术大学", _, 4)
                     | ("官方源", _, 5)
-            ) || planner_choices_for_plan(plan, field)
-                .get(idx)
-                .is_some_and(|label| label.starts_with("当前: "))
+            )
         }
         PlanField::BotProtocols => {
             (idx == 0 && plan.bot_protocols.as_slice() == [BotProtocol::NapCat])
@@ -1916,30 +1888,6 @@ fn planner_choice_active_for_plan(plan: &InstallPlan, field: PlanField, idx: usi
             )
         }
     }
-}
-
-fn active_deploy_choice_index(plan: &InstallPlan, field: PlanField) -> usize {
-    planner_choices_for_plan(plan, field)
-        .iter()
-        .enumerate()
-        .find_map(|(idx, _)| planner_choice_active_for_plan(plan, field, idx).then_some(idx))
-        .unwrap_or(0)
-}
-
-fn deploy_choice_cursor_index(
-    state: &DashboardState,
-    plan: &InstallPlan,
-    field: PlanField,
-    len: usize,
-) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    state
-        .deploy_choice_cursor
-        .filter(|cursor| cursor.field == field)
-        .map(|cursor| cursor.index.min(len - 1))
-        .unwrap_or_else(|| active_deploy_choice_index(plan, field).min(len - 1))
 }
 
 fn deploy_choice_detail_for_cache(field: PlanField, idx: usize, label: &str) -> String {
@@ -1980,10 +1928,8 @@ fn deploy_choice_detail_for_cache(field: PlanField, idx: usize, label: &str) -> 
                 "执行时测速后自动选最快线路。".to_string()
             } else if idx == 1 {
                 "直接访问官方 GitHub。".to_string()
-            } else if label.starts_with("当前自定义: ") {
-                "当前正在使用的自定义镜像地址。".to_string()
-            } else if label == "输入自定义镜像" {
-                "打开输入框填写自定义镜像地址。".to_string()
+            } else if label.contains("自定义") {
+                "选择后会提示输入自定义镜像地址。".to_string()
             } else {
                 "切换到预设 GitHub 镜像源。".to_string()
             }
@@ -1991,10 +1937,8 @@ fn deploy_choice_detail_for_cache(field: PlanField, idx: usize, label: &str) -> 
         PlanField::PipSource => {
             if idx == 0 {
                 "保持系统默认 Python 包源。".to_string()
-            } else if label.starts_with("当前: ") {
-                "当前正在使用的自定义 PyPI 地址。".to_string()
-            } else if label == "输入自定义 PyPI" {
-                "打开输入框填写自定义 PyPI 地址。".to_string()
+            } else if label.contains("自定义") {
+                "选择后会提示输入自定义 PyPI 地址。".to_string()
             } else {
                 "为 pip 和 uv 设置统一镜像源。".to_string()
             }
@@ -2030,9 +1974,6 @@ fn handle_dashboard_key(
     }
 
     if let Some(popup) = state.popup.as_mut() {
-        if popup.input.is_some() {
-            return handle_dashboard_input_popup_key(state, code, modifiers);
-        }
         match code {
             KeyCode::Esc => {
                 state.popup = None;
@@ -2087,7 +2028,7 @@ fn handle_dashboard_key(
                 }
                 DashboardFocus::Content => {
                     if view.active_tab == DashboardTab::Deploy {
-                        move_deploy_choice_cursor(state, view, -1)
+                        adjust_deploy_choice(state, view, -1)
                     } else {
                         state.move_selection(view.cards.len(), -1);
                         DashboardInputAction::Redraw
@@ -2101,7 +2042,7 @@ fn handle_dashboard_key(
                 }
                 DashboardFocus::Content => {
                     if view.active_tab == DashboardTab::Deploy {
-                        move_deploy_choice_cursor(state, view, 1)
+                        adjust_deploy_choice(state, view, 1)
                     } else {
                         state.move_selection(view.cards.len(), 1);
                         DashboardInputAction::Redraw
@@ -2143,7 +2084,15 @@ fn handle_dashboard_key(
                 }
                 DashboardFocus::Content => {
                     if view.active_tab == DashboardTab::Deploy {
-                        confirm_deploy_choice(state, view)
+                        if let Some(selected) = view.cards.get(view.selected) {
+                            if deploy_card_field(selected.id) == Some(PlanField::InstallPath) {
+                                DashboardInputAction::Event(DashboardEvent::Activate)
+                            } else {
+                                DashboardInputAction::Idle
+                            }
+                        } else {
+                            DashboardInputAction::Idle
+                        }
                     } else {
                         if view.active_tab == DashboardTab::About {
                             DashboardInputAction::Idle
@@ -2171,51 +2120,7 @@ fn handle_dashboard_key(
     }
 }
 
-fn handle_dashboard_input_popup_key(
-    state: &mut DashboardState,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-) -> DashboardInputAction {
-    let Some(popup) = state.popup.as_mut() else {
-        return DashboardInputAction::Idle;
-    };
-    let Some(input) = popup.input.as_mut() else {
-        return DashboardInputAction::Idle;
-    };
-    match code {
-        KeyCode::Esc => {
-            state.popup = None;
-            DashboardInputAction::Redraw
-        }
-        KeyCode::Enter => {
-            let purpose = popup.purpose.clone();
-            let value = input.value.trim().to_string();
-            state.popup = None;
-            match purpose {
-                DashboardPopupPurpose::DeployInput(field) => {
-                    apply_deploy_input_value(state, field, &value);
-                    DashboardInputAction::Redraw
-                }
-                _ => DashboardInputAction::Redraw,
-            }
-        }
-        KeyCode::Backspace => {
-            input.value.pop();
-            DashboardInputAction::Redraw
-        }
-        KeyCode::Char('u') if modifiers.contains(KeyModifiers::CONTROL) => {
-            input.value.clear();
-            DashboardInputAction::Redraw
-        }
-        KeyCode::Char(ch) if !modifiers.contains(KeyModifiers::CONTROL) => {
-            input.value.push(ch);
-            DashboardInputAction::Redraw
-        }
-        _ => DashboardInputAction::Idle,
-    }
-}
-
-fn move_deploy_choice_cursor(
+fn adjust_deploy_choice(
     state: &mut DashboardState,
     view: &DashboardView,
     delta: isize,
@@ -2229,170 +2134,23 @@ fn move_deploy_choice_cursor(
     {
         return DashboardInputAction::Idle;
     }
+    let Some(plan) = state.deploy_plan.as_mut() else {
+        return DashboardInputAction::Idle;
+    };
     let Some(card) = view.cards.get(view.selected) else {
         return DashboardInputAction::Idle;
     };
     let Some(field) = deploy_card_field(card.id) else {
         return DashboardInputAction::Idle;
     };
-    let next = wrap_index(view.detail_selected, view.detail_choices.len(), delta);
-    state.deploy_choice_cursor = Some(DeployChoiceCursor { field, index: next });
+    let current_idx = view
+        .detail_choices
+        .iter()
+        .position(|choice| choice.active)
+        .unwrap_or(0);
+    let next = wrap_index(current_idx, view.detail_choices.len(), delta);
+    apply_cached_planner_choice(plan, field, next);
     DashboardInputAction::Redraw
-}
-
-fn confirm_deploy_choice(state: &mut DashboardState, view: &DashboardView) -> DashboardInputAction {
-    let Some(card) = view.cards.get(view.selected) else {
-        return DashboardInputAction::Idle;
-    };
-    let Some(field) = deploy_card_field(card.id) else {
-        return DashboardInputAction::Idle;
-    };
-    let idx = view.detail_selected;
-    if field == PlanField::InstallPath || deploy_choice_requests_input_from_view(view, idx) {
-        state.popup = deploy_input_popup(state.deploy_plan.as_ref(), field);
-        return DashboardInputAction::Redraw;
-    }
-    let Some(plan) = state.deploy_plan.as_mut() else {
-        return DashboardInputAction::Idle;
-    };
-    apply_cached_planner_choice(plan, field, idx);
-    state.deploy_choice_cursor = Some(DeployChoiceCursor { field, index: idx });
-    DashboardInputAction::Redraw
-}
-
-fn deploy_choice_requests_input(plan: &InstallPlan, field: PlanField, idx: usize) -> bool {
-    match field {
-        PlanField::GithubProxy => planner_choices_for_plan(plan, field)
-            .get(idx)
-            .is_some_and(|choice| choice == "输入自定义镜像"),
-        PlanField::PipSource => planner_choices_for_plan(plan, field)
-            .get(idx)
-            .is_some_and(|choice| choice == "输入自定义 PyPI"),
-        _ => false,
-    }
-}
-
-fn deploy_choice_requests_input_from_view(view: &DashboardView, idx: usize) -> bool {
-    view.detail_choices
-        .get(idx)
-        .is_some_and(|choice| choice.label == "输入自定义镜像" || choice.label == "输入自定义 PyPI")
-}
-
-fn deploy_input_popup(plan: Option<&InstallPlan>, field: PlanField) -> Option<DashboardPopup> {
-    let plan = plan?;
-    let (title, subtitle, label, value, placeholder, lines) = match field {
-        PlanField::InstallPath => (
-            "安装目录".to_string(),
-            "输入 MaiBot 工作区路径".to_string(),
-            "目录".to_string(),
-            plan.install_path.display().to_string(),
-            "~/maimai".to_string(),
-            vec!["支持绝对路径、相对 HOME 的路径，以及 ~ 前缀。".to_string()],
-        ),
-        PlanField::GithubProxy => (
-            "自定义 GitHub 镜像".to_string(),
-            "输入镜像前缀地址".to_string(),
-            "镜像地址".to_string(),
-            custom_github_proxy_value(plan),
-            "https://gh-proxy.example".to_string(),
-            vec![
-                "用于拼接 GitHub 仓库和 Release 资源地址。".to_string(),
-                "留空会保持当前 GitHub 线路。".to_string(),
-            ],
-        ),
-        PlanField::PipSource => (
-            "自定义 PyPI 源".to_string(),
-            "输入 pip / uv 镜像地址".to_string(),
-            "PyPI 地址".to_string(),
-            custom_pip_source_value(plan),
-            "https://pypi.example/simple".to_string(),
-            vec![
-                "仅写入当前虚拟环境配置，不污染全局 pip 配置。".to_string(),
-                "留空会保持当前 PyPI 配置。".to_string(),
-            ],
-        ),
-        _ => return None,
-    };
-    Some(DashboardPopup {
-        title,
-        subtitle,
-        lines,
-        actions: Vec::new(),
-        selected: 0,
-        purpose: DashboardPopupPurpose::DeployInput(field),
-        input: Some(DashboardInput {
-            label,
-            value,
-            placeholder,
-        }),
-    })
-}
-
-fn custom_github_proxy_value(plan: &InstallPlan) -> String {
-    if plan.github_proxy.is_empty()
-        || plan.github_proxy == "https://github.com"
-        || github_mirrors()
-            .iter()
-            .any(|mirror| *mirror == plan.github_proxy)
-    {
-        String::new()
-    } else {
-        plan.github_proxy.clone()
-    }
-}
-
-fn custom_pip_source_value(plan: &InstallPlan) -> String {
-    if plan.pip_index.is_empty()
-        || ["阿里云", "腾讯云", "清华大学", "中国科学技术大学", "官方源"]
-            .contains(&plan.pip_display.as_str())
-    {
-        String::new()
-    } else {
-        plan.pip_index.clone()
-    }
-}
-
-fn apply_deploy_input_value(state: &mut DashboardState, field: PlanField, value: &str) {
-    let Some(plan) = state.deploy_plan.as_mut() else {
-        return;
-    };
-    if value.trim().is_empty() {
-        state.set_status_message("输入为空，已保留当前配置");
-        return;
-    }
-    let status_message = match field {
-        PlanField::InstallPath => match normalize_path(value).and_then(|path| {
-            fs::create_dir_all(&path)?;
-            Ok(path)
-        }) {
-            Ok(path) => {
-                plan.install_path = path;
-                Some(format!("目录已更新为 {}", plan.install_path.display()))
-            }
-            Err(error) => Some(format!("目录无效: {error}")),
-        },
-        PlanField::GithubProxy => {
-            plan.github_proxy = normalize_url(value.trim());
-            Some(format!("GitHub 镜像已更新为 {}", plan.github_proxy))
-        }
-        PlanField::PipSource => {
-            let url = normalize_url(value.trim());
-            let host = host_from_url(&url);
-            plan.pip_display = url.clone();
-            plan.pip_index = url.clone();
-            plan.pip_host = host;
-            plan.uv_index = url;
-            Some(format!("PyPI 源已更新为 {}", plan.pip_display))
-        }
-        _ => None,
-    };
-    state.deploy_choice_cursor = state.deploy_plan.as_ref().map(|plan| DeployChoiceCursor {
-        field,
-        index: active_deploy_choice_index(plan, field),
-    });
-    if let Some(message) = status_message {
-        state.set_status_message(message);
-    }
 }
 
 fn apply_cached_planner_choice(plan: &mut InstallPlan, field: PlanField, idx: usize) {
@@ -2428,33 +2186,46 @@ fn apply_cached_planner_choice(plan: &mut InstallPlan, field: PlanField, idx: us
             plan.maibot_branch = if idx == 0 { "main" } else { "dev" }.to_string();
         }
         PlanField::GithubProxy => {
-            let choices = planner_choices_for_plan(plan, field);
-            match choices.get(idx).map(String::as_str) {
-                Some("自动测速选择") => plan.github_proxy.clear(),
-                Some("官方直连") => plan.github_proxy = "https://github.com".to_string(),
-                Some(choice) if github_mirrors().contains(&choice) => {
-                    plan.github_proxy = choice.to_string();
-                }
-                _ => {}
+            if idx == 0 {
+                plan.github_proxy.clear();
+            } else if idx == 1 {
+                plan.github_proxy = "https://github.com".to_string();
+            } else if let Some(mirror) = github_mirrors().get(idx.saturating_sub(2)) {
+                plan.github_proxy = (*mirror).to_string();
             }
         }
         PlanField::PipSource => match idx {
-            0 => set_cached_pip_default(plan),
-            1 => set_cached_pip_source(plan, "阿里云", "https://mirrors.aliyun.com/pypi/simple/"),
+            0 => {
+                plan.pip_display = "系统默认".to_string();
+                plan.pip_index.clear();
+                plan.pip_host.clear();
+                plan.uv_index.clear();
+            }
+            1 => set_cached_pip_source(
+                plan,
+                "阿里云",
+                "https://mirrors.aliyun.com/pypi/simple/",
+                "mirrors.aliyun.com",
+            ),
             2 => set_cached_pip_source(
                 plan,
                 "腾讯云",
                 "http://mirrors.cloud.tencent.com/pypi/simple",
+                "mirrors.cloud.tencent.com",
             ),
-            3 => {
-                set_cached_pip_source(plan, "清华大学", "https://pypi.tuna.tsinghua.edu.cn/simple")
-            }
+            3 => set_cached_pip_source(
+                plan,
+                "清华大学",
+                "https://pypi.tuna.tsinghua.edu.cn/simple",
+                "pypi.tuna.tsinghua.edu.cn",
+            ),
             4 => set_cached_pip_source(
                 plan,
                 "中国科学技术大学",
                 "https://pypi.mirrors.ustc.edu.cn/simple/",
+                "pypi.mirrors.ustc.edu.cn",
             ),
-            5 => set_cached_pip_source(plan, "官方源", "https://pypi.org/simple"),
+            5 => set_cached_pip_source(plan, "官方源", "https://pypi.org/simple", "pypi.org"),
             _ => {}
         },
         PlanField::BotProtocols => {
@@ -2482,22 +2253,11 @@ fn apply_cached_planner_choice(plan: &mut InstallPlan, field: PlanField, idx: us
     }
 }
 
-fn set_cached_pip_default(plan: &mut InstallPlan) {
-    plan.pip_display = "系统默认".to_string();
-    plan.pip_index.clear();
-    plan.pip_host.clear();
-    plan.uv_index.clear();
-}
-
-fn set_cached_pip_source(plan: &mut InstallPlan, display: &str, index: &str) {
+fn set_cached_pip_source(plan: &mut InstallPlan, display: &str, index: &str, host: &str) {
     plan.pip_display = display.to_string();
     plan.pip_index = index.to_string();
-    plan.pip_host = host_from_url(index);
+    plan.pip_host = host.to_string();
     plan.uv_index = index.to_string();
-}
-
-fn host_from_url(url: &str) -> String {
-    url.split('/').nth(2).unwrap_or_default().to_string()
 }
 
 fn record_printed_line() {
@@ -2602,12 +2362,12 @@ fn draw_action_menu(
 
     lines.push(format!(
         "  {} {}",
-        style("▌").green().bright().bold(),
-        style(prompt).cyan().bright().bold()
+        style("▌").yellow().bright().bold(),
+        style(prompt).yellow().bright().bold()
     ));
     lines.push(format!(
         "  {}",
-        style("─".repeat(content_width)).blue().bright()
+        style("─".repeat(content_width)).color256(136).bright()
     ));
 
     if has_upper_ellipsis {
@@ -2643,7 +2403,7 @@ fn draw_action_menu(
         lines.push(if active {
             format!("  {}", style(row).black().on_yellow().bright().bold())
         } else {
-            format!("  {}", style(row).cyan().bright())
+            format!("  {}", style(row).color256(179).bright())
         });
     }
     if has_lower_ellipsis {
@@ -2663,7 +2423,7 @@ fn draw_action_menu(
         lines.push(format!(
             "  {}",
             style(truncate_display(&footer, content_width))
-                .blue()
+                .yellow()
                 .bright()
                 .bold()
         ));
@@ -2829,7 +2589,6 @@ mod tests {
             detail_subtitle: cards[selected].subtitle.clone(),
             detail_lines: vec!["状态: 正常".to_string()],
             detail_choices: Vec::new(),
-            detail_selected: 0,
             action_lines: Vec::new(),
             cards,
             selected,
@@ -2850,8 +2609,8 @@ mod tests {
 
     #[test]
     fn compact_three_line_blocks_keep_visible_text() {
-        let header = render_buffer_text(80, 3, |frame| {
-            render_header(frame, Rect::new(0, 0, 80, 3));
+        let header = render_buffer_text(80, 4, |frame| {
+            render_header(frame, Rect::new(0, 0, 80, 4));
         });
         assert!(header.contains(APP_HEADER_TITLE));
         assert!(header.contains(APP_VERSION));
@@ -2861,12 +2620,11 @@ mod tests {
             subtitle: "核心服务进程状态".to_string(),
             lines: vec!["状态: 可启动".to_string()],
             actions: vec![
-                "启动".to_string(),
-                "更多控制".to_string(),
+                "后台启动".to_string(),
+                "启动并进入终端".to_string(),
                 "取消".to_string(),
             ],
             selected: 0,
-            ..DashboardPopup::default()
         };
         let actions = render_buffer_text(60, 3, |frame| {
             render_popup_actions(frame, Rect::new(0, 0, 60, 3), &popup);
@@ -2886,7 +2644,6 @@ mod tests {
             detail_subtitle: "当前路径".to_string(),
             detail_lines: Vec::new(),
             detail_choices: Vec::new(),
-            detail_selected: 0,
             action_lines: Vec::new(),
             cards: vec![
                 DashboardCard {
@@ -2921,26 +2678,28 @@ mod tests {
     }
 
     #[test]
-    fn nord_palette_matches_dashboard_contract() {
-        assert_eq!(BG_BASE, Color::Rgb(46, 52, 64));
-        assert_eq!(TEXT_PRIMARY, Color::Rgb(216, 222, 233));
-        assert_eq!(ACCENT_PRIMARY, Color::Rgb(136, 192, 208));
-        assert_eq!(ACCENT_SECONDARY, Color::Rgb(129, 161, 193));
-        assert_eq!(STATUS_OK, Color::Rgb(163, 190, 140));
-        assert_eq!(STATUS_WARN, Color::Rgb(235, 203, 139));
-        assert_eq!(STATUS_ERROR, Color::Rgb(191, 97, 106));
-        assert_eq!(BORDER_MUTED, Color::Rgb(76, 86, 106));
+    fn warm_palette_matches_dashboard_contract() {
+        assert_eq!(BG_BASE, Color::Rgb(22, 17, 12));
+        assert_eq!(TEXT_PRIMARY, Color::Rgb(236, 220, 176));
+        assert_eq!(ACCENT_PRIMARY, Color::Rgb(226, 152, 28));
+        assert_eq!(ACCENT_SECONDARY, Color::Rgb(206, 88, 36));
+        assert_eq!(STATUS_OK, Color::Rgb(152, 195, 62));
+        assert_eq!(STATUS_WARN, Color::Rgb(226, 192, 44));
+        assert_eq!(STATUS_ERROR, Color::Rgb(198, 58, 54));
+        assert_eq!(BORDER_MUTED, Color::Rgb(72, 56, 36));
     }
 
     #[test]
-    fn service_table_uses_shortcut_action_column() {
+    fn service_card_list_shows_title_and_status() {
         let view = sample_dashboard_view(0);
         let rendered = render_buffer_text(96, 14, |frame| {
             render_table(frame, Rect::new(0, 0, 96, 14), &view, "核心服务管理");
         });
         let visible = compact_visible_text(&rendered);
-        assert!(visible.contains("快捷操作"));
+        assert!(visible.contains("启动MaiBot"));
+        assert!(visible.contains("NapCatQQ"));
         assert!(!visible.contains("运行模式"));
+        assert!(!visible.contains("快捷操作"));
     }
 
     #[test]
@@ -3079,7 +2838,7 @@ mod tests {
     }
 
     #[test]
-    fn deploy_left_right_switch_steps_and_up_down_browse_choices() {
+    fn deploy_left_right_switch_steps_and_up_down_adjust_choices() {
         let mut view = DashboardView {
             mode: AppMode::ContentFocused,
             active_tab: DashboardTab::Deploy,
@@ -3090,7 +2849,6 @@ mod tests {
             detail_subtitle: "当前路径".to_string(),
             detail_lines: Vec::new(),
             detail_choices: Vec::new(),
-            detail_selected: 0,
             action_lines: Vec::new(),
             cards: vec![
                 DashboardCard {
@@ -3147,30 +2905,13 @@ mod tests {
         assert_eq!(view.detail_choices.len(), 2);
         assert!(view.detail_choices[0].active);
         assert_eq!(view.detail_choices[0].label, "main");
-        assert_eq!(view.detail_selected, 0);
 
         assert_eq!(
             handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
             DashboardInputAction::Redraw
         );
         sync_cached_dashboard_view(&mut view, &mut state);
-        assert!(view.detail_choices[0].active);
-        assert_eq!(view.detail_selected, 1);
-        assert_eq!(
-            state
-                .deploy_plan
-                .as_ref()
-                .map(|plan| plan.maibot_branch.as_str()),
-            Some("main")
-        );
-
-        assert_eq!(
-            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
-            DashboardInputAction::Redraw
-        );
-        sync_cached_dashboard_view(&mut view, &mut state);
         assert!(view.detail_choices[1].active);
-        assert_eq!(view.detail_selected, 1);
         assert_eq!(
             state
                 .deploy_plan
@@ -3231,258 +2972,6 @@ mod tests {
     }
 
     #[test]
-    fn deploy_github_custom_opens_inline_input_and_presets_stay_selectable() {
-        let first_mirror = github_mirrors()
-            .first()
-            .copied()
-            .expect("test config should provide github mirrors");
-        let mut view = DashboardView {
-            mode: AppMode::ContentFocused,
-            active_tab: DashboardTab::Deploy,
-            focus: DashboardFocus::Content,
-            popup: None,
-            page_title: "部署与更新".to_string(),
-            detail_title: "GitHub".to_string(),
-            detail_subtitle: "自动测速".to_string(),
-            detail_lines: Vec::new(),
-            detail_choices: Vec::new(),
-            detail_selected: 0,
-            action_lines: Vec::new(),
-            cards: vec![DashboardCard {
-                id: "deploy-github",
-                icon: "G",
-                title: "GitHub".to_string(),
-                subtitle: "自动测速".to_string(),
-                badge: "单选".to_string(),
-                detail: "GitHub 详情".to_string(),
-                kind: StatusKind::Neutral,
-            }],
-            selected: 0,
-            empty_title: String::new(),
-            empty_detail: String::new(),
-        };
-        let mut state = DashboardState::default();
-        state.active_tab = DashboardTab::Deploy;
-        state.focus = DashboardFocus::Content;
-        state.deploy_plan = Some(InstallPlan::default());
-        sync_cached_dashboard_view(&mut view, &mut state);
-
-        assert_eq!(view.detail_choices[0].label, "自动测速选择");
-        assert_eq!(view.detail_choices[1].label, "官方直连");
-        assert_eq!(view.detail_choices[2].label, first_mirror);
-        assert_eq!(
-            view.detail_choices
-                .last()
-                .map(|choice| choice.label.as_str()),
-            Some("输入自定义镜像")
-        );
-
-        assert_eq!(
-            handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
-            DashboardInputAction::Redraw
-        );
-        sync_cached_dashboard_view(&mut view, &mut state);
-        assert!(view.detail_choices[0].active);
-        assert_eq!(view.detail_selected, 1);
-        assert_eq!(
-            state
-                .deploy_plan
-                .as_ref()
-                .expect("deploy plan")
-                .github_proxy,
-            ""
-        );
-
-        assert_eq!(
-            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
-            DashboardInputAction::Redraw
-        );
-        sync_cached_dashboard_view(&mut view, &mut state);
-        assert!(view.detail_choices[1].active);
-        assert_eq!(
-            state
-                .deploy_plan
-                .as_ref()
-                .expect("deploy plan")
-                .github_proxy,
-            "https://github.com"
-        );
-
-        assert_eq!(
-            handle_dashboard_key(&mut state, &view, KeyCode::Down, KeyModifiers::empty()),
-            DashboardInputAction::Redraw
-        );
-        sync_cached_dashboard_view(&mut view, &mut state);
-        assert!(state.popup.is_none());
-        assert!(view.detail_choices[1].active);
-        assert_eq!(view.detail_selected, 2);
-        assert_eq!(
-            state
-                .deploy_plan
-                .as_ref()
-                .expect("deploy plan")
-                .github_proxy,
-            "https://github.com"
-        );
-
-        assert_eq!(
-            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
-            DashboardInputAction::Redraw
-        );
-        sync_cached_dashboard_view(&mut view, &mut state);
-        assert!(view.detail_choices[2].active);
-        assert_eq!(
-            state
-                .deploy_plan
-                .as_ref()
-                .expect("deploy plan")
-                .github_proxy,
-            first_mirror
-        );
-
-        let plan = state.deploy_plan.as_ref().expect("deploy plan");
-        assert!(planner_choice_active_for_plan(
-            plan,
-            PlanField::GithubProxy,
-            2
-        ));
-
-        let input_idx = planner_choices_for_plan(plan, PlanField::GithubProxy)
-            .iter()
-            .position(|choice| choice == "输入自定义镜像")
-            .expect("custom github choice should be visible");
-        assert!(deploy_choice_requests_input(
-            plan,
-            PlanField::GithubProxy,
-            input_idx
-        ));
-        state.deploy_choice_cursor = Some(DeployChoiceCursor {
-            field: PlanField::GithubProxy,
-            index: input_idx,
-        });
-        sync_cached_dashboard_view(&mut view, &mut state);
-        assert_eq!(view.detail_selected, input_idx);
-        assert_eq!(
-            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
-            DashboardInputAction::Redraw
-        );
-        assert!(
-            state
-                .popup
-                .as_ref()
-                .is_some_and(|popup| popup.input.is_some())
-        );
-    }
-
-    #[test]
-    fn deploy_render_keeps_custom_github_and_docker_visible() {
-        let github_choices =
-            planner_choices_for_plan(&InstallPlan::default(), PlanField::GithubProxy);
-        let input_idx = github_choices
-            .iter()
-            .position(|choice| choice == "输入自定义镜像")
-            .expect("custom github choice should exist");
-        let github_view = DashboardView {
-            mode: AppMode::ContentFocused,
-            active_tab: DashboardTab::Deploy,
-            focus: DashboardFocus::Content,
-            popup: None,
-            page_title: "部署与更新".to_string(),
-            detail_title: "GitHub".to_string(),
-            detail_subtitle: "自动测速".to_string(),
-            detail_lines: Vec::new(),
-            detail_choices: github_choices
-                .into_iter()
-                .enumerate()
-                .map(|(idx, label)| DashboardChoice {
-                    detail: deploy_choice_detail_for_cache(PlanField::GithubProxy, idx, &label),
-                    active: idx == 0,
-                    label,
-                })
-                .collect(),
-            detail_selected: input_idx,
-            action_lines: Vec::new(),
-            cards: vec![DashboardCard {
-                id: "deploy-github",
-                icon: "G",
-                title: "GitHub".to_string(),
-                subtitle: "自动测速".to_string(),
-                badge: "单选".to_string(),
-                detail: "GitHub 详情".to_string(),
-                kind: StatusKind::Neutral,
-            }],
-            selected: 0,
-            empty_title: String::new(),
-            empty_detail: String::new(),
-        };
-        let rendered = render_buffer_text(96, 12, |frame| {
-            render_current_step_options(frame, Rect::new(0, 0, 96, 12), &github_view);
-        });
-        let visible = compact_visible_text(&rendered);
-        assert!(visible.contains("输入自定义镜像"));
-
-        let mut docker_view = DashboardView {
-            mode: AppMode::ContentFocused,
-            active_tab: DashboardTab::Deploy,
-            focus: DashboardFocus::Content,
-            popup: None,
-            page_title: "部署与更新".to_string(),
-            detail_title: "Docker".to_string(),
-            detail_subtitle: "保持不变".to_string(),
-            detail_lines: Vec::new(),
-            detail_choices: Vec::new(),
-            detail_selected: 0,
-            action_lines: Vec::new(),
-            cards: Vec::new(),
-            selected: 8,
-            empty_title: String::new(),
-            empty_detail: String::new(),
-        };
-        for (id, title, subtitle) in [
-            ("deploy-path", "目录", "~/maimai"),
-            ("deploy-branch", "分支", "main"),
-            ("deploy-mode", "模式", "正常更新/修复"),
-            ("deploy-python", "Python", "uv"),
-            ("deploy-venv", "环境", "保留"),
-            ("deploy-github", "GitHub", "自动测速"),
-            ("deploy-pypi", "PyPI", "系统默认"),
-            ("deploy-bots", "协议端", "NapCatQQ"),
-            ("deploy-docker", "Docker", "docker.1ms.run"),
-        ] {
-            docker_view.cards.push(DashboardCard {
-                id,
-                icon: "D",
-                title: title.to_string(),
-                subtitle: subtitle.to_string(),
-                badge: "单选".to_string(),
-                detail: String::new(),
-                kind: StatusKind::Neutral,
-            });
-        }
-        let visible = deploy_summary_lines(&docker_view, 8)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<String>();
-        let visible = compact_visible_text(&visible);
-        assert!(visible.contains("Docker"));
-        assert!(visible.contains("docker.1ms.run"));
-    }
-
-    #[test]
-    fn deploy_custom_pypi_input_updates_full_plan() {
-        let mut state = DashboardState::default();
-        state.deploy_plan = Some(InstallPlan::default());
-
-        apply_deploy_input_value(&mut state, PlanField::PipSource, "mirror.example/simple");
-
-        let plan = state.deploy_plan.as_ref().expect("deploy plan");
-        assert_eq!(plan.pip_index, "https://mirror.example/simple");
-        assert_eq!(plan.uv_index, "https://mirror.example/simple");
-        assert_eq!(plan.pip_host, "mirror.example");
-        assert_eq!(plan.pip_display, "https://mirror.example/simple");
-    }
-
-    #[test]
     fn content_enter_requests_popup_then_popup_can_activate() {
         let view = sample_dashboard_view(0);
         let mut state = DashboardState::default();
@@ -3499,6 +2988,8 @@ mod tests {
             handle_dashboard_key(&mut state, &view, KeyCode::Right, KeyModifiers::empty()),
             DashboardInputAction::Redraw
         );
+        // With new core-start popup: ["后台启动", "启动并进入终端", "取消"]
+        // Right moves from idx 0 to idx 1 ("启动并进入终端")
         assert_eq!(state.popup.as_ref().map(|popup| popup.selected), Some(1));
         assert_eq!(
             handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
@@ -3542,7 +3033,7 @@ mod tests {
         let supported = popup_for_selection(&view).expect("supported protocol popup");
         assert_eq!(
             supported.actions,
-            vec!["启动", "停止", "日志", "更多控制", "取消"]
+            vec!["启动", "停止", "重启", "查看日志", "重建容器", "取消"]
         );
     }
 
@@ -3593,7 +3084,6 @@ mod tests {
             ],
             actions: vec!["取消".to_string()],
             selected: 0,
-            ..DashboardPopup::default()
         };
         let area = popup_area(&popup, Rect::new(0, 0, 132, 42));
         assert!(area.width <= 72, "info popup should stay compact: {area:?}");

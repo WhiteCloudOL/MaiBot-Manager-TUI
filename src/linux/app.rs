@@ -10,9 +10,8 @@ use std::{
 };
 
 use crate::model::{
-    DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardPopup,
-    DashboardPopupPurpose, DashboardState, DashboardTab, DashboardView, InstallPlan, PlanField,
-    StatusKind, deploy_card_field,
+    DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardState, DashboardTab,
+    DashboardView, InstallPlan, PlanField, StatusKind, deploy_card_field,
 };
 use crate::theme::AppTheme;
 use crate::ui::{ActionItem, StatusCard};
@@ -156,7 +155,6 @@ impl App {
                 DashboardEvent::ResetDeployPlan => {
                     let reset = self.build_recommended_defaults();
                     dashboard.deploy_plan = Some(reset);
-                    dashboard.deploy_choice_cursor = None;
                     dashboard.set_status_message("已恢复推荐默认部署配置");
                 }
                 DashboardEvent::RunDeployPlan => {
@@ -169,6 +167,19 @@ impl App {
                     self.handle_menu_result(self.run_install(&plan))?;
                     dashboard.deploy_plan = Some(plan);
                     dashboard.set_status_message("安装流程已执行");
+                    self.invalidate_dashboard_cache();
+                }
+                DashboardEvent::AttachTerminal { session } => {
+                    let result = if session == "maibot-logs-follow" {
+                        self.print_maibot_core_logs(100, true)
+                    } else if session == "napcat-logs-follow" {
+                        self.print_napcat_logs(100, true)
+                    } else if session == "llbot-logs-follow" {
+                        self.print_llbot_logs(100, true)
+                    } else {
+                        self.attach_screen(&session)
+                    };
+                    self.handle_menu_result(result)?;
                     self.invalidate_dashboard_cache();
                 }
                 DashboardEvent::Exit => break,
@@ -209,7 +220,6 @@ impl App {
             detail_subtitle: detail_subtitle.to_string(),
             detail_lines,
             detail_choices,
-            detail_selected: 0,
             action_lines,
             cards: std::mem::take(&mut cards),
             selected,
@@ -1151,7 +1161,7 @@ impl App {
 
     fn activate_dashboard_selection(&mut self, state: &mut DashboardState) -> Result<bool> {
         if let Some(popup) = state.popup.take() {
-            return self.activate_dashboard_popup(state, popup);
+            return self.activate_dashboard_popup(state, popup.selected);
         }
         match state.active_tab {
             DashboardTab::Overview => {
@@ -1182,13 +1192,32 @@ impl App {
                     _ => {}
                 };
             }
-            DashboardTab::Deploy => {}
+            DashboardTab::Deploy => {
+                let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
+                let selected = cards.get(state.selected_for_len(cards.len()));
+                if let Some(plan) = state.deploy_plan.as_ref() {
+                    let Some(field) = selected.and_then(|card| deploy_card_field(card.id)) else {
+                        return Ok(true);
+                    };
+                    if field == PlanField::InstallPath {
+                        let mut new_plan = plan.clone();
+                        self.edit_install_path(&mut new_plan)?;
+                        state.deploy_plan = Some(new_plan.clone());
+                        state.set_status_message(format!(
+                            "目录已更新为 {}",
+                            new_plan.install_path.display()
+                        ));
+                    }
+                }
+            }
             DashboardTab::Core => {
                 let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
                 let selected = cards.get(state.selected_for_len(cards.len()));
                 match selected.map(|card| card.id) {
                     Some("core-start") => {
-                        state.popup = Some(linux_core_start_popup());
+                        self.handle_menu_result(self.start_maibot_core(false))?;
+                        self.invalidate_dashboard_cache();
+                        state.set_status_message("已请求启动 MaiBot 核心");
                     }
                     Some("core-stop") => {
                         self.handle_menu_result(self.stop_maibot_core())?;
@@ -1276,9 +1305,8 @@ impl App {
     fn activate_dashboard_popup(
         &mut self,
         state: &mut DashboardState,
-        popup: DashboardPopup,
+        action_idx: usize,
     ) -> Result<bool> {
-        let action_idx = popup.selected;
         let cards = self.dashboard_cards(&state.active_tab, &state.search_query)?;
         let selected = cards.get(state.selected_for_len(cards.len()));
         match state.active_tab {
@@ -1293,75 +1321,93 @@ impl App {
                 state.focus = DashboardFocus::Content;
             }
             DashboardTab::Core => match selected.map(|card| card.id) {
+                // core-start: ["后台启动", "启动并进入终端", "取消"]
                 Some("core-start") if action_idx == 0 => {
                     self.handle_menu_result(self.start_maibot_core(false))?;
                     self.invalidate_dashboard_cache();
                     state.set_status_message("已请求后台启动 MaiBot 核心");
                 }
                 Some("core-start") if action_idx == 1 => {
-                    self.handle_menu_result(self.start_maibot_core(true))?;
+                    self.handle_menu_result(self.start_maibot_core(false))?;
                     self.invalidate_dashboard_cache();
+                    self.handle_menu_result(self.attach_screen("maibot"))?;
                     state.set_status_message("已启动并进入 MaiBot 控制台");
                 }
-                Some("core-start") if action_idx == 2 => {
-                    self.handle_menu_result(self.manage_maibot_menu())?;
-                    self.invalidate_dashboard_cache();
-                }
+                // core-stop: ["确认停止 MaiBot", "取消"]
                 Some("core-stop") if action_idx == 0 => {
                     self.handle_menu_result(self.stop_maibot_core())?;
                     self.invalidate_dashboard_cache();
                     state.set_status_message("已请求停止 MaiBot 核心");
                 }
+                // core-console: ["进入 screen 控制台", "取消"]
                 Some("core-console") if action_idx == 0 => {
                     self.handle_menu_result(self.attach_screen("maibot"))?;
                     state.set_status_message("已进入 MaiBot 控制台");
                 }
+                // core-logs: ["查看最近 100 行", "实时跟随日志", "取消"]
                 Some("core-logs") if action_idx == 0 => {
+                    self.handle_menu_result(self.print_maibot_core_logs(100, false))?;
+                    state.set_status_message("已查看 MaiBot 最近日志");
+                }
+                Some("core-logs") if action_idx == 1 => {
                     self.handle_menu_result(self.print_maibot_core_logs(100, true))?;
                     state.set_status_message("已打开 MaiBot 实时日志");
-                }
-                _ if action_idx == 1 => {
-                    self.handle_menu_result(self.manage_maibot_menu())?;
-                    self.invalidate_dashboard_cache();
                 }
                 _ => {}
             },
             DashboardTab::Protocol => {
                 match selected.map(|card| card.id) {
+                    // napcat: ["启动", "停止", "重启", "查看日志", "重建容器", "取消"]
                     Some("napcat") => match action_idx {
                         0 => {
                             self.handle_menu_result(self.start_napcat())?;
+                            state.set_status_message("已启动 NapCat");
                         }
                         1 => {
                             self.handle_menu_result(self.stop_napcat())?;
+                            state.set_status_message("已停止 NapCat");
                         }
                         2 => {
-                            self.handle_menu_result(self.print_napcat_logs(100, true))?;
+                            self.handle_menu_result(self.restart_napcat())?;
+                            state.set_status_message("已重启 NapCat");
                         }
                         3 => {
-                            self.handle_menu_result(self.manage_napcat_menu())?;
+                            self.handle_menu_result(self.print_napcat_logs(100, true))?;
+                            state.set_status_message("已查看 NapCat 日志");
+                        }
+                        4 => {
+                            self.handle_menu_result(self.rebuild_napcat())?;
+                            state.set_status_message("已重建 NapCat 容器");
                         }
                         _ => {}
                     },
+                    // llbot: ["启动", "停止", "重启", "进入控制台", "修改密码", "取消"]
                     Some("llbot") => match action_idx {
                         0 => {
                             self.handle_menu_result(self.start_llbot())?;
+                            state.set_status_message("已启动 LLBot");
                         }
                         1 => {
                             self.handle_menu_result(self.stop_llbot())?;
+                            state.set_status_message("已停止 LLBot");
                         }
                         2 => {
-                            self.handle_menu_result(self.print_llbot_logs(100, true))?;
+                            self.handle_menu_result(self.restart_llbot())?;
+                            state.set_status_message("已重启 LLBot");
                         }
                         3 => {
-                            self.handle_menu_result(self.manage_llbot_menu())?;
+                            self.handle_menu_result(self.attach_screen("llbot"))?;
+                            state.set_status_message("已进入 LLBot 控制台");
+                        }
+                        4 => {
+                            self.handle_menu_result(self.manage_llbot_password())?;
+                            state.set_status_message("已执行 LLBot 密码修改");
                         }
                         _ => {}
                     },
                     _ => {}
                 }
                 self.invalidate_dashboard_cache();
-                state.set_status_message("协议端操作已执行");
             }
             DashboardTab::Plugins => match selected.map(|card| card.id) {
                 Some("plugin-item") => {
@@ -1652,27 +1698,6 @@ fn deploy_fields() -> &'static [PlanField] {
         PlanField::BotProtocols,
         PlanField::DockerMirror,
     ]
-}
-
-fn linux_core_start_popup() -> DashboardPopup {
-    DashboardPopup {
-        title: "启动 MaiBot".to_string(),
-        subtitle: "选择启动方式".to_string(),
-        lines: vec![
-            "后台启动会创建 screen: maibot 并立即返回管理器。".to_string(),
-            "启动并进入终端会在 screen 中显示前台输出，适合首次启动确认 EULA。".to_string(),
-            "这里不会判断是否首次启动，请按当前需要选择。".to_string(),
-        ],
-        actions: vec![
-            "后台启动".to_string(),
-            "启动并进入终端".to_string(),
-            "更多控制".to_string(),
-            "取消".to_string(),
-        ],
-        selected: 0,
-        purpose: DashboardPopupPurpose::CoreStartMode,
-        ..DashboardPopup::default()
-    }
 }
 
 fn planner_field_detail(field: PlanField) -> &'static str {

@@ -189,6 +189,18 @@ impl DashboardTab {
             Self::About => "关于",
         }
     }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Overview => "󰙅",
+            Self::Deploy => "󰏖",
+            Self::Core => "󱄩",
+            Self::Protocol => "󰘨",
+            Self::Access => "󰢹",
+            Self::Plugins => "󰏗",
+            Self::About => "󰎆",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -215,7 +227,6 @@ pub struct AppState {
     pub search_query: String,
     pub status_message_override: Option<String>,
     pub deploy_plan: Option<InstallPlan>,
-    pub deploy_choice_cursor: Option<DeployChoiceCursor>,
     pub popup: Option<DashboardPopup>,
     selections: [usize; 7],
 }
@@ -300,23 +311,6 @@ pub struct DashboardPopup {
     pub lines: Vec<String>,
     pub actions: Vec<String>,
     pub selected: usize,
-    pub purpose: DashboardPopupPurpose,
-    pub input: Option<DashboardInput>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum DashboardPopupPurpose {
-    #[default]
-    Action,
-    DeployInput(PlanField),
-    CoreStartMode,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DashboardInput {
-    pub label: String,
-    pub value: String,
-    pub placeholder: String,
 }
 
 #[derive(Clone, Debug)]
@@ -348,7 +342,6 @@ pub struct DashboardView {
     pub detail_subtitle: String,
     pub detail_lines: Vec<String>,
     pub detail_choices: Vec<DashboardChoice>,
-    pub detail_selected: usize,
     pub action_lines: Vec<String>,
     pub cards: Vec<DashboardCard>,
     pub selected: usize,
@@ -356,13 +349,15 @@ pub struct DashboardView {
     pub empty_detail: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DashboardEvent {
     Activate,
     ClearSearch,
     Exit,
     ResetDeployPlan,
     RunDeployPlan,
+    #[allow(dead_code)]
+    AttachTerminal { session: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -376,12 +371,6 @@ pub enum PlanField {
     PipSource,
     BotProtocols,
     DockerMirror,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DeployChoiceCursor {
-    pub field: PlanField,
-    pub index: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
