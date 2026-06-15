@@ -2,7 +2,7 @@
 # 修改后重新执行 build-release.sh / build-release.ps1，新值会被烘焙进二进制。
 
 # 程序版本号（同时会同步到 Cargo.toml 的 [package].version 时由人工保持一致）
-version = "0.3.0"
+version = "0.3.1"
 
 # 标头显示内容，修改后会被烘焙进二进制。
 header_title = "MaiBot-Manager-TUI"

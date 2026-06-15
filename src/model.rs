@@ -189,6 +189,18 @@ impl DashboardTab {
             Self::About => "关于",
         }
     }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Overview => "󰙅",
+            Self::Deploy => "󰏖",
+            Self::Core => "󱄩",
+            Self::Protocol => "󰘨",
+            Self::Access => "󰢹",
+            Self::Plugins => "󰏗",
+            Self::About => "󰎆",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -292,7 +304,7 @@ impl AppState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DashboardPopup {
     pub title: String,
     pub subtitle: String,
@@ -337,13 +349,15 @@ pub struct DashboardView {
     pub empty_detail: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DashboardEvent {
     Activate,
     ClearSearch,
     Exit,
     ResetDeployPlan,
     RunDeployPlan,
+    #[allow(dead_code)]
+    AttachTerminal { session: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

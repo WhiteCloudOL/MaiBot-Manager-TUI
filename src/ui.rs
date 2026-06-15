@@ -24,8 +24,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, BorderType, Borders, Cell, Clear as TuiClear, List, ListItem, ListState, Padding,
-        Paragraph, Row, Table, TableState, Wrap,
+        Block, BorderType, Borders, Clear as TuiClear, List, ListItem, ListState, Padding,
+        Paragraph, Wrap,
     },
 };
 use std::{
@@ -40,17 +40,21 @@ const PANEL_WIDTH: usize = 76;
 const KEY_WIDTH: usize = 14;
 const MENU_REDRAW_TICK: Duration = Duration::from_millis(100);
 
-const BG_BASE: Color = Color::Rgb(46, 52, 64);
-const TEXT_PRIMARY: Color = Color::Rgb(216, 222, 233);
-const TEXT_MUTED: Color = Color::Rgb(172, 181, 197);
-const ACCENT_PRIMARY: Color = Color::Rgb(136, 192, 208);
-const ACCENT_SECONDARY: Color = Color::Rgb(129, 161, 193);
-const STATUS_OK: Color = Color::Rgb(163, 190, 140);
-const STATUS_WARN: Color = Color::Rgb(235, 203, 139);
-const STATUS_ERROR: Color = Color::Rgb(191, 97, 106);
-const SURFACE_DIM: Color = Color::Rgb(59, 66, 82);
-const BORDER_MUTED: Color = Color::Rgb(76, 86, 106);
-const DARK_TEXT: Color = Color::Rgb(46, 52, 64);
+const BG_BASE: Color = Color::Rgb(22, 17, 12);
+const SURFACE_DIM: Color = Color::Rgb(30, 24, 16);
+const SURFACE_RAISED: Color = Color::Rgb(56, 46, 32);
+const TEXT_PRIMARY: Color = Color::Rgb(236, 220, 176);
+const TEXT_MUTED: Color = Color::Rgb(160, 136, 104);
+const TEXT_DIM: Color = Color::Rgb(96, 78, 56);
+const DARK_TEXT: Color = Color::Rgb(22, 17, 12);
+const ACCENT_PRIMARY: Color = Color::Rgb(226, 152, 28);
+const ACCENT_SECONDARY: Color = Color::Rgb(206, 88, 36);
+const ACCENT_TERTIARY: Color = Color::Rgb(180, 148, 82);
+const STATUS_OK: Color = Color::Rgb(152, 195, 62);
+const STATUS_WARN: Color = Color::Rgb(226, 192, 44);
+const STATUS_ERROR: Color = Color::Rgb(198, 58, 54);
+const BORDER_MUTED: Color = Color::Rgb(72, 56, 36);
+const BORDER_ACTIVE: Color = Color::Rgb(226, 152, 28);
 
 fn content_width() -> usize {
     let (term_width, _) = size().unwrap_or((80, 24));
@@ -570,7 +574,7 @@ fn render_dashboard(frame: &mut Frame<'_>, view: &DashboardView) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
@@ -585,24 +589,49 @@ fn render_dashboard(frame: &mut Frame<'_>, view: &DashboardView) {
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect) {
-    let block = compact_block(None, false);
-    let title = Line::from(Span::styled(
-        format!("{APP_HEADER_TITLE}  v{APP_VERSION}"),
-        Style::default()
-            .fg(ACCENT_PRIMARY)
-            .add_modifier(Modifier::BOLD),
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(BORDER_MUTED))
+        .style(Style::default().bg(SURFACE_DIM));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(inner);
+
+    let title = Line::from(vec![
+        Span::styled(
+            format!("  {APP_HEADER_TITLE}"),
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  v{APP_VERSION}"),
+            Style::default().fg(ACCENT_TERTIARY),
+        ),
+    ]);
+    let subtitle = Line::from(Span::styled(
+        APP_HEADER_SUBTITLE,
+        Style::default().fg(TEXT_DIM),
     ));
-    let paragraph = Paragraph::new(title)
-        .alignment(Alignment::Center)
-        .block(block)
-        .style(Style::default());
-    frame.render_widget(paragraph, area);
+    frame.render_widget(
+        Paragraph::new(title).alignment(Alignment::Center),
+        chunks[0],
+    );
+    frame.render_widget(
+        Paragraph::new(subtitle).alignment(Alignment::Center),
+        chunks[1],
+    );
 }
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+        .constraints([Constraint::Percentage(22), Constraint::Percentage(78)])
         .margin(1)
         .split(area);
     render_sidebar(frame, chunks[0], view);
@@ -610,22 +639,26 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
 }
 
 fn render_sidebar(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let focused = view.focus == DashboardFocus::Sidebar;
     let items = DashboardTab::SIDEBAR
         .iter()
         .map(|tab| {
-            ListItem::new(Line::from(Span::styled(
-                tab.label(),
-                Style::default().fg(TEXT_MUTED),
-            )))
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    tab.icon(),
+                    Style::default()
+                        .fg(ACCENT_SECONDARY)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(tab.label(), Style::default().fg(TEXT_MUTED)),
+            ]))
         })
         .collect::<Vec<_>>();
     let mut state = ListState::default();
     state.select(Some(view.active_tab.sidebar_index()));
     let list = List::new(items)
-        .block(ethereal_block(
-            Some("导航"),
-            view.focus == DashboardFocus::Sidebar,
-        ))
+        .block(ethereal_block(Some("导航"), focused))
         .style(Style::default().fg(TEXT_PRIMARY))
         .highlight_style(selected_style())
         .highlight_symbol("");
@@ -808,70 +841,75 @@ fn render_about_detail(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) 
 }
 
 fn render_table(frame: &mut Frame<'_>, area: Rect, view: &DashboardView, title: &str) {
-    let rows = if view.cards.is_empty() {
-        vec![Row::new(vec![
-            Cell::from(view.empty_title.clone()),
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(view.empty_detail.clone()),
+    let items = if view.cards.is_empty() {
+        vec![ListItem::new(vec![
+            Line::from(Span::styled(
+                view.empty_title.clone(),
+                Style::default().fg(TEXT_MUTED),
+            )),
+            Line::from(Span::styled(
+                view.empty_detail.clone(),
+                Style::default().fg(TEXT_DIM),
+            )),
         ])]
     } else {
         view.cards
             .iter()
             .map(|card| {
-                Row::new(vec![
-                    Cell::from(Line::from(vec![
-                        Span::styled(
-                            card.icon,
-                            Style::default()
-                                .fg(ACCENT_SECONDARY)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            status_dot(card.kind),
-                            Style::default().fg(status_color(card.kind)),
-                        ),
-                        Span::raw("  "),
-                        Span::styled(card.title.clone(), Style::default().fg(TEXT_PRIMARY)),
-                    ])),
-                    Cell::from(Line::from(Span::styled(
-                        card.badge.clone(),
-                        Style::default().fg(status_color(card.kind)),
-                    ))),
-                    Cell::from(card.subtitle.clone()),
-                    Cell::from(action_label_for_card(card)),
-                ])
+                let badge_color = status_color(card.kind);
+                let line1 = Line::from(vec![
+                    Span::styled(
+                        card.icon,
+                        Style::default()
+                            .fg(ACCENT_SECONDARY)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        status_dot(card.kind),
+                        Style::default()
+                            .fg(badge_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        card.title.clone(),
+                        Style::default()
+                            .fg(TEXT_PRIMARY)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("[{}]", card.badge),
+                        Style::default().fg(badge_color),
+                    ),
+                ]);
+                let line2 = Line::from(vec![
+                    Span::raw("     "),
+                    Span::styled(card.subtitle.clone(), Style::default().fg(TEXT_MUTED)),
+                ]);
+                ListItem::new(vec![line1, line2])
             })
             .collect::<Vec<_>>()
     };
-    let header = Row::new(vec!["服务名称", "当前状态", "版本", "快捷操作"])
-        .style(
-            Style::default()
-                .fg(ACCENT_PRIMARY)
-                .add_modifier(Modifier::BOLD),
-        )
-        .height(1);
-    let widths = [
-        Constraint::Percentage(28),
-        Constraint::Percentage(16),
-        Constraint::Percentage(32),
-        Constraint::Percentage(24),
-    ];
-    let mut state = TableState::default();
+    let mut state = ListState::default();
     if !view.cards.is_empty() {
         state.select(Some(view.selected.min(view.cards.len() - 1)));
     }
-    let table = Table::new(rows, widths)
-        .header(header)
+    let list = List::new(items)
         .block(ethereal_block(
             Some(title),
             view.focus == DashboardFocus::Content,
         ))
-        .row_highlight_style(selected_style())
-        .highlight_symbol("")
-        .style(Style::default().fg(TEXT_PRIMARY));
-    frame.render_stateful_widget(table, area, &mut state);
+        .style(Style::default().fg(TEXT_PRIMARY))
+        .highlight_style(
+            Style::default()
+                .fg(DARK_TEXT)
+                .bg(SURFACE_RAISED)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("");
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 fn render_deployment(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
@@ -1054,6 +1092,13 @@ fn render_deploy_description(frame: &mut Frame<'_>, area: Rect, view: &Dashboard
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
+    let width = usize::from(area.width);
+
+    // Show status message override prominently if set
+    if let Some(status_msg) = &view.popup.as_ref().and(None::<&str>) {
+        let _ = status_msg;
+    }
+
     let prompt = match view.mode {
         AppMode::Navigation => {
             "[↑/↓] 导航   [Tab] 面板   [Enter] 确认   [Esc] 返回   [Ctrl+Q] 退出"
@@ -1071,7 +1116,6 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
     };
     let branch = "分支: main";
     let mut text = prompt.to_string();
-    let width = usize::from(area.width);
     let branch_width = display_width(branch);
     let prompt_width = display_width(prompt);
     if width > branch_width + 2 {
@@ -1082,7 +1126,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
         .alignment(Alignment::Center)
         .style(
             Style::default()
-                .fg(TEXT_PRIMARY)
+                .fg(ACCENT_TERTIARY)
                 .bg(SURFACE_DIM)
                 .add_modifier(Modifier::BOLD),
         );
@@ -1092,7 +1136,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
 fn render_popup(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
     frame.render_widget(TuiClear, area);
     frame.render_widget(
-        Block::default().style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM)),
+        Block::default().style(Style::default().fg(TEXT_PRIMARY).bg(BG_BASE)),
         area,
     );
     let block = modal_block(Some(popup.title.as_str()));
@@ -1132,22 +1176,34 @@ fn render_popup_actions(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopu
         return;
     }
     let chunks = popup_action_areas(area, &popup.actions);
+    let last_idx = popup.actions.len().saturating_sub(1);
     for (idx, action) in popup.actions.iter().enumerate() {
         let active = idx == popup.selected;
-        let paragraph = Paragraph::new(Line::from(Span::styled(
-            action.clone(),
-            if active {
-                Style::default()
-                    .fg(DARK_TEXT)
-                    .bg(ACCENT_SECONDARY)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                muted_style()
-            },
-        )))
-        .alignment(Alignment::Center)
-        .style(Style::default().bg(SURFACE_DIM))
-        .block(popup_action_block(active));
+        let is_destructive = action.contains("删除")
+            || action.contains("移除")
+            || action.contains("卸载")
+            || action.contains("停止");
+        let is_cancel = action == "取消" || idx == last_idx;
+        let text_style = if active {
+            Style::default()
+                .fg(DARK_TEXT)
+                .bg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD)
+        } else if is_destructive {
+            Style::default().fg(STATUS_ERROR)
+        } else if is_cancel {
+            Style::default().fg(TEXT_DIM)
+        } else if idx == 0 {
+            Style::default()
+                .fg(ACCENT_PRIMARY)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            muted_style()
+        };
+        let paragraph = Paragraph::new(Line::from(Span::styled(action.clone(), text_style)))
+            .alignment(Alignment::Center)
+            .style(Style::default().bg(SURFACE_DIM))
+            .block(popup_action_block(active));
         if let Some(area) = chunks.get(idx) {
             frame.render_widget(paragraph, *area);
         }
@@ -1166,7 +1222,7 @@ fn modal_block(title: Option<&str>) -> Block<'_> {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT_PRIMARY))
+        .border_style(Style::default().fg(BORDER_ACTIVE))
         .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
         .padding(Padding::symmetric(2, 1));
     if let Some(title) = title {
@@ -1185,7 +1241,7 @@ fn popup_action_block(active: bool) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if active { ACCENT_PRIMARY } else { BORDER_MUTED }))
+        .border_style(Style::default().fg(if active { BORDER_ACTIVE } else { BORDER_MUTED }))
         .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
 }
 
@@ -1315,7 +1371,7 @@ fn wrapped_line_count(line: &str, width: usize) -> usize {
 fn selected_style() -> Style {
     Style::default()
         .fg(DARK_TEXT)
-        .bg(ACCENT_SECONDARY)
+        .bg(ACCENT_PRIMARY)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -1389,47 +1445,55 @@ fn direct_info_popup_card(view: &DashboardView) -> bool {
     }
 }
 
-fn action_label_for_card(card: &DashboardCard) -> String {
-    match card.id {
-        "core-start" => "启动".to_string(),
-        "core-stop" => "停止".to_string(),
-        "core-console" => "控制台".to_string(),
-        "core-logs" => "日志".to_string(),
-        "napcat" | "llbot" => "控制".to_string(),
-        "napcat-note" | "llbot-note" => "说明".to_string(),
-        "plugin-item" => "维护".to_string(),
-        "plugin-center" => "管理".to_string(),
-        "plugins-empty" | "workspace" => "部署".to_string(),
-        _ => "打开".to_string(),
-    }
-}
-
 fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
     let card = view.cards.get(view.selected)?;
     let mut actions = match view.active_tab {
-        DashboardTab::Core => {
-            let primary = match card.id {
-                "core-start" => "启动",
-                "core-stop" => "停止",
-                "core-console" => "控制台",
-                "core-logs" => "日志",
-                _ => "执行",
-            };
-            vec![
-                primary.to_string(),
-                "更多控制".to_string(),
+        DashboardTab::Core => match card.id {
+            "core-start" => vec![
+                "后台启动".to_string(),
+                "启动并进入终端".to_string(),
                 "取消".to_string(),
-            ]
-        }
+            ],
+            "core-stop" => vec![
+                "确认停止 MaiBot".to_string(),
+                "取消".to_string(),
+            ],
+            "core-console" => vec![
+                "进入 screen 控制台".to_string(),
+                "取消".to_string(),
+            ],
+            "core-logs" => vec![
+                "查看最近 100 行".to_string(),
+                "实时跟随日志".to_string(),
+                "取消".to_string(),
+            ],
+            _ => vec!["执行".to_string(), "取消".to_string()],
+        },
         DashboardTab::Protocol => {
             if card.id.ends_with("-note") {
                 vec!["查看说明".to_string(), "取消".to_string()]
+            } else if card.id == "napcat" {
+                vec![
+                    "启动".to_string(),
+                    "停止".to_string(),
+                    "重启".to_string(),
+                    "查看日志".to_string(),
+                    "重建容器".to_string(),
+                    "取消".to_string(),
+                ]
+            } else if card.id == "llbot" {
+                vec![
+                    "启动".to_string(),
+                    "停止".to_string(),
+                    "重启".to_string(),
+                    "进入控制台".to_string(),
+                    "修改密码".to_string(),
+                    "取消".to_string(),
+                ]
             } else {
                 vec![
                     "启动".to_string(),
                     "停止".to_string(),
-                    "日志".to_string(),
-                    "更多控制".to_string(),
                     "取消".to_string(),
                 ]
             }
@@ -1449,6 +1513,8 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
         DashboardTab::Access => {
             if card.id.ends_with("-note") {
                 vec!["查看说明".to_string(), "取消".to_string()]
+            } else if card.id == "access-init" {
+                vec!["确认执行".to_string(), "取消".to_string()]
             } else {
                 vec!["打开".to_string(), "取消".to_string()]
             }
@@ -1538,7 +1604,7 @@ fn is_key_input(kind: KeyEventKind) -> bool {
     matches!(kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum DashboardInputAction {
     Idle,
     Redraw,
@@ -2296,12 +2362,12 @@ fn draw_action_menu(
 
     lines.push(format!(
         "  {} {}",
-        style("▌").green().bright().bold(),
-        style(prompt).cyan().bright().bold()
+        style("▌").yellow().bright().bold(),
+        style(prompt).yellow().bright().bold()
     ));
     lines.push(format!(
         "  {}",
-        style("─".repeat(content_width)).blue().bright()
+        style("─".repeat(content_width)).color256(136).bright()
     ));
 
     if has_upper_ellipsis {
@@ -2337,7 +2403,7 @@ fn draw_action_menu(
         lines.push(if active {
             format!("  {}", style(row).black().on_yellow().bright().bold())
         } else {
-            format!("  {}", style(row).cyan().bright())
+            format!("  {}", style(row).color256(179).bright())
         });
     }
     if has_lower_ellipsis {
@@ -2357,7 +2423,7 @@ fn draw_action_menu(
         lines.push(format!(
             "  {}",
             style(truncate_display(&footer, content_width))
-                .blue()
+                .yellow()
                 .bright()
                 .bold()
         ));
@@ -2543,8 +2609,8 @@ mod tests {
 
     #[test]
     fn compact_three_line_blocks_keep_visible_text() {
-        let header = render_buffer_text(80, 3, |frame| {
-            render_header(frame, Rect::new(0, 0, 80, 3));
+        let header = render_buffer_text(80, 4, |frame| {
+            render_header(frame, Rect::new(0, 0, 80, 4));
         });
         assert!(header.contains(APP_HEADER_TITLE));
         assert!(header.contains(APP_VERSION));
@@ -2554,8 +2620,8 @@ mod tests {
             subtitle: "核心服务进程状态".to_string(),
             lines: vec!["状态: 可启动".to_string()],
             actions: vec![
-                "启动".to_string(),
-                "更多控制".to_string(),
+                "后台启动".to_string(),
+                "启动并进入终端".to_string(),
                 "取消".to_string(),
             ],
             selected: 0,
@@ -2612,26 +2678,28 @@ mod tests {
     }
 
     #[test]
-    fn nord_palette_matches_dashboard_contract() {
-        assert_eq!(BG_BASE, Color::Rgb(46, 52, 64));
-        assert_eq!(TEXT_PRIMARY, Color::Rgb(216, 222, 233));
-        assert_eq!(ACCENT_PRIMARY, Color::Rgb(136, 192, 208));
-        assert_eq!(ACCENT_SECONDARY, Color::Rgb(129, 161, 193));
-        assert_eq!(STATUS_OK, Color::Rgb(163, 190, 140));
-        assert_eq!(STATUS_WARN, Color::Rgb(235, 203, 139));
-        assert_eq!(STATUS_ERROR, Color::Rgb(191, 97, 106));
-        assert_eq!(BORDER_MUTED, Color::Rgb(76, 86, 106));
+    fn warm_palette_matches_dashboard_contract() {
+        assert_eq!(BG_BASE, Color::Rgb(22, 17, 12));
+        assert_eq!(TEXT_PRIMARY, Color::Rgb(236, 220, 176));
+        assert_eq!(ACCENT_PRIMARY, Color::Rgb(226, 152, 28));
+        assert_eq!(ACCENT_SECONDARY, Color::Rgb(206, 88, 36));
+        assert_eq!(STATUS_OK, Color::Rgb(152, 195, 62));
+        assert_eq!(STATUS_WARN, Color::Rgb(226, 192, 44));
+        assert_eq!(STATUS_ERROR, Color::Rgb(198, 58, 54));
+        assert_eq!(BORDER_MUTED, Color::Rgb(72, 56, 36));
     }
 
     #[test]
-    fn service_table_uses_shortcut_action_column() {
+    fn service_card_list_shows_title_and_status() {
         let view = sample_dashboard_view(0);
         let rendered = render_buffer_text(96, 14, |frame| {
             render_table(frame, Rect::new(0, 0, 96, 14), &view, "核心服务管理");
         });
         let visible = compact_visible_text(&rendered);
-        assert!(visible.contains("快捷操作"));
+        assert!(visible.contains("启动MaiBot"));
+        assert!(visible.contains("NapCatQQ"));
         assert!(!visible.contains("运行模式"));
+        assert!(!visible.contains("快捷操作"));
     }
 
     #[test]
@@ -2920,6 +2988,8 @@ mod tests {
             handle_dashboard_key(&mut state, &view, KeyCode::Right, KeyModifiers::empty()),
             DashboardInputAction::Redraw
         );
+        // With new core-start popup: ["后台启动", "启动并进入终端", "取消"]
+        // Right moves from idx 0 to idx 1 ("启动并进入终端")
         assert_eq!(state.popup.as_ref().map(|popup| popup.selected), Some(1));
         assert_eq!(
             handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
@@ -2963,7 +3033,7 @@ mod tests {
         let supported = popup_for_selection(&view).expect("supported protocol popup");
         assert_eq!(
             supported.actions,
-            vec!["启动", "停止", "日志", "更多控制", "取消"]
+            vec!["启动", "停止", "重启", "查看日志", "重建容器", "取消"]
         );
     }
 

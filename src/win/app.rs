@@ -155,6 +155,9 @@ impl App {
                     dashboard.set_status_message("安装流程已执行");
                     self.invalidate_dashboard_cache();
                 }
+                DashboardEvent::AttachTerminal { .. } => {
+                    // Not supported on this platform — ignore
+                }
                 DashboardEvent::Exit => break,
             }
         }
