@@ -333,14 +333,14 @@ maibot update --protocol llbot --llbot-update update \
 | 参数与语法 | 可选值/说明 |
 | --- | --- |
 | `--path <目录>` | 安装目录，默认读取配置或 `~/maimai` |
-| `--branch <main|dev>` | 部署的 MaiBot 分支 |
-| `--mode <normal|clean>` | `normal`: 保留目录更新修复；`clean`: 清空目录全新安装并强制重建虚拟环境 |
-| `--python <system|uv>` | `system`: 系统 Python + venv；`uv`: 使用 uv 创建并同步环境。Windows 缺少系统 Python 时会自动使用安装目录内的 uv 创建本地 venv；macOS 缺少 uv/Python 时通过 Homebrew 补齐 |
-| `--venv <keep|recreate>` | 保留或强制重建虚拟环境 |
-| `--github <auto|direct|URL>` | `auto`: 并行测速；`direct`: 强制官方直连；`URL`: 自定义代理前缀 |
-| `--pip <system|aliyun...|URL>` | 系统源/内置国内源/自定义源（仅写入当前虚拟环境配置，不污染全局） |
-| `--protocol <napcat|llbot|none>` | 选择绑定安装的底层协议端；macOS 目前仅支持 `none` |
-| `--docker <one-ms|official...|keep>` | Linux Docker 换源/官方脚本，或 `keep` 不修改 Docker daemon 配置；Windows/macOS 会忽略 |
+| `--branch <main│dev>` | 部署的 MaiBot 分支 |
+| `--mode <normal│clean>` | `normal`: 保留目录更新修复；`clean`: 清空目录全新安装并强制重建虚拟环境 |
+| `--python <system│uv>` | `system`: 系统 Python + venv；`uv`: 使用 uv 创建并同步环境。Windows 缺少系统 Python 时会自动使用安装目录内的 uv 创建本地 venv；macOS 缺少 uv/Python 时通过 Homebrew 补齐 |
+| `--venv <keep│recreate>` | 保留或强制重建虚拟环境 |
+| `--github <auto│direct│URL>` | `auto`: 并行测速；`direct`: 强制官方直连；`URL`: 自定义代理前缀 |
+| `--pip <system│aliyun...│URL>` | 系统源/内置国内源/自定义源（仅写入当前虚拟环境配置，不污染全局） |
+| `--protocol <napcat│llbot│none>` | 选择绑定安装的底层协议端；macOS 目前仅支持 `none` |
+| `--docker <one-ms│official...│keep>` | Linux Docker 换源/官方脚本，或 `keep` 不修改 Docker daemon 配置；Windows/macOS 会忽略 |
 
 **自动化静默/回退策略参数：**
 
