@@ -72,9 +72,9 @@ pub(crate) fn print_help() {
         "推荐默认值为当前用户 HOME 下的 maimai 目录、uv Python 环境和 NapCatQQ 协议端。"
     };
     let access_init_note = if cfg!(target_os = "macos") {
-        "将 MaiBot WebUI 绑定到 0.0.0.0；默认会询问确认"
+        "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址；默认会询问确认"
     } else {
-        "将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter；默认会询问确认"
+        "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用 Napcat Adapter；默认会询问确认"
     };
     let access_show_note = if cfg!(target_os = "macos") {
         "显示 MaiBot WebUI 地址和密钥"
@@ -189,6 +189,8 @@ MaiBot 核心:
   maibot access show
   maibot access init
   maibot access init --yes
+  maibot access clear-data
+  maibot access clear-data --yes
   maibot access adapter show
   maibot access adapter group-mode <whitelist|blacklist>
   maibot access adapter group-add <群号>
@@ -203,6 +205,9 @@ MaiBot 核心:
   access show        {access_show_note}
   access init        {access_init_note}
   access init --yes  跳过确认，直接应用访问配置，适合脚本中使用
+  access clear-data  清空 MaiBot/data 下除 webui.json 外的所有内容；默认会询问确认
+  access clear-data --yes
+                    跳过确认直接清理数据文件，适合已确认目标目录的脚本环境
   adapter show       查看 Adapter 群聊、私聊、封禁 QQ 配置
   group-mode         设置群聊名单模式，取值 whitelist 或 blacklist
   private-mode       设置私聊名单模式，取值 whitelist 或 blacklist
@@ -211,13 +216,13 @@ MaiBot 核心:
 插件:
   maibot plugin list
   maibot plugin install <GitHub地址或username/repo>
+  maibot plugin update <插件目录名>
   maibot plugin remove <插件目录名>
-  maibot plugin deps <插件目录名>
 
 说明:
-  plugin install     克隆或更新插件仓库；会读取 _manifest.json 中的 id 作为最终目录名，并自动安装 requirements.txt
+  plugin install     克隆或同步插件仓库；会读取 _manifest.json 中的 id 作为最终目录名
+  plugin update      拉取已安装插件仓库的最新提交
   plugin remove      删除 MaiBot/plugins 下对应插件目录
-  plugin deps        为已安装插件重新安装 requirements.txt
 
 配置文件:
   ~/.maibot_config   记录安装目录、Python 环境、LLBot 路径、安装偏好等

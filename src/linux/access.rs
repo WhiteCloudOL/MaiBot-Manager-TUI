@@ -1,4 +1,4 @@
-use crate::{app::App, model::DashboardPopup, ui::ActionItem};
+use crate::{app::App, data, model::DashboardPopup, ui::ActionItem};
 use anyhow::{Result, anyhow, bail};
 use dialoguer::{Confirm, Input, Select};
 
@@ -8,7 +8,7 @@ use dialoguer::console::style;
 use regex::Regex;
 use serde_json::Value;
 use std::{fs, path::PathBuf};
-use toml_edit::{DocumentMut, Item, Value as TomlValue, value};
+use toml_edit::{Array, DocumentMut, Item, Value as TomlValue, value};
 
 const CHAT_TABLE: &str = "chat";
 
@@ -69,8 +69,12 @@ impl App {
             self.print_section("配置与访问", "集中维护 WebUI 入口、密钥和 Adapter 策略");
             let actions = [
                 ActionItem::primary("查看访问信息", "汇总 MaiBot / NapCat / LLBot WebUI"),
-                ActionItem::normal("初始化访问配置", "绑定 0.0.0.0 并启用 Adapter"),
+                ActionItem::normal("初始化访问配置", "绑定 IPv4/IPv6 全地址并启用 Adapter"),
                 ActionItem::normal("黑白名单策略", "维护群聊、私聊和黑名单规则"),
+                ActionItem::destructive(
+                    "清空数据文件",
+                    "保留 webui.json，清理 MaiBot/data 其余内容",
+                ),
                 ActionItem::back("返回", "回到主菜单"),
             ];
             let choice = self.select_action("选择访问操作", &actions)?;
@@ -78,6 +82,7 @@ impl App {
                 0 => self.show_access_info(),
                 1 => self.initialize_maibot_access_config(),
                 2 => self.modify_adapter_config(),
+                3 => self.confirm_clear_maibot_data_files(),
                 _ => break,
             };
             self.handle_menu_result(result)?;
@@ -144,10 +149,7 @@ impl App {
         if bot_cfg.exists() {
             let doc = fs::read_to_string(&bot_cfg)?;
             let parsed: DocumentMut = doc.parse()?;
-            let host = parsed["webui"]["host"]
-                .as_str()
-                .unwrap_or("0.0.0.0")
-                .to_string();
+            let host = webui_host_display(&parsed);
             let port = parsed["webui"]["port"]
                 .as_integer()
                 .unwrap_or(8001)
@@ -284,10 +286,10 @@ impl App {
         self.print_header(None);
         self.print_section(
             "初始化访问配置",
-            "将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat 适配器",
+            "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用 Napcat 适配器",
         );
         self.print_hint(
-            "注意：监听 0.0.0.0 会让 WebUI 暴露在外部网络，请确认已设置访问令牌或防火墙规则。",
+            "注意：监听 0.0.0.0 和 :: 会让 WebUI 暴露在外部网络，请确认已设置访问令牌或防火墙规则。",
         );
         self.print_line();
 
@@ -314,7 +316,7 @@ impl App {
             if doc["webui"].is_none() {
                 doc["webui"] = Item::Table(Default::default());
             }
-            doc["webui"]["host"] = value("0.0.0.0");
+            doc["webui"]["host"] = webui_host_all_interfaces();
             fs::write(&bot_cfg, doc.to_string())?;
         }
         if adapter_cfg.exists() {
@@ -326,6 +328,32 @@ impl App {
             fs::write(&adapter_cfg, doc.to_string())?;
         }
         Ok(())
+    }
+
+    pub(crate) fn confirm_clear_maibot_data_files(&self) -> Result<()> {
+        let cfg = self.require_config()?;
+        let data_dir = data::maibot_data_dir(&cfg.mai_path);
+        self.clear();
+        self.print_header(None);
+        self.print_section("清空数据文件", "保留 webui.json，删除 MaiBot/data 其余内容");
+        self.print_kv("目标目录", &data_dir.display().to_string());
+        self.print_hint("此操作会删除知识库缓存、运行数据和子目录，无法由管理器自动恢复。");
+        self.print_line();
+        if !Confirm::with_theme(&self.theme)
+            .with_prompt("确认清空 MaiBot/data 中除 webui.json 外的所有内容？")
+            .default(false)
+            .interact()?
+        {
+            return Ok(());
+        }
+        let removed = self.clear_maibot_data_files()?;
+        self.pause(&format!("已清理 {removed} 个条目，按回车返回"))?;
+        Ok(())
+    }
+
+    pub(crate) fn clear_maibot_data_files(&self) -> Result<usize> {
+        let cfg = self.require_config()?;
+        data::clear_maibot_data_dir(&data::maibot_data_dir(&cfg.mai_path))
     }
 
     pub(crate) fn modify_adapter_config(&self) -> Result<()> {
@@ -444,6 +472,29 @@ impl App {
         }
         Ok(())
     }
+}
+
+fn webui_host_all_interfaces() -> Item {
+    let mut host = Array::default();
+    host.push("0.0.0.0");
+    host.push("::");
+    value(host)
+}
+
+fn webui_host_display(doc: &DocumentMut) -> String {
+    let host = &doc["webui"]["host"];
+    if let Some(value) = host.as_str() {
+        return value.to_string();
+    }
+    if let Some(array) = host.as_array() {
+        return array
+            .iter()
+            .filter_map(|value| value.as_str())
+            .find(|value| *value == "0.0.0.0" || *value == "::")
+            .unwrap_or("127.0.0.1")
+            .to_string();
+    }
+    "0.0.0.0".to_string()
 }
 
 fn cached_public_ip(app: &App, cached: &mut Option<String>) -> String {

@@ -10,6 +10,9 @@ use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 pub(crate) struct PluginSummary {
@@ -18,7 +21,6 @@ pub(crate) struct PluginSummary {
     pub(crate) author: String,
     pub(crate) version: String,
     pub(crate) description: String,
-    pub(crate) has_requirements: bool,
     pub(crate) dir_name: String,
 }
 
@@ -89,7 +91,6 @@ impl App {
             author,
             version,
             description,
-            has_requirements: dir.join("requirements.txt").exists(),
             dir_name: dir
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -227,7 +228,7 @@ impl App {
     }
 
     pub(crate) fn install_plugin_from_input(&self, input: &str) -> Result<()> {
-        let (root, maibot_dir, plugins_dir, venv_activate, py_env) = self.plugin_context()?;
+        let (_, _, plugins_dir, _, _) = self.plugin_context()?;
         let url = convert_github_url(input, "https://github.com");
         let repo_name = url
             .rsplit('/')
@@ -241,11 +242,36 @@ impl App {
             None,
             InstallMode::Normal,
         )?;
-        let req = plugin_path.join("requirements.txt");
-        if req.exists() {
-            self.install_requirements(&root, &maibot_dir, &venv_activate, &py_env, &req)?;
-        }
+        println!("插件已同步: {}", plugin_path.display());
         Ok(())
+    }
+
+    pub(crate) fn update_plugin(&self, name: &str) -> Result<()> {
+        let (root, _, plugins_dir, _, _) = self.plugin_context()?;
+        let path = self
+            .require_plugin_dir_by_id(&plugins_dir, name)
+            .or_else(|_| {
+                let path = plugins_dir.join(name);
+                if path.exists() {
+                    Ok(path)
+                } else {
+                    bail!("插件目录不存在: {name}")
+                }
+            })?;
+        if !path.join(".git").exists() {
+            bail!("插件不是 Git 仓库，无法自动更新: {}", path.display());
+        }
+        self.ensure_clean_worktree(&path, false, GitDirtyMode::Ask)?;
+        self.run_shell(&with_macos_tools_path(
+            &root,
+            &format!("cd '{}' && git pull --ff-only", shell_escape(&path)),
+        ))?;
+        println!("插件已更新: {}", path.display());
+        Ok(())
+    }
+
+    pub(crate) fn plugin_update_status(&self, root: &Path, dir: &Path) -> String {
+        plugin_update_status(root, dir)
     }
 
     pub(crate) fn remove_plugin(&self, name: &str) -> Result<()> {
@@ -255,17 +281,6 @@ impl App {
             bail!("插件目录不存在: {name}");
         }
         fs::remove_dir_all(path)?;
-        Ok(())
-    }
-
-    pub(crate) fn install_plugin_dependencies(&self, name: &str) -> Result<()> {
-        let (root, maibot_dir, plugins_dir, venv_activate, py_env) = self.plugin_context()?;
-        let req = plugins_dir.join(name).join("requirements.txt");
-        if req.exists() {
-            self.install_requirements(&root, &maibot_dir, &venv_activate, &py_env, &req)?;
-        } else {
-            println!("插件没有 requirements.txt: {name}");
-        }
         Ok(())
     }
 
@@ -287,7 +302,7 @@ impl App {
         loop {
             self.clear();
             self.print_header(None);
-            self.print_section("插件管理", "安装、卸载和补装 Python 依赖");
+            self.print_section("插件管理", "安装、更新和卸载插件");
             self.print_kv("插件目录", &plugins_dir.display().to_string());
             let plugins = list_plugins(&plugins_dir)?;
             self.print_kv("插件数量", &plugins.len().to_string());
@@ -297,9 +312,9 @@ impl App {
                 self.print_kv("已安装插件", &plugins.join(", "));
             }
             let actions = [
-                ActionItem::primary("安装插件", "从 GitHub 仓库安装或更新插件"),
+                ActionItem::primary("安装插件", "从 GitHub 仓库安装或同步插件"),
+                ActionItem::normal("更新插件", "拉取选定插件仓库的最新提交"),
                 ActionItem::destructive("卸载插件", "删除选定插件目录"),
-                ActionItem::normal("修复依赖", "为选定插件安装 requirements"),
                 ActionItem::back("返回", "回到主菜单"),
             ];
             let choice = self.select_action("选择插件操作", &actions)?;
@@ -317,11 +332,11 @@ impl App {
                         continue;
                     }
                     let idx = Select::with_theme(&self.theme)
-                        .with_prompt("选择要卸载的插件")
+                        .with_prompt("选择要更新的插件")
                         .items(&plugins)
                         .default(0)
                         .interact()?;
-                    self.remove_plugin(&plugins[idx])
+                    self.update_plugin(&plugins[idx])
                 }
                 2 => {
                     let plugins = list_plugins(&plugins_dir)?;
@@ -330,11 +345,11 @@ impl App {
                         continue;
                     }
                     let idx = Select::with_theme(&self.theme)
-                        .with_prompt("选择要安装依赖的插件")
+                        .with_prompt("选择要卸载的插件")
                         .items(&plugins)
                         .default(0)
                         .interact()?;
-                    self.install_plugin_dependencies(&plugins[idx])
+                    self.remove_plugin(&plugins[idx])
                 }
                 _ => break,
             };
@@ -344,33 +359,84 @@ impl App {
         }
         Ok(())
     }
+}
 
-    pub(crate) fn install_requirements(
-        &self,
-        root: &Path,
-        maibot_dir: &Path,
-        venv_activate: &Path,
-        py_env: &str,
-        req: &Path,
-    ) -> Result<()> {
-        if py_env == "uv" {
-            self.run_shell(&with_macos_tools_path(
-                root,
-                &format!(
-                    "cd '{}' && uv pip install -r '{}'",
-                    shell_escape(maibot_dir),
-                    shell_escape(req)
-                ),
-            ))
+fn plugin_update_status(root: &Path, dir: &Path) -> String {
+    if !dir.join(".git").exists() {
+        return "非 Git 仓库".to_string();
+    }
+    let local = git_output(root, dir, ["rev-parse", "HEAD"]);
+    let upstream = git_output(
+        root,
+        dir,
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    );
+    if let Some(upstream) = upstream {
+        let _ = run_git(root, dir, ["fetch", "--quiet"]);
+        if let Some(remote) = git_output(root, dir, ["rev-parse", upstream.trim()]) {
+            if local.as_deref() == Some(remote.trim()) {
+                "已最新".to_string()
+            } else {
+                "有更新".to_string()
+            }
         } else {
-            self.run_shell(&with_macos_tools_path(
-                root,
-                &format!(
-                    ". '{}' && pip install -r '{}'",
-                    shell_escape(venv_activate),
-                    shell_escape(req)
-                ),
-            ))
+            "更新状态未知".to_string()
         }
+    } else {
+        "更新状态未知".to_string()
+    }
+}
+
+fn git_output<const N: usize>(root: &Path, dir: &Path, args: [&str; N]) -> Option<String> {
+    run_git(root, dir, args)
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|value| !value.is_empty())
+}
+
+fn run_git<const N: usize>(
+    root: &Path,
+    dir: &Path,
+    args: [&str; N],
+) -> std::io::Result<std::process::Output> {
+    let mut command = Command::new("git");
+    command
+        .args(args)
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut paths = crate::utils::macos_path_entries();
+    if let Some(current_path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&current_path));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        command.env("PATH", joined);
+    }
+    command.env("UV_CACHE_DIR", root.join("tools").join("uv-cache"));
+    command.env("UV_PYTHON_INSTALL_DIR", root.join("tools").join("python"));
+    command_output_with_timeout(&mut command, Duration::from_secs(6))
+}
+
+fn command_output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> std::io::Result<std::process::Output> {
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            return child.wait_with_output();
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }

@@ -27,7 +27,7 @@
 * **LLBot / Napcat 安装**：Linux 使用 LLBot CLI + NapCat Docker；Windows 使用 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限；macOS 当前保留清晰的平台能力说明入口。
 * **依赖自检**：Linux 自动检测包管理器并补装基础工具；Windows 缺少 Git / uv / Python 时会优先下载便携工具到 MaiBot 安装目录；macOS 缺少 Homebrew 时会调用官方脚本安装，并通过 Homebrew 补齐 Git / uv / Python。
 * **配置访问**：集中查看当前平台已支持的 WebUI 地址与密钥；TUI 内使用居中弹窗展示汇总，CLI 直接输出文本；初始化访问配置带二次确认。
-* **插件管理**：安装、卸载插件并按需补装依赖。
+* **插件管理**：安装、更新和卸载插件。
 
 
 ---
@@ -411,8 +411,10 @@ maibot llbot password <新密码>   # 写入 LLBot WebUI 密码文件
 
 ```bash
 maibot access show              # 直接输出配置地址与密钥
-maibot access init              # 绑定 WebUI 到 0.0.0.0（Linux/Windows 同时启用 Napcat Adapter，macOS 保留核心配置能力）
+maibot access init              # 绑定 WebUI 到所有 IPv4/IPv6 地址（Linux/Windows 同时启用 Napcat Adapter，macOS 保留核心配置能力）
 maibot access init --yes        # 跳过交互确认直接应用（适合确信防火墙安全的脚本环境）
+maibot access clear-data        # 清空 MaiBot/data 中除 webui.json 外的所有内容，默认需要确认
+maibot access clear-data --yes  # 跳过确认直接清理数据文件
 
 # Adapter 黑白名单设置
 maibot access adapter show                      # 查看群聊、私聊和封禁 QQ 配置
@@ -431,8 +433,8 @@ maibot access adapter ban-remove 10001          # 从封禁列表移除 QQ
 
 ```bash
 maibot plugin list                             # 列出 MaiBot/plugins 下的插件目录
-maibot plugin install username/repo            # 安装/更新插件 (支持完整 URL 或 username/repo，以 _manifest.json 的 id 命名目录)
-maibot plugin deps <插件目录名>                  # 为已安装插件重新安装 requirements.txt
+maibot plugin install username/repo            # 安装/同步插件 (支持完整 URL 或 username/repo，以 _manifest.json 的 id 命名目录)
+maibot plugin update <插件目录名>                # 拉取已安装插件仓库的最新提交
 maibot plugin remove <插件目录名>                # 删除对应插件目录
 
 ```
@@ -465,7 +467,7 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 * Windows 缺失 Git / uv / Python 时会在 MaiBot 安装目录的 `tools` 子目录准备便携工具链，不会写入系统安装目录。
 * macOS 缺少 Homebrew 时会调用 Homebrew 官方安装脚本；NapCat / LLBot 在当前平台保留说明入口。
 * Docker、GitHub、PyPI、NapCat / LLBot Release 下载都依赖目标机器的网络。
-* `初始化 MaiBot 访问配置` 会把 WebUI 绑定到 `0.0.0.0`，相当于把端口暴露给外网，请确认已设置 token 或防火墙策略。
+* `初始化 MaiBot 访问配置` 会把 WebUI 绑定到 `["0.0.0.0", "::"]`，相当于把端口暴露给外网，请确认已设置 token 或防火墙策略。
 * NapCat 的 `docker-compose.yml` 仅在首次安装时写入，更新时不会覆盖你的自定义修改；如需重置请手动删除该文件再运行安装。
 
 ---

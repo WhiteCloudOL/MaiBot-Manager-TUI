@@ -8,13 +8,13 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
             let input = crate::cli::require_arg(args, 1, "install <GitHub地址或username/repo>")?;
             app.install_plugin_from_input(input)
         }
+        "update" => {
+            let name = crate::cli::require_arg(args, 1, "update <插件目录名>")?;
+            app.update_plugin(name)
+        }
         "remove" | "uninstall" => {
             let name = crate::cli::require_arg(args, 1, "remove <插件目录名>")?;
             app.remove_plugin(name)
-        }
-        "deps" | "requirements" => {
-            let name = crate::cli::require_arg(args, 1, "deps <插件目录名>")?;
-            app.install_plugin_dependencies(name)
         }
         "-h" | "--help" | "help" => {
             crate::cli::print_help();

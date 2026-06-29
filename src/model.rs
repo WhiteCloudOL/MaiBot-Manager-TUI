@@ -229,6 +229,8 @@ pub struct AppState {
     pub deploy_plan: Option<InstallPlan>,
     pub popup: Option<DashboardPopup>,
     selections: [usize; 7],
+    deploy_choice_selections: [usize; 9],
+    deploy_choice_dirty: [bool; 9],
 }
 
 pub type DashboardState = AppState;
@@ -302,6 +304,46 @@ impl AppState {
     pub fn clear_status_message(&mut self) {
         self.status_message_override = None;
     }
+
+    pub fn deploy_choice_selection(&self, field: PlanField) -> usize {
+        self.deploy_choice_selections[field.index()]
+    }
+
+    pub fn set_deploy_choice_selection(&mut self, field: PlanField, value: usize) {
+        let idx = field.index();
+        self.deploy_choice_selections[idx] = value;
+        self.deploy_choice_dirty[idx] = true;
+    }
+
+    pub fn commit_deploy_choice_selection(&mut self, field: PlanField, value: usize) {
+        let idx = field.index();
+        self.deploy_choice_selections[idx] = value;
+        self.deploy_choice_dirty[idx] = false;
+    }
+
+    pub fn sync_deploy_choice_selection(
+        &mut self,
+        field: PlanField,
+        len: usize,
+        active_idx: usize,
+    ) -> usize {
+        let idx = field.index();
+        if len == 0 {
+            self.deploy_choice_selections[idx] = 0;
+            self.deploy_choice_dirty[idx] = false;
+            return 0;
+        }
+        if !self.deploy_choice_dirty[idx] || self.deploy_choice_selections[idx] >= len {
+            self.deploy_choice_selections[idx] = active_idx.min(len - 1);
+            self.deploy_choice_dirty[idx] = false;
+        }
+        self.deploy_choice_selections[idx].min(len - 1)
+    }
+
+    pub fn reset_deploy_choice_selections(&mut self) {
+        self.deploy_choice_selections = [0; 9];
+        self.deploy_choice_dirty = [false; 9];
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -329,6 +371,7 @@ pub struct DashboardChoice {
     pub label: String,
     pub detail: String,
     pub active: bool,
+    pub selected: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -353,11 +396,17 @@ pub struct DashboardView {
 pub enum DashboardEvent {
     Activate,
     ClearSearch,
+    CommitDeployChoice {
+        field: PlanField,
+        choice_idx: usize,
+    },
     Exit,
     ResetDeployPlan,
     RunDeployPlan,
     #[allow(dead_code)]
-    AttachTerminal { session: String },
+    AttachTerminal {
+        session: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,6 +420,22 @@ pub enum PlanField {
     PipSource,
     BotProtocols,
     DockerMirror,
+}
+
+impl PlanField {
+    pub fn index(self) -> usize {
+        match self {
+            Self::InstallPath => 0,
+            Self::InstallMode => 1,
+            Self::PythonEnv => 2,
+            Self::VenvMode => 3,
+            Self::MaiBotBranch => 4,
+            Self::GithubProxy => 5,
+            Self::PipSource => 6,
+            Self::BotProtocols => 7,
+            Self::DockerMirror => 8,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

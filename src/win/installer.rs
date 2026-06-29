@@ -108,8 +108,6 @@ impl App {
                     }
                     KeyCode::Char(' ') => match entries.get(selected).cloned() {
                         Some(PlannerEntry::Choice(field, choice_idx)) => {
-                            self.apply_planner_choice(current, plan, field, choice_idx)?;
-                            self.save_config(&self.plan_to_config(plan))?;
                             target = Some(PlannerEntry::Choice(field, choice_idx));
                         }
                         Some(PlannerEntry::Field(field)) if field != PlanField::InstallPath => {
@@ -207,8 +205,8 @@ impl App {
             }
             PlanField::GithubProxy => {
                 let mut items = vec!["自动测速选择最佳线路".into(), "官方直连".into()];
-                items.push("自定义镜像源".into());
                 items.extend(github_mirrors().iter().map(|v| (*v).to_string()));
+                items.push("自定义镜像源".into());
                 items
             }
             PlanField::PipSource => vec![
@@ -306,14 +304,14 @@ impl App {
                     plan.github_proxy.is_empty()
                 } else if choice_idx == 1 {
                     plan.github_proxy == "https://github.com"
-                } else if choice_idx == 2 {
+                } else if choice_idx >= 2 && choice_idx < 2 + github_mirrors().len() {
+                    plan.github_proxy == github_mirrors()[choice_idx - 2]
+                } else if choice_idx == 2 + github_mirrors().len() {
                     !plan.github_proxy.is_empty()
                         && plan.github_proxy != "https://github.com"
                         && !github_mirrors()
                             .iter()
                             .any(|mirror| *mirror == plan.github_proxy)
-                } else if choice_idx >= 3 && choice_idx < 3 + github_mirrors().len() {
-                    plan.github_proxy == github_mirrors()[choice_idx - 3]
                 } else {
                     false
                 }
@@ -455,7 +453,10 @@ impl App {
             PlanField::GithubProxy => match choice_idx {
                 0 => plan.github_proxy.clear(),
                 1 => plan.github_proxy = "https://github.com".into(),
-                2 => {
+                idx if idx >= 2 && idx < 2 + github_mirrors().len() => {
+                    plan.github_proxy = github_mirrors()[idx - 2].to_string();
+                }
+                idx if idx == 2 + github_mirrors().len() => {
                     let input: String = self.with_prompt_mode(|| {
                         Input::with_theme(&self.theme)
                             .with_prompt("输入自定义镜像源")
@@ -463,9 +464,6 @@ impl App {
                             .map_err(Into::into)
                     })?;
                     plan.github_proxy = normalize_url(&input);
-                }
-                idx if idx >= 3 && idx < 3 + github_mirrors().len() => {
-                    plan.github_proxy = github_mirrors()[idx - 3].to_string();
                 }
                 _ => {}
             },

@@ -10,8 +10,8 @@ use std::{
 };
 
 use crate::model::{
-    DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardState, DashboardTab,
-    DashboardView, InstallPlan, PlanField, StatusKind, deploy_card_field,
+    DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardPopup, DashboardState,
+    DashboardTab, DashboardView, InstallPlan, PlanField, StatusKind, deploy_card_field,
 };
 use crate::theme::AppTheme;
 use crate::ui::{ActionItem, StatusCard};
@@ -152,9 +152,21 @@ impl App {
                         break;
                     }
                 }
+                DashboardEvent::CommitDeployChoice { field, choice_idx } => {
+                    let current = self.load_config().unwrap_or_default();
+                    let mut plan = dashboard.deploy_plan.take().unwrap_or_else(|| {
+                        self.build_default_install_plan(&current)
+                            .unwrap_or_else(|_| self.build_recommended_defaults())
+                    });
+                    self.apply_planner_choice(&current, &mut plan, field, choice_idx)?;
+                    dashboard.deploy_plan = Some(plan);
+                    dashboard.commit_deploy_choice_selection(field, choice_idx);
+                    dashboard.set_status_message("部署选项已确认");
+                }
                 DashboardEvent::ResetDeployPlan => {
                     let reset = self.build_recommended_defaults();
                     dashboard.deploy_plan = Some(reset);
+                    dashboard.reset_deploy_choice_selections();
                     dashboard.set_status_message("已恢复推荐默认部署配置");
                 }
                 DashboardEvent::RunDeployPlan => {
@@ -311,7 +323,7 @@ impl App {
                     .unwrap_or("插件详情"),
                 selected
                     .map(|card| card.subtitle.as_str())
-                    .unwrap_or("安装、卸载与依赖修复集中管理。"),
+                    .unwrap_or("安装、更新与卸载集中管理。"),
             ),
             DashboardTab::About => (
                 "关于",
@@ -461,7 +473,7 @@ impl App {
                     "空目录"
                 }
                 .to_string(),
-                detail: "安装、卸载和修复依赖都从这里进入。".to_string(),
+                detail: "安装、更新和卸载都从这里进入。".to_string(),
                 kind: if plugin_count > 0 {
                     StatusKind::Neutral
                 } else {
@@ -622,10 +634,19 @@ impl App {
                 id: "access-init",
                 icon: "󰑮",
                 title: "初始化远程访问".to_string(),
-                subtitle: "绑定 0.0.0.0 并启用 Adapter".to_string(),
+                subtitle: "绑定 IPv4/IPv6 全地址并启用 Adapter".to_string(),
                 badge: "初始化".to_string(),
                 detail: "适合首次部署后快速开放 WebUI 与协议端访问。".to_string(),
                 kind: StatusKind::Running,
+            },
+            DashboardCard {
+                id: "access-clear-data",
+                icon: "󰆴",
+                title: "清空数据文件".to_string(),
+                subtitle: "保留 webui.json，清理 MaiBot/data".to_string(),
+                badge: "需确认".to_string(),
+                detail: "删除 MaiBot/data 下除 webui.json 外的文件和子目录。".to_string(),
+                kind: StatusKind::Warning,
             },
             DashboardCard {
                 id: "adapter",
@@ -671,13 +692,15 @@ impl App {
             id: "plugin-center",
             icon: "󰏗",
             title: "插件管理".to_string(),
-            subtitle: "安装、卸载与依赖修复".to_string(),
+            subtitle: "安装、更新与卸载".to_string(),
             badge: format!("{} 个插件", plugins.len()),
-            detail: "集中安装、卸载与修复插件依赖。".to_string(),
+            detail: "集中安装、更新与卸载插件。".to_string(),
             kind: StatusKind::Neutral,
         }];
         for plugin in plugins {
-            let summary = self.read_plugin_summary(&plugins_dir.join(&plugin)).ok();
+            let plugin_dir = plugins_dir.join(&plugin);
+            let summary = self.read_plugin_summary(&plugin_dir).ok();
+            let update_status = self.plugin_update_status(&plugin_dir);
             cards.push(DashboardCard {
                 id: "plugin-item",
                 icon: "󰐱",
@@ -689,19 +712,11 @@ impl App {
                     .as_ref()
                     .map(|summary| format!("{} · {}", summary.version, summary.author))
                     .unwrap_or_else(|| "已安装插件 · 可在插件中心维护".to_string()),
-                badge: if summary
-                    .as_ref()
-                    .is_some_and(|summary| summary.has_requirements)
-                {
-                    "已安装 · 含依赖"
-                } else {
-                    "已安装"
-                }
-                .to_string(),
+                badge: update_status,
                 detail: summary
                     .as_ref()
                     .map(|summary| summary.description.clone())
-                    .unwrap_or_else(|| "支持卸载、requirements 修复和目录规范化。".to_string()),
+                    .unwrap_or_else(|| "支持更新、卸载和目录规范化。".to_string()),
                 kind: StatusKind::Running,
             });
         }
@@ -825,7 +840,7 @@ impl App {
                             }
                             "plugins" => {
                                 lines.push("插件目录会按 manifest id 自动规范化命名。".to_string());
-                                lines.push("可在插件中心直接执行依赖修复或卸载。".to_string());
+                                lines.push("可在插件中心直接执行更新或卸载。".to_string());
                             }
                             _ => {}
                         }
@@ -950,9 +965,22 @@ impl App {
                             lines.push("完整汇总可确认 WebUI 地址与 token。".to_string());
                         }
                         "access-init" => {
-                            lines.push("会把 MaiBot WebUI host 改为 0.0.0.0。".to_string());
+                            lines.push(
+                                "会把 MaiBot WebUI host 改为 [\"0.0.0.0\", \"::\"]。".to_string(),
+                            );
                             lines.push("会同时启用 NapCat Adapter 插件。".to_string());
                             lines.push("执行后需要重启 MaiBot 才会完全生效。".to_string());
+                        }
+                        "access-clear-data" => {
+                            lines.push(format!(
+                                "目标目录: {}",
+                                PathBuf::from(&cfg.mai_path)
+                                    .join("MaiBot")
+                                    .join("data")
+                                    .display()
+                            ));
+                            lines.push("会保留 webui.json，删除其余文件和子目录。".to_string());
+                            lines.push("按 Enter 后会先弹出确认对话框。".to_string());
                         }
                         "adapter" => {
                             lines.push("可维护群聊白名单/黑名单、私聊名单和封禁 QQ。".to_string());
@@ -963,7 +991,9 @@ impl App {
                         _ => {}
                     }
                 } else {
-                    lines.push("初始化会把 WebUI 绑定到 0.0.0.0，并启用 Adapter。".to_string());
+                    lines.push(
+                        "初始化会把 WebUI 绑定到 IPv4/IPv6 全地址，并启用 Adapter。".to_string(),
+                    );
                 }
             }
             DashboardTab::Plugins => {
@@ -981,21 +1011,14 @@ impl App {
                                 lines.push(format!("ID: {}", summary.id));
                                 lines.push(format!("作者: {}", summary.author));
                                 lines.push(format!("版本: {}", summary.version));
-                                lines.push(format!(
-                                    "依赖: {}",
-                                    if summary.has_requirements {
-                                        "requirements.txt"
-                                    } else {
-                                        "无额外依赖"
-                                    }
-                                ));
+                                lines.push(format!("更新状态: {}", card.badge));
                                 lines.push(format!("目录名: {}", summary.dir_name));
                             }
                         }
                     }
                 }
                 lines.push("插件目录按 _manifest.json 中的 id 规范化命名。".to_string());
-                lines.push("依赖修复会复用当前 Python/uv 安装策略。".to_string());
+                lines.push("插件更新会拉取仓库最新提交。".to_string());
                 if snapshot.has_config {
                     lines.push(format!(
                         "目录: {}",
@@ -1078,6 +1101,10 @@ impl App {
                             actions.push("初始化远程访问会写入 WebUI/Adapter 配置".to_string());
                             actions.push("会提示确认后写入 WebUI/Adapter 配置".to_string());
                         }
+                        "access-clear-data" => {
+                            actions.push("清理前会弹出确认对话框".to_string());
+                            actions.push("仅保留 MaiBot/data/webui.json".to_string());
+                        }
                         "adapter" => {
                             actions.push("黑白名单策略编辑会维护群聊与私聊名单".to_string());
                             actions.push("可维护群聊、私聊与封禁名单".to_string());
@@ -1093,13 +1120,13 @@ impl App {
             DashboardTab::Plugins => {
                 if let Some(card) = selected {
                     if card.id == "plugin-item" {
-                        actions.push("插件维护动作包含依赖修复与卸载".to_string());
-                        actions.push("可执行卸载或修复依赖".to_string());
+                        actions.push("插件维护动作包含更新与卸载".to_string());
+                        actions.push("可执行更新或卸载".to_string());
                     } else {
-                        actions.push("完整插件中心包含安装、卸载与修复".to_string());
+                        actions.push("完整插件中心包含安装、更新与卸载".to_string());
                     }
                 } else {
-                    actions.push("完整插件中心包含安装、卸载与修复".to_string());
+                    actions.push("完整插件中心包含安装、更新与卸载".to_string());
                 }
                 actions.push("插件名称与 manifest 摘要可用于定位".to_string());
                 actions.push("右侧面板现在会显示 manifest 摘要与依赖状态".to_string());
@@ -1136,6 +1163,7 @@ impl App {
             .map(|(idx, label)| DashboardChoice {
                 detail: deploy_choice_detail(field, idx, &label),
                 active: self.planner_choice_active(plan, field, idx),
+                selected: false,
                 label,
             })
             .collect())
@@ -1270,6 +1298,22 @@ impl App {
                         self.handle_menu_result(self.initialize_maibot_access_config())?;
                         self.invalidate_dashboard_cache();
                         state.set_status_message("已执行访问初始化流程");
+                    }
+                    Some("access-clear-data") => {
+                        if let Some(card) = selected {
+                            state.popup = Some(DashboardPopup {
+                                title: card.title.clone(),
+                                subtitle: card.subtitle.clone(),
+                                lines: vec![
+                                    format!("状态: {}", card.badge),
+                                    card.detail.clone(),
+                                    "会保留 MaiBot/data/webui.json。".to_string(),
+                                    "确认后会删除其余文件和子目录。".to_string(),
+                                ],
+                                actions: vec!["确认清空数据".to_string(), "取消".to_string()],
+                                selected: 0,
+                            });
+                        }
                     }
                     Some("adapter") => {
                         self.handle_menu_result(self.modify_adapter_config())?;
@@ -1429,6 +1473,17 @@ impl App {
                     self.handle_menu_result(self.initialize_maibot_access_config())?;
                     self.invalidate_dashboard_cache();
                 }
+                Some("access-clear-data") if action_idx == 0 => {
+                    match self.clear_maibot_data_files() {
+                        Ok(removed) => {
+                            state.set_status_message(format!("已清理 {removed} 个数据条目"));
+                            self.invalidate_dashboard_cache();
+                        }
+                        Err(error) => {
+                            state.set_status_message(format!("清理失败: {error}"));
+                        }
+                    }
+                }
                 Some("adapter") if action_idx == 0 => {
                     self.handle_menu_result(self.modify_adapter_config())?;
                     self.invalidate_dashboard_cache();
@@ -1509,13 +1564,13 @@ impl App {
         };
         let summary = self.read_plugin_summary(&dir)?;
         let actions = [
-            ActionItem::primary("修复依赖", "安装该插件的 requirements.txt"),
+            ActionItem::primary("更新插件", "拉取该插件仓库的最新提交"),
             ActionItem::destructive("卸载插件", "删除该插件目录"),
             ActionItem::back("返回", "回到插件中心"),
         ];
         let choice = self.select_action(&format!("管理插件：{}", summary.name), &actions)?;
         let result = match choice {
-            0 => self.install_plugin_dependencies(&summary.dir_name),
+            0 => self.update_plugin(&summary.dir_name),
             1 => self.remove_plugin(&summary.dir_name),
             _ => Ok(()),
         };
@@ -1542,7 +1597,7 @@ impl App {
         };
         let summary = self.read_plugin_summary(&dir)?;
         let result = match action_idx {
-            0 => self.install_plugin_dependencies(&summary.dir_name),
+            0 => self.update_plugin(&summary.dir_name),
             1 => self.remove_plugin(&summary.dir_name),
             _ => Ok(()),
         };

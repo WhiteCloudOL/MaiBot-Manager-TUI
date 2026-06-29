@@ -7,9 +7,9 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
         "show" => app.print_access_info(),
         "init" => {
             let prompt = if cfg!(target_os = "macos") {
-                "确认将 MaiBot WebUI 绑定到 0.0.0.0？"
+                "确认将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址？"
             } else {
-                "确认将 MaiBot WebUI 绑定到 0.0.0.0 并启用 Napcat Adapter？"
+                "确认将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用 Napcat Adapter？"
             };
             let confirmed = args[1..].iter().any(|arg| arg == "--yes" || arg == "-y")
                 || Confirm::with_theme(&app.theme)
@@ -22,6 +22,20 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
             }
             app.apply_maibot_access_config()?;
             println!("初始化完成，请重启 MaiBot 后生效");
+            Ok(())
+        }
+        "clear-data" => {
+            let confirmed = args[1..].iter().any(|arg| arg == "--yes" || arg == "-y")
+                || Confirm::with_theme(&app.theme)
+                    .with_prompt("确认清空 MaiBot/data 中除 webui.json 外的所有内容？")
+                    .default(false)
+                    .interact()?;
+            if !confirmed {
+                println!("已取消清空数据文件");
+                return Ok(());
+            }
+            let removed = app.clear_maibot_data_files()?;
+            println!("已清理 {removed} 个数据条目，保留 webui.json");
             Ok(())
         }
         "adapter" => run_adapter(app, &args[1..]),
