@@ -39,6 +39,7 @@ const MAX_CONTENT_WIDTH: usize = 112;
 const PANEL_WIDTH: usize = 76;
 const KEY_WIDTH: usize = 14;
 const MENU_REDRAW_TICK: Duration = Duration::from_millis(100);
+const DASHBOARD_BACKGROUND_TICK: Duration = Duration::from_millis(250);
 
 const BG_BASE: Color = Color::Rgb(22, 17, 12);
 const SURFACE_DIM: Color = Color::Rgb(30, 24, 16);
@@ -513,6 +514,19 @@ impl App {
 
         loop {
             let mut should_draw = false;
+            if !poll(DASHBOARD_BACKGROUND_TICK).context("等待 ratatui 按键失败")? {
+                if dashboard_idle_should_rebuild(&view, state) {
+                    view = refresh_dashboard_view(state, &mut render)?;
+                    should_draw = true;
+                }
+                if should_draw {
+                    terminal
+                        .draw(|frame| render_dashboard(frame, &view))
+                        .context("绘制 ratatui Dashboard 失败")?;
+                }
+                continue;
+            }
+
             match read().context("读取 ratatui 按键失败")? {
                 Event::Key(key) if is_key_input(key.kind) => {
                     match handle_dashboard_key(state, &view, key.code, key.modifiers) {
@@ -1622,6 +1636,10 @@ fn sync_app_mode(state: &mut DashboardState) {
     };
 }
 
+fn dashboard_idle_should_rebuild(view: &DashboardView, state: &DashboardState) -> bool {
+    view.background_refresh && view.active_tab == DashboardTab::Plugins && state.popup.is_none()
+}
+
 fn sync_cached_dashboard_view(view: &mut DashboardView, state: &mut DashboardState) {
     sync_app_mode(state);
     view.mode = state.mode;
@@ -2634,6 +2652,7 @@ mod tests {
             action_lines: Vec::new(),
             cards,
             selected,
+            background_refresh: false,
             empty_title: "没有匹配项".to_string(),
             empty_detail: "清空筛选后重试".to_string(),
         }
@@ -2708,6 +2727,7 @@ mod tests {
                 },
             ],
             selected: 0,
+            background_refresh: false,
             empty_title: String::new(),
             empty_detail: String::new(),
         };
@@ -2893,6 +2913,30 @@ mod tests {
     }
 
     #[test]
+    fn plugin_page_idle_tick_rebuilds_for_background_status() {
+        let mut view = sample_dashboard_view(0);
+        let mut state = DashboardState::default();
+        view.active_tab = DashboardTab::Plugins;
+        view.background_refresh = true;
+        state.active_tab = DashboardTab::Plugins;
+
+        assert!(dashboard_idle_should_rebuild(&view, &state));
+
+        state.popup = Some(DashboardPopup {
+            title: "操作".to_string(),
+            subtitle: String::new(),
+            lines: Vec::new(),
+            actions: vec!["返回".to_string()],
+            selected: 0,
+        });
+        assert!(!dashboard_idle_should_rebuild(&view, &state));
+
+        state.popup = None;
+        view.active_tab = DashboardTab::Core;
+        assert!(!dashboard_idle_should_rebuild(&view, &state));
+    }
+
+    #[test]
     fn deploy_left_right_switch_steps_and_up_down_adjust_choices() {
         let mut view = DashboardView {
             mode: AppMode::ContentFocused,
@@ -2935,6 +2979,7 @@ mod tests {
                 },
             ],
             selected: 0,
+            background_refresh: false,
             empty_title: String::new(),
             empty_detail: String::new(),
         };
@@ -3076,6 +3121,7 @@ mod tests {
                 kind: StatusKind::Neutral,
             }],
             selected: 0,
+            background_refresh: false,
             empty_title: String::new(),
             empty_detail: String::new(),
         };

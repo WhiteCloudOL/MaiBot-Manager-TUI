@@ -388,6 +388,7 @@ pub struct DashboardView {
     pub action_lines: Vec<String>,
     pub cards: Vec<DashboardCard>,
     pub selected: usize,
+    pub background_refresh: bool,
     pub empty_title: String,
     pub empty_detail: String,
 }

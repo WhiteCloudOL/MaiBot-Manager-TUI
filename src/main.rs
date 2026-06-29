@@ -3,6 +3,7 @@
 mod cli;
 mod data;
 mod model;
+mod plugin_status;
 mod terminal;
 mod theme;
 mod ui;

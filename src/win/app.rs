@@ -12,6 +12,8 @@ use crate::model::{
     DashboardCard, DashboardChoice, DashboardEvent, DashboardFocus, DashboardPopup, DashboardState,
     DashboardTab, DashboardView, InstallPlan, PlanField, StatusKind, deploy_card_field,
 };
+use crate::plugin_status::PluginUpdateCache;
+use crate::plugins::windows_plugin_update_status;
 use crate::theme::AppTheme;
 use crate::ui::{ActionItem, StatusCard};
 use crate::utils::list_plugins;
@@ -41,6 +43,7 @@ struct DashboardRuntimeCache {
     refreshed_at: Option<Instant>,
     plugin_cards: Option<Vec<DashboardCard>>,
     plugin_cards_refreshed_at: Option<Instant>,
+    plugin_update_cache: PluginUpdateCache,
 }
 
 const DASHBOARD_STATUS_TTL: Duration = Duration::from_secs(10);
@@ -107,6 +110,7 @@ impl App {
         cache.refreshed_at = None;
         cache.plugin_cards = None;
         cache.plugin_cards_refreshed_at = None;
+        cache.plugin_update_cache.clear();
     }
 
     pub(crate) fn run(&mut self) -> Result<()> {
@@ -211,9 +215,19 @@ impl App {
             action_lines,
             cards: std::mem::take(&mut cards),
             selected,
+            background_refresh: self.dashboard_background_refresh(state.active_tab),
             empty_title: "没有匹配项".to_string(),
             empty_detail: "试试清空筛选，或先完成部署与安装。".to_string(),
         })
+    }
+
+    fn dashboard_background_refresh(&self, tab: DashboardTab) -> bool {
+        tab == DashboardTab::Plugins
+            && self
+                .dashboard_cache
+                .borrow()
+                .plugin_update_cache
+                .is_scanning()
     }
 
     fn dashboard_headers<'a>(
@@ -641,6 +655,12 @@ impl App {
 
     fn plugin_cards(&self) -> Result<Vec<DashboardCard>> {
         {
+            self.dashboard_cache
+                .borrow_mut()
+                .plugin_update_cache
+                .drain();
+        }
+        {
             let cache = self.dashboard_cache.borrow();
             if let (Some(cards), Some(refreshed_at)) =
                 (cache.plugin_cards.as_ref(), cache.plugin_cards_refreshed_at)
@@ -666,6 +686,21 @@ impl App {
 
         let plugins_dir = PathBuf::from(&cfg.mai_path).join("MaiBot").join("plugins");
         let plugins = list_plugins(&plugins_dir).unwrap_or_default();
+        let update_jobs = plugins
+            .iter()
+            .map(|plugin| (plugin.clone(), plugins_dir.join(plugin)))
+            .filter(|(_, dir)| dir.join(".git").exists())
+            .collect::<Vec<_>>();
+        {
+            self.dashboard_cache
+                .borrow_mut()
+                .plugin_update_cache
+                .begin_scan(
+                    Path::new(&cfg.mai_path),
+                    update_jobs,
+                    windows_plugin_update_status,
+                );
+        }
         let mut cards = vec![DashboardCard {
             id: "plugin-center",
             icon: "󰏗",
@@ -678,8 +713,11 @@ impl App {
         for plugin in plugins {
             let plugin_dir = plugins_dir.join(&plugin);
             let summary = self.read_plugin_summary(&plugin_dir).ok();
-            let update_status =
-                self.plugin_update_status(&PathBuf::from(&cfg.mai_path), &plugin_dir);
+            let update_status = self
+                .dashboard_cache
+                .borrow()
+                .plugin_update_cache
+                .status_for(&plugin, plugin_dir.join(".git").exists());
             cards.push(DashboardCard {
                 id: "plugin-item",
                 icon: "󰐱",
@@ -701,7 +739,7 @@ impl App {
         }
         let mut cache = self.dashboard_cache.borrow_mut();
         cache.plugin_cards = Some(cards.clone());
-        cache.plugin_cards_refreshed_at = Some(Instant::now());
+        cache.plugin_cards_refreshed_at = None;
         Ok(cards)
     }
 

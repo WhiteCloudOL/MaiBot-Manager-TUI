@@ -265,10 +265,6 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn plugin_update_status(&self, dir: &Path) -> String {
-        plugin_update_status(dir, None)
-    }
-
     pub(crate) fn remove_plugin(&self, name: &str) -> Result<()> {
         let (_, plugins_dir, _, _) = self.plugin_context()?;
         let path = plugins_dir.join(name);
@@ -354,6 +350,10 @@ impl App {
         }
         Ok(())
     }
+}
+
+pub(crate) fn linux_plugin_update_status(_root: PathBuf, dir: PathBuf) -> String {
+    plugin_update_status(&dir, None)
 }
 
 fn plugin_update_status(dir: &Path, git_env: Option<&dyn Fn(&mut Command)>) -> String {

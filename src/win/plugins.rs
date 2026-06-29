@@ -203,10 +203,6 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn plugin_update_status(&self, root: &Path, dir: &Path) -> String {
-        plugin_update_status(root, dir)
-    }
-
     pub(crate) fn remove_plugin(&self, name: &str) -> Result<()> {
         let (_, _, plugins_dir, _) = self.plugin_context()?;
         let path = plugins_dir.join(name);
@@ -291,6 +287,10 @@ impl App {
         }
         Ok(())
     }
+}
+
+pub(crate) fn windows_plugin_update_status(root: PathBuf, dir: PathBuf) -> String {
+    plugin_update_status(&root, &dir)
 }
 
 fn plugin_update_status(root: &Path, dir: &Path) -> String {
