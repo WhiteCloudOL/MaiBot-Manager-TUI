@@ -24,7 +24,7 @@
 * **安装向导**：横向步骤条 + 当前项配置面板；左右切换安装项，上下切换当前项选项，安装/更新与恢复默认使用底部快捷键。
 * **Github 优选**：GitHub 官方线路与镜像源并行测速，自动选择最佳线路；全部失败时提供重试 / 直连 / 取消的回退选择。
 * **MaiBot 管理**：Linux 使用 `screen` 后台会话；Windows 使用独立进程 / 窗口启动；macOS 使用后台子进程，退出管理器后核心仍继续运行。首次启动需要确认 EULA 时，TUI 会提供交互终端选项，10 秒未选择则默认后台启动。
-* **协议端安装**：Linux 支持 LLBot CLI、NapCat Docker 与 SnowLuma Docker Compose；Windows 支持 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限；macOS 当前保留清晰的平台能力说明入口。
+* **协议端安装**：Linux 支持 LLBot CLI、NapCat Docker 与 SnowLuma Docker Compose；选择 NapCat / SnowLuma 时会分别默认同步对应 MaiBot Adapter。Windows 支持 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限；macOS 当前保留清晰的平台能力说明入口。
 * **依赖自检**：Linux 自动检测包管理器并补装基础工具；Windows 缺少 Git / uv / Python 时会优先下载便携工具到 MaiBot 安装目录；macOS 缺少 Homebrew 时会调用官方脚本安装，并通过 Homebrew 补齐 Git / uv / Python。
 * **配置访问**：集中查看当前平台已支持的 WebUI 地址与密钥；TUI 内使用居中弹窗展示汇总，CLI 直接输出文本；初始化访问配置带二次确认。
 * **插件管理**：安装、更新和卸载插件。
@@ -425,7 +425,7 @@ maibot snowluma remove-container                # 只删除容器，保留数据
 maibot snowluma exec                            # 进入容器 shell
 ```
 
-首次安装会在 `SnowLuma/.env` 写入随机 16 位 VNC 密码（包含大小写、数字和 `%@+-`）。访问汇总会显示 `http://<ip>:5099/` 与 `http://<ip>:6081/`；WebUI 仅尝试读取首次全新数据启动时日志输出的一次性临时密码，永久密码不会显示。Docker 准备完成后、写入并启动 SnowLuma Compose 前，若内存不超过 4 GB 且未启用 Swap，会询问是否创建 2 GB Swap；脚本可使用 `--snowluma-swap enable|skip`，省略该参数时仍会询问。若同名容器或默认端口被 Docker 容器占用，也会询问是否删除冲突容器后重建；脚本可使用 `--snowluma-conflict recreate|cancel`。
+首次安装会在 `SnowLuma/.env` 写入随机 16 位 VNC 密码（包含大小写、数字和 `%@+-`）。选择 SnowLuma 时还会默认同步 `Mai-with-u/MaiBot-SnowLuma-Adapter`，并在插件目录首次生成已启用的 `config.toml`：默认连接 `127.0.0.1:3001`，访问令牌和群/私聊名单留空，避免写入共享凭据或特定 QQ。访问汇总会显示 `http://<ip>:5099/` 与 `http://<ip>:6081/`；WebUI 仅尝试读取首次全新数据启动时日志输出的一次性临时密码，永久密码不会显示。Docker 准备完成后、写入并启动 SnowLuma Compose 前，若内存不超过 4 GB 且未启用 Swap，会询问是否创建 2 GB Swap；脚本可使用 `--snowluma-swap enable|skip`，省略该参数时仍会询问。若同名容器或默认端口被 Docker 容器占用，也会询问是否删除冲突容器后重建；脚本可使用 `--snowluma-conflict recreate|cancel`。
 
 *(注：也可以使用聚合入口，例如 `maibot protocol napcat restart`)*
 

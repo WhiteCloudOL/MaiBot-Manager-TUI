@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     model::*,
-    plugins::{NAPCAT_ADAPTER_PLUGIN_ID, NAPCAT_ADAPTER_REPO_NAME},
+    plugins::{NAPCAT_ADAPTER_PLUGIN_ID, NAPCAT_ADAPTER_REPO_NAME, SNOWLUMA_ADAPTER_REPO_NAME},
     terminal::{TerminalUiGuard, restore_terminal_state},
     utils::*,
 };
@@ -20,6 +20,49 @@ use std::{
 };
 
 const LLBOT_RELEASE_TAG_FILE: &str = ".maibot-llbot-release";
+const SNOWLUMA_ADAPTER_DEFAULT_CONFIG: &str = r#"[plugin]
+enabled = true
+enable_ada_debug_raw_message_log = false
+enable_ada_debug_raw_outbound_message_log = false
+enable_private_chat_tool = false
+qq_face_parse_mode = "description"
+config_version = "1.0.5"
+
+[luma_client]
+server = "127.0.0.1"
+port = 3001
+token = ""
+connection_id = ""
+reconnect_delay_sec = 5.0
+action_timeout_sec = 10.0
+
+[chat]
+enable_chat_list_filter = true
+show_dropped_chat_list_messages = false
+group_list_type = "whitelist"
+group_list = []
+private_list_type = "blacklist"
+private_list = []
+ban_user_id = []
+ban_qq_bot = false
+
+[notice]
+enabled = true
+enable_poke = true
+enable_friend_recall = true
+enable_group_recall = true
+enable_group_ban = true
+enable_group_msg_emoji_like = true
+enable_group_upload = true
+enable_group_increase = true
+enable_group_decrease = true
+enable_group_admin = true
+enable_essence = true
+enable_group_name = true
+
+[filters]
+ignore_self_message = true
+"#;
 
 fn snowluma_vnc_password() -> Result<String> {
     const UPPER: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -1082,13 +1125,26 @@ impl App {
             true,
             plan.git_dirty_mode,
         )?;
-        self.sync_plugin_repo_with_manifest_dir(
-            &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-Napcat-Adapter"),
-            &plan.install_path.join("MaiBot").join("plugins"),
-            NAPCAT_ADAPTER_REPO_NAME,
-            Some("main"),
-            plan.install_mode,
-        )?;
+        let plugins_dir = plan.install_path.join("MaiBot").join("plugins");
+        if plan.bot_protocols.contains(&BotProtocol::NapCat) {
+            self.sync_plugin_repo_with_manifest_dir(
+                &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-Napcat-Adapter"),
+                &plugins_dir,
+                NAPCAT_ADAPTER_REPO_NAME,
+                Some("main"),
+                plan.install_mode,
+            )?;
+        }
+        if plan.bot_protocols.contains(&BotProtocol::SnowLuma) {
+            let adapter_dir = self.sync_plugin_repo_with_manifest_dir(
+                &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-SnowLuma-Adapter"),
+                &plugins_dir,
+                SNOWLUMA_ADAPTER_REPO_NAME,
+                Some("main"),
+                plan.install_mode,
+            )?;
+            self.ensure_snowluma_adapter_config(&adapter_dir)?;
+        }
         self.setup_python_env(&plan)?;
         self.save_config(&self.plan_to_config(&plan))?;
         if plan.bot_protocols.contains(&BotProtocol::NapCat) {
@@ -1538,6 +1594,18 @@ impl App {
             "cd '{}' && docker compose up -d",
             shell_escape(&snowluma_dir)
         ))
+    }
+
+    fn ensure_snowluma_adapter_config(&self, adapter_dir: &Path) -> Result<()> {
+        let config_path = adapter_dir.join("config.toml");
+        if !config_path.exists() {
+            fs::write(&config_path, SNOWLUMA_ADAPTER_DEFAULT_CONFIG)?;
+            println!(
+                "已生成 SnowLuma Adapter 默认配置: {}",
+                config_path.display()
+            );
+        }
+        Ok(())
     }
 
     fn handle_snowluma_conflict(
