@@ -32,8 +32,10 @@ struct DashboardRuntimeSnapshot {
     has_config: bool,
     maibot_running: bool,
     napcat_running: bool,
+    snowluma_running: bool,
     llbot_running: bool,
     napcat_installed: bool,
+    snowluma_installed: bool,
     llbot_installed: bool,
     plugin_count: usize,
 }
@@ -81,6 +83,7 @@ impl App {
         let has_config = !config.mai_path.is_empty();
         let root = PathBuf::from(&config.mai_path);
         let napcat_installed = has_config && napcat_installed(&config.mai_path);
+        let snowluma_installed = has_config && snowluma_installed(&config.mai_path);
         let llbot_installed = has_config && llbot_installed(&config);
         let plugin_count = if has_config {
             list_plugins(&root.join("MaiBot").join("plugins"))
@@ -89,25 +92,30 @@ impl App {
         } else {
             0
         };
-        let (maibot_running, llbot_running, napcat_running) = if has_config {
+        let (maibot_running, llbot_running, napcat_running, snowluma_running) = if has_config {
             let docker_probe = std::thread::spawn(napcat_running);
+            let snowluma_probe = std::thread::spawn(snowluma_running);
             let screen_states = screen_sessions_exist(&["maibot", "llbot"]).unwrap_or_default();
             let napcat_running = docker_probe.join().unwrap_or(false);
+            let snowluma_running = snowluma_probe.join().unwrap_or(false);
             (
                 screen_states.first().copied().unwrap_or(false),
                 screen_states.get(1).copied().unwrap_or(false),
                 napcat_running,
+                snowluma_running,
             )
         } else {
-            (false, false, false)
+            (false, false, false, false)
         };
         let snapshot = DashboardRuntimeSnapshot {
             config,
             has_config,
             maibot_running,
             napcat_running,
+            snowluma_running,
             llbot_running,
             napcat_installed,
+            snowluma_installed,
             llbot_installed,
             plugin_count,
         };
@@ -305,7 +313,7 @@ impl App {
             ),
             DashboardTab::Protocol => (
                 "协议端服务",
-                "NapCatQQ 与 LuckyLilliaBot 统一收纳在协议端工作区。",
+                "NapCatQQ、LuckyLilliaBot 与 SnowLuma 统一收纳在协议端工作区。",
                 "协议端面板",
                 "先看状态，再进入细项维护",
                 selected
@@ -383,6 +391,8 @@ impl App {
         let llbot_running = snapshot.llbot_running;
         let napcat_running = snapshot.napcat_running;
         let napcat_installed = snapshot.napcat_installed;
+        let snowluma_running = snapshot.snowluma_running;
+        let snowluma_installed = snapshot.snowluma_installed;
         let llbot_installed = snapshot.llbot_installed;
         let plugin_count = snapshot.plugin_count;
         Ok(vec![
@@ -477,6 +487,41 @@ impl App {
                 },
             },
             DashboardCard {
+                id: "snowluma",
+                icon: "󰘨",
+                title: "SnowLuma".to_string(),
+                subtitle: if snowluma_running && !snowluma_installed {
+                    "容器运行中，配置待同步".to_string()
+                } else if snowluma_installed {
+                    if snowluma_running {
+                        "Docker 容器已运行"
+                    } else {
+                        "已安装，容器未运行"
+                    }
+                    .to_string()
+                } else {
+                    "部署计划中可启用（仅 Linux）".to_string()
+                },
+                badge: if snowluma_running {
+                    "运行中"
+                } else if snowluma_installed {
+                    "待启动"
+                } else {
+                    "未安装"
+                }
+                .to_string(),
+                detail: "WebUI、VNC、数据重建和容器管理入口。".to_string(),
+                kind: if snowluma_running && snowluma_installed {
+                    StatusKind::Running
+                } else if snowluma_running {
+                    StatusKind::Warning
+                } else if snowluma_installed {
+                    StatusKind::Stopped
+                } else {
+                    StatusKind::Neutral
+                },
+            },
+            DashboardCard {
                 id: "plugins",
                 icon: "󰏗",
                 title: "插件中心".to_string(),
@@ -557,6 +602,8 @@ impl App {
         let snapshot = self.dashboard_snapshot();
         let napcat_running = snapshot.napcat_running;
         let napcat_installed = snapshot.napcat_installed;
+        let snowluma_running = snapshot.snowluma_running;
+        let snowluma_installed = snapshot.snowluma_installed;
         let llbot_running = snapshot.llbot_running;
         let llbot_installed = snapshot.llbot_installed;
         Ok(vec![
@@ -620,6 +667,36 @@ impl App {
                     StatusKind::Neutral
                 },
             },
+            DashboardCard {
+                id: "snowluma",
+                icon: "󰘨",
+                title: "SnowLuma".to_string(),
+                subtitle: if snowluma_running && !snowluma_installed {
+                    "容器运行中 · 配置待同步".to_string()
+                } else if snowluma_installed {
+                    "Docker Compose 协议端 · WebUI + VNC".to_string()
+                } else {
+                    "尚未安装（仅 Linux）".to_string()
+                },
+                badge: if snowluma_running {
+                    "运行中"
+                } else if snowluma_installed {
+                    "待启动"
+                } else {
+                    "未安装"
+                }
+                .to_string(),
+                detail: "支持启停、日志、重建及删除数据后全新初始化。".to_string(),
+                kind: if snowluma_running && snowluma_installed {
+                    StatusKind::Running
+                } else if snowluma_running {
+                    StatusKind::Warning
+                } else if snowluma_installed {
+                    StatusKind::Stopped
+                } else {
+                    StatusKind::Neutral
+                },
+            },
         ])
     }
 
@@ -630,7 +707,7 @@ impl App {
                 id: "access-summary",
                 icon: "󰢹",
                 title: "访问汇总".to_string(),
-                subtitle: "MaiBot / NapCat / LLBot WebUI".to_string(),
+                subtitle: "MaiBot / 协议端 / SnowLuma WebUI".to_string(),
                 badge: if snapshot.has_config {
                     "可查看"
                 } else {
@@ -973,6 +1050,24 @@ impl App {
                             lines.push("控制台: screen -r llbot".to_string());
                             lines.push("日志: screen hardcopy + tail".to_string());
                         }
+                        "snowluma" => {
+                            lines.push(format!(
+                                "目录: {}",
+                                PathBuf::from(&cfg.mai_path).join("SnowLuma").display()
+                            ));
+                            lines.push(format!(
+                                "运行状态: {}",
+                                if snapshot.snowluma_running {
+                                    "docker compose 服务正在运行"
+                                } else {
+                                    "docker compose 服务未运行"
+                                }
+                            ));
+                            lines.push("容器名: snowluma".to_string());
+                            lines.push(
+                                "WebUI: 5099 · VNC: 6081 · 日志: docker compose logs".to_string(),
+                            );
+                        }
                         _ => {}
                     }
                 } else {
@@ -1045,14 +1140,13 @@ impl App {
                             .join("plugins");
                         if let Some(dir) =
                             self.find_plugin_dir_by_card_title(&plugins_dir, &card.title)
+                            && let Ok(summary) = self.read_plugin_summary(&dir)
                         {
-                            if let Ok(summary) = self.read_plugin_summary(&dir) {
-                                lines.push(format!("ID: {}", summary.id));
-                                lines.push(format!("作者: {}", summary.author));
-                                lines.push(format!("版本: {}", summary.version));
-                                lines.push(format!("更新状态: {}", card.badge));
-                                lines.push(format!("目录名: {}", summary.dir_name));
-                            }
+                            lines.push(format!("ID: {}", summary.id));
+                            lines.push(format!("作者: {}", summary.author));
+                            lines.push(format!("版本: {}", summary.version));
+                            lines.push(format!("更新状态: {}", card.badge));
+                            lines.push(format!("目录名: {}", summary.dir_name));
                         }
                     }
                 }
@@ -1120,6 +1214,14 @@ impl App {
                         "llbot" => {
                             actions.push("LLBot 管理支持控制台与密码维护".to_string());
                             actions.push("支持启动 / 停止 / 控制台 / 密码修改".to_string());
+                        }
+                        "snowluma" => {
+                            actions.push(
+                                "SnowLuma 使用 Docker Compose，并提供 WebUI 与 VNC".to_string(),
+                            );
+                            actions.push(
+                                "支持启动 / 停止 / 重启 / 日志 / 重建 / 删除数据重建".to_string(),
+                            );
                         }
                         _ => {
                             actions.push("协议端服务菜单包含平台专属操作".to_string());
@@ -1247,6 +1349,10 @@ impl App {
                         self.handle_menu_result(self.manage_llbot_menu())?;
                         self.invalidate_dashboard_cache();
                     }
+                    Some("snowluma") => {
+                        self.handle_menu_result(self.manage_snowluma_menu())?;
+                        self.invalidate_dashboard_cache();
+                    }
                     Some("plugins") => {
                         self.handle_menu_result(self.manage_plugins_menu())?;
                         self.invalidate_dashboard_cache();
@@ -1318,6 +1424,11 @@ impl App {
                         self.handle_menu_result(self.manage_llbot_menu())?;
                         self.invalidate_dashboard_cache();
                         state.set_status_message("已打开 LLBot 管理面板");
+                    }
+                    Some("snowluma") => {
+                        self.handle_menu_result(self.manage_snowluma_menu())?;
+                        self.invalidate_dashboard_cache();
+                        state.set_status_message("已打开 SnowLuma 管理面板");
                     }
                     _ => {
                         self.handle_menu_result(self.manage_bot_protocol_menu())?;
@@ -1396,7 +1507,9 @@ impl App {
             DashboardTab::Overview => {
                 match selected.map(|card| card.id) {
                     Some("maibot") => state.active_tab = DashboardTab::Core,
-                    Some("napcat") | Some("llbot") => state.active_tab = DashboardTab::Protocol,
+                    Some("napcat") | Some("llbot") | Some("snowluma") => {
+                        state.active_tab = DashboardTab::Protocol
+                    }
                     Some("plugins") => state.active_tab = DashboardTab::Plugins,
                     Some("workspace") => state.active_tab = DashboardTab::Deploy,
                     _ => {}
@@ -1485,6 +1598,33 @@ impl App {
                         4 => {
                             self.handle_menu_result(self.manage_llbot_password())?;
                             state.set_status_message("已执行 LLBot 密码修改");
+                        }
+                        _ => {}
+                    },
+                    Some("snowluma") => match action_idx {
+                        0 => {
+                            self.handle_menu_result(self.start_snowluma())?;
+                            state.set_status_message("已启动 SnowLuma");
+                        }
+                        1 => {
+                            self.handle_menu_result(self.stop_snowluma())?;
+                            state.set_status_message("已停止 SnowLuma");
+                        }
+                        2 => {
+                            self.handle_menu_result(self.restart_snowluma())?;
+                            state.set_status_message("已重启 SnowLuma");
+                        }
+                        3 => {
+                            self.handle_menu_result(self.print_snowluma_logs(100, true))?;
+                            state.set_status_message("已打开 SnowLuma 日志");
+                        }
+                        4 => {
+                            self.handle_menu_result(self.rebuild_snowluma())?;
+                            state.set_status_message("已重建 SnowLuma 容器");
+                        }
+                        5 => {
+                            self.handle_menu_result(self.recreate_snowluma_data())?;
+                            state.set_status_message("已删除 SnowLuma 数据并全新启动");
                         }
                         _ => {}
                     },
@@ -1715,10 +1855,18 @@ impl App {
 }
 
 pub(crate) fn napcat_running() -> bool {
+    docker_container_running("napcat")
+}
+
+pub(crate) fn snowluma_running() -> bool {
+    docker_container_running("snowluma")
+}
+
+fn docker_container_running(container: &str) -> bool {
     let mut child = match Command::new("docker")
         .arg("ps")
         .arg("--filter")
-        .arg("name=^napcat$")
+        .arg(format!("name=^{container}$"))
         .arg("--filter")
         .arg("status=running")
         .arg("--format")
@@ -1738,7 +1886,7 @@ pub(crate) fn napcat_running() -> bool {
                 if let Some(mut stdout) = child.stdout.take() {
                     let _ = stdout.read_to_string(&mut output);
                 }
-                return status.success() && output.lines().any(|line| line.trim() == "napcat");
+                return status.success() && output.lines().any(|line| line.trim() == container);
             }
             Ok(None) if started.elapsed() >= DOCKER_STATUS_TIMEOUT => {
                 let _ = child.kill();
@@ -1753,6 +1901,10 @@ pub(crate) fn napcat_running() -> bool {
 
 fn napcat_installed(mai_path: &str) -> bool {
     !mai_path.is_empty() && PathBuf::from(mai_path).join("NapCat").exists()
+}
+
+fn snowluma_installed(mai_path: &str) -> bool {
+    !mai_path.is_empty() && PathBuf::from(mai_path).join("SnowLuma").exists()
 }
 
 fn llbot_installed(cfg: &crate::model::AppConfig) -> bool {

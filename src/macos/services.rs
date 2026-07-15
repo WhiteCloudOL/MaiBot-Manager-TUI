@@ -18,6 +18,34 @@ const MAIBOT_PID_FILE: &str = "maibot.pid";
 const MAIBOT_LOG_FILE: &str = "maibot.log";
 
 impl App {
+    pub(crate) fn start_snowluma(&self) -> Result<()> {
+        bail!("SnowLuma 当前仅支持 Linux Docker 部署")
+    }
+    pub(crate) fn stop_snowluma(&self) -> Result<()> {
+        bail!("SnowLuma 当前仅支持 Linux Docker 部署")
+    }
+    pub(crate) fn restart_snowluma(&self) -> Result<()> {
+        bail!("SnowLuma 当前仅支持 Linux Docker 部署")
+    }
+    pub(crate) fn rebuild_snowluma(&self) -> Result<()> {
+        bail!("SnowLuma 当前仅支持 Linux Docker 部署")
+    }
+    pub(crate) fn recreate_snowluma_data(&self) -> Result<()> {
+        bail!("SnowLuma 当前仅支持 Linux Docker 部署")
+    }
+    pub(crate) fn remove_snowluma_container(&self) -> Result<()> {
+        bail!("SnowLuma 当前仅支持 Linux Docker 部署")
+    }
+    pub(crate) fn print_snowluma_logs(&self, _: usize, _: bool) -> Result<()> {
+        bail!("SnowLuma 当前仅支持 Linux Docker 部署")
+    }
+    pub(crate) fn print_snowluma_status(&self) -> Result<()> {
+        bail!("SnowLuma 当前仅支持 Linux Docker 部署")
+    }
+    pub(crate) fn exec_snowluma_shell(&self) -> Result<()> {
+        bail!("SnowLuma 当前仅支持 Linux Docker 部署")
+    }
+
     pub(crate) fn warn_before_screen_attach(&self, session: &str) -> Result<()> {
         if session == "llbot" {
             return macos_protocol_note();

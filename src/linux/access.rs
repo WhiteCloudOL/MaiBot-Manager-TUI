@@ -7,7 +7,7 @@ use crate::theme::AppTheme;
 use dialoguer::console::style;
 use regex::Regex;
 use serde_json::Value;
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, process::Command};
 use toml_edit::{Array, DocumentMut, Item, Value as TomlValue, value};
 
 const CHAT_TABLE: &str = "chat";
@@ -106,7 +106,6 @@ impl App {
                 lines: report.popup_lines(),
                 actions: vec!["取消".to_string()],
                 selected: 0,
-                ..DashboardPopup::default()
             },
             Err(error) => DashboardPopup {
                 title: "访问汇总".to_string(),
@@ -117,7 +116,6 @@ impl App {
                 ],
                 actions: vec!["取消".to_string()],
                 selected: 0,
-                ..DashboardPopup::default()
             },
         }
     }
@@ -220,8 +218,28 @@ impl App {
                 ],
             });
         }
+        let snowluma_dir = root.join("SnowLuma");
+        if snowluma_dir.exists() {
+            let host = cached_public_ip(self, &mut public_ip);
+            let vnc_password = snowluma_vnc_password(&snowluma_dir)
+                .unwrap_or_else(|| "未找到 .env 中的 VNC_PASSWD".to_string());
+            endpoints.push(AccessEndpoint {
+                title: "SnowLuma WebUI",
+                fields: vec![
+                    ("地址", format!("http://{host}:5099/")),
+                    ("临时密码", snowluma_initial_password()),
+                ],
+            });
+            endpoints.push(AccessEndpoint {
+                title: "SnowLuma VNC",
+                fields: vec![
+                    ("地址", format!("http://{host}:6081/")),
+                    ("密码", vnc_password),
+                ],
+            });
+        }
         Ok(AccessInfoReport {
-            subtitle: "集中查看 MaiBot、NapCat 与 LLBot 的访问入口",
+            subtitle: "集中查看 MaiBot、协议端与 SnowLuma 的访问入口",
             ip_label: "本机 / 公网 IP",
             public_ip: public_ip.unwrap_or_else(|| "未读取（当前没有外部地址）".to_string()),
             endpoints,
@@ -474,6 +492,29 @@ impl App {
     }
 }
 
+fn snowluma_vnc_password(dir: &std::path::Path) -> Option<String> {
+    fs::read_to_string(dir.join(".env"))
+        .ok()?
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("VNC_PASSWD=").map(str::to_string))
+}
+
+fn snowluma_initial_password() -> String {
+    let output = Command::new("bash")
+        .arg("-lc")
+        .arg("docker logs snowluma 2>&1 | sed -nE 's/.*(临时密码: |initial credentials: user=admin password=)([^[:space:]]+).*/\\2/p' | tail -n 1")
+        .output();
+    let password = output
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default();
+    if password.is_empty() {
+        "未找到；临时密码只会在全新数据首次启动时输出，永久密码不会显示".to_string()
+    } else {
+        password
+    }
+}
+
 fn webui_host_all_interfaces() -> Item {
     let mut host = Array::default();
     host.push("0.0.0.0");
@@ -529,7 +570,7 @@ fn config_array_display(doc: &DocumentMut, table: &str, key: &str) -> String {
 }
 
 fn ensure_table(doc: &mut DocumentMut, table: &str) {
-    if !doc.get(table).and_then(Item::as_table).is_some() {
+    if doc.get(table).and_then(Item::as_table).is_none() {
         doc[table] = Item::Table(Default::default());
     }
 }
@@ -592,7 +633,7 @@ fn update_numeric_array(
         if !values.iter().any(|value| value == input) {
             arr.push(input.parse::<i64>()?);
         }
-    } else if let Some(pos) = values.iter().position(|v| v == &input) {
+    } else if let Some(pos) = values.iter().position(|v| v == input) {
         arr.remove(pos);
     }
     Ok(())

@@ -58,10 +58,31 @@ pub(super) fn run_llbot(app: &App, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn run_snowluma(app: &App, args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str).unwrap_or("help") {
+        "start" => app.start_snowluma()?,
+        "stop" => app.stop_snowluma()?,
+        "restart" => app.restart_snowluma()?,
+        "status" => app.print_snowluma_status()?,
+        "logs" => {
+            let (tail, follow) = parse_tail(&args[1..], 100)?;
+            app.print_snowluma_logs(tail, follow)?;
+        }
+        "rebuild" => app.rebuild_snowluma()?,
+        "recreate-data" => app.recreate_snowluma_data()?,
+        "remove-container" => app.remove_snowluma_container()?,
+        "exec" => app.exec_snowluma_shell()?,
+        "-h" | "--help" | "help" => crate::cli::print_help(),
+        other => bail!("未知 snowluma 命令: {other}"),
+    }
+    Ok(())
+}
+
 pub(super) fn run_protocol(app: &App, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str).unwrap_or("help") {
         "napcat" => run_napcat(app, &args[1..]),
         "llbot" => run_llbot(app, &args[1..]),
+        "snowluma" => run_snowluma(app, &args[1..]),
         "-h" | "--help" | "help" => {
             crate::cli::print_help();
             Ok(())

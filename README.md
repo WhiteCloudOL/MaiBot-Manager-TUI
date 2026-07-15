@@ -24,7 +24,7 @@
 * **安装向导**：横向步骤条 + 当前项配置面板；左右切换安装项，上下切换当前项选项，安装/更新与恢复默认使用底部快捷键。
 * **Github 优选**：GitHub 官方线路与镜像源并行测速，自动选择最佳线路；全部失败时提供重试 / 直连 / 取消的回退选择。
 * **MaiBot 管理**：Linux 使用 `screen` 后台会话；Windows 使用独立进程 / 窗口启动；macOS 使用后台子进程，退出管理器后核心仍继续运行。首次启动需要确认 EULA 时，TUI 会提供交互终端选项，10 秒未选择则默认后台启动。
-* **LLBot / Napcat 安装**：Linux 使用 LLBot CLI + NapCat Docker；Windows 使用 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限；macOS 当前保留清晰的平台能力说明入口。
+* **协议端安装**：Linux 支持 LLBot CLI、NapCat Docker 与 SnowLuma Docker Compose；Windows 支持 LLBot Desktop + NapCat Shell，并在启动时请求管理员权限；macOS 当前保留清晰的平台能力说明入口。
 * **依赖自检**：Linux 自动检测包管理器并补装基础工具；Windows 缺少 Git / uv / Python 时会优先下载便携工具到 MaiBot 安装目录；macOS 缺少 Homebrew 时会调用官方脚本安装，并通过 Homebrew 补齐 Git / uv / Python。
 * **配置访问**：集中查看当前平台已支持的 WebUI 地址与密钥；TUI 内使用居中弹窗展示汇总，CLI 直接输出文本；初始化访问配置带二次确认。
 * **插件管理**：安装、更新和卸载插件。
@@ -78,7 +78,7 @@ irm https://raw.githubusercontent.com/WhiteCloudOL/MaiBot-Manager-TUI/main/scrip
 
 ### macOS
 
-macOS 版目前支持 MaiBot 核心安装 / 更新、后台子进程运行、访问配置与插件管理；NapCat / LLBot 协议端在当前平台保留说明入口，安装计划默认不安装协议端。
+macOS 版目前支持 MaiBot 核心安装 / 更新、后台子进程运行、访问配置与插件管理；NapCat / LLBot / SnowLuma 协议端在当前平台保留说明入口，安装计划默认不安装协议端。
 
 ```bash
 # 国内安装
@@ -128,7 +128,7 @@ maibot install --protocol none
 * **包管理器**：已识别的包管理器之一：`apt` / `dnf` / `yum` / `pacman` / `zypper` / `apk`
 * **基础工具**：`bash`（其余基础工具 `git/curl/screen/unzip/python3` 缺失时会自动通过当前发行版的包管理器补装）
 * **Python 环境**：`python3` 或 `uv`
-* **NapCatQQ 依赖 (Docker)**：使用 NapCatQQ 时需要 Docker；未安装 Docker 时会按发行版尝试安装：`apt`/`dnf`/`yum` 走 `linuxmirrors.cn/docker.sh` 镜像脚本，Arch / openSUSE / Alpine 走各自原生包。
+* **Docker 协议端依赖**：NapCatQQ 和 SnowLuma 需要 Docker；未安装 Docker 时会按发行版尝试安装：`apt`/`dnf`/`yum` 走 `linuxmirrors.cn/docker.sh` 镜像脚本，Arch / openSUSE / Alpine 走各自原生包。
 * **LuckyLilliaBot 依赖 (LinuxQQ)**：使用 LLBot 时会按下述策略自动预装 LinuxQQ：
 * `apt`：官方 deb + 依赖（`libasound2t64` 自动回退到 `libasound2`）
 * `dnf` / `yum` / `zypper`：官方 rpm
@@ -148,7 +148,7 @@ maibot install --protocol none
 * **系统架构**：macOS x86_64 或 Apple Silicon
 * **基础工具**：优先使用 macOS 自带 `curl` / `unzip`；缺少 Homebrew 时自动调用官方脚本安装，缺少 Git / uv / Python 时通过 Homebrew 补齐
 * **Python 环境**：推荐 `uv`；uv 缓存与托管 Python 目录固定在 `<MaiBot安装目录>/tools`
-* **协议端**：NapCat / LLBot 在当前平台保留说明入口，macOS 默认只部署 MaiBot 核心
+* **协议端**：NapCat / LLBot / SnowLuma 在当前平台保留说明入口，macOS 默认只部署 MaiBot 核心
 
 
 ### 构建环境
@@ -179,7 +179,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 仓库根的 `app.toml` 是构建时配置（**非运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
 
 ```toml
-version          = "0.3.0"   # 标题栏显示的版本号
+version          = "0.3.3"   # 标题栏显示的版本号
 header_title     = "..."     # 标头第一行标题
 header_subtitle  = "..."     # 标头第二行副标题
 header_credit    = "..."     # 作者 / License 行
@@ -292,10 +292,10 @@ TUI 的内容区移动和普通操作弹窗打开走缓存重绘路径，不会�
 进入主菜单时会自动检测并显示（● 运行中 或 ○ 未运行）：
 
 * **Linux MaiBot / LLBot**：基于 `screen` 会话
-* **Linux NapCat**：基于 Docker 容器状态
+* **Linux NapCat / SnowLuma**：基于 Docker 容器状态
 * **Windows MaiBot / LLBot**：基于 Windows 进程 / 窗口状态
 * **Windows NapCat**：基于 NapCat Shell 进程状态
-* **macOS MaiBot**：基于 `logs/maibot.pid` 记录的子进程状态；NapCat / LLBot 显示当前平台能力说明
+* **macOS MaiBot**：基于 `logs/maibot.pid` 记录的子进程状态；NapCat / LLBot / SnowLuma 显示当前平台能力说明
 
 未检测到安装时会引导先进入「安装 / 更新 MaiBot」。
 
@@ -339,8 +339,9 @@ maibot update --protocol llbot --llbot-update update \
 | `--venv <keep│recreate>` | 保留或强制重建虚拟环境 |
 | `--github <auto│direct│URL>` | `auto`: 并行测速；`direct`: 强制官方直连；`URL`: 自定义代理前缀 |
 | `--pip <system│aliyun...│URL>` | 系统源/内置国内源/自定义源（仅写入当前虚拟环境配置，不污染全局） |
-| `--protocol <napcat│llbot│none>` | 选择绑定安装的底层协议端；macOS 目前仅支持 `none` |
+| `--protocol <napcat│llbot│snowluma│none>` | 选择绑定安装的底层协议端；SnowLuma 仅支持 Linux Docker，macOS 目前仅支持 `none` |
 | `--docker <one-ms│official...│keep>` | Linux Docker 换源/官方脚本，或 `keep` 不修改 Docker daemon 配置；Windows/macOS 会忽略 |
+| `--snowluma-swap <enable│skip>` | Linux 低内存且没有 Swap 时，自动创建 2 GB Swap 或跳过该提示 |
 
 **自动化静默/回退策略参数：**
 
@@ -355,6 +356,8 @@ maibot update --protocol llbot --llbot-update update \
 | `--napcat-conflict cancel` | 检测到同名 napcat 容器时跳过询问，直接取消部署 |
 | `--llbot-update update` | 有新 release 时跳过询问，执行更新并保留 `data/default_config.json` |
 | `--llbot-update skip` | 有新 release 时跳过询问，保留当前 LLBot 不更新 |
+| `--snowluma-swap enable` | 内存不超过 4 GB 且未启用 Swap 时，不再询问，创建并启用 2 GB Swap |
+| `--snowluma-swap skip` | 跳过 SnowLuma 的 Swap 创建提示 |
 
 > 未指定的安装参数优先从 `~/.maibot_config` 读取，无历史记录则采用推荐默认值（Linux/Windows 为 `~/maimai` 目录、`uv` 环境、`NapCatQQ` 协议端；macOS 为 `~/maimai` 目录、`uv` 环境、无协议端）。
 > *特殊逻辑*：如果 MaiBot 主仓库只有 `uv.lock` 一个文件被修改，程序会自动丢弃该锁文件改动继续同步上游；其他本地改动则按 `--git-dirty` 策略处理。
@@ -405,6 +408,20 @@ maibot llbot password <新密码>   # 写入 LLBot WebUI 密码文件
 
 ```
 
+**SnowLuma（仅 Linux Docker）：**
+
+```bash
+maibot install --protocol snowluma              # 生成 SnowLuma/.env 与 docker-compose.yml
+maibot snowluma start|stop|restart|status
+maibot snowluma logs --tail 200 --follow
+maibot snowluma rebuild                         # down + pull + up -d，保留数据
+maibot snowluma recreate-data                   # 删除数据目录后全新启动，会生成新的临时 WebUI 密码
+maibot snowluma remove-container                # 只删除容器，保留数据
+maibot snowluma exec                            # 进入容器 shell
+```
+
+首次安装会在 `SnowLuma/.env` 写入随机 16 位 VNC 密码（包含大小写、数字和 `%@+-`）。访问汇总会显示 `http://<ip>:5099/` 与 `http://<ip>:6081/`；WebUI 仅尝试读取首次全新数据启动时日志输出的一次性临时密码，永久密码不会显示。内存不超过 4 GB 且未启用 Swap 时会询问是否创建 2 GB Swap；脚本可使用 `--snowluma-swap enable|skip`。
+
 *(注：也可以使用聚合入口，例如 `maibot protocol napcat restart`)*
 
 ### 4. 配置与访问 (Access)
@@ -451,11 +468,11 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 * **Python 环境**：沿用历史配置，否则默认 `uv`（Python 3.14）
 * **GitHub**：默认执行时并行测速；全部失败提供重试 / 直连 / 取消
 * **PyPI**：默认系统源；选自定义源时**只在 venv 目录写 `pip.conf`**，不污染用户全局 `~/.pip/`
-* **协议端**：Linux/Windows 检测已有 NapCat / LLBot，未检测到时默认安装 NapCatQQ；macOS 默认不安装协议端，并在协议端入口说明当前平台能力
+* **协议端**：Linux 支持 NapCat / LLBot / SnowLuma，Windows 支持 NapCat / LLBot；未检测到时默认安装 NapCatQQ。macOS 默认不安装协议端，并在协议端入口说明当前平台能力
 *(可修改模块：安装目录 / 安装模式 / Python 环境 / 虚拟环境处理 / GitHub 线路 / PyPI 源 / Bot 协议端 / Docker 镜像；macOS 默认隐藏协议端 / Docker 安装项)*
 
 **配置文件记录**：
-`~/.maibot_config` 用于记录安装路径、Python 环境和 LLBot 路径，便于管理菜单自动定位。
+`~/.maibot_config` 用于记录安装路径、Python 环境与协议端选择（包括 SnowLuma），便于管理菜单自动定位。
 
 ---
 
@@ -465,10 +482,10 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 * Linux LLBot 安装时会尝试自动安装 LinuxQQ，`apt` 环境下可能需要输入 `sudo` 密码。
 * Windows NapCat Shell 与 LLBot Desktop 启动时会请求管理员权限，这是上游程序运行需要。
 * Windows 缺失 Git / uv / Python 时会在 MaiBot 安装目录的 `tools` 子目录准备便携工具链，不会写入系统安装目录。
-* macOS 缺少 Homebrew 时会调用 Homebrew 官方安装脚本；NapCat / LLBot 在当前平台保留说明入口。
-* Docker、GitHub、PyPI、NapCat / LLBot Release 下载都依赖目标机器的网络。
+* macOS 缺少 Homebrew 时会调用 Homebrew 官方安装脚本；NapCat / LLBot / SnowLuma 在当前平台保留说明入口。
+* Docker、GitHub、PyPI、NapCat / LLBot Release 下载以及 SnowLuma 镜像拉取都依赖目标机器的网络。
 * `初始化 MaiBot 访问配置` 会把 WebUI 绑定到 `["0.0.0.0", "::"]`，相当于把端口暴露给外网，请确认已设置 token 或防火墙策略。
-* NapCat 的 `docker-compose.yml` 仅在首次安装时写入，更新时不会覆盖你的自定义修改；如需重置请手动删除该文件再运行安装。
+* NapCat 与 SnowLuma 的 `docker-compose.yml` 仅在首次安装时写入，更新时不会覆盖你的自定义修改；如需重置请手动删除该文件再运行安装。SnowLuma 的 `recreate-data` 会删除其三个数据目录并重新生成一次性 WebUI 临时密码。
 
 ---
 

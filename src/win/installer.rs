@@ -606,6 +606,7 @@ impl App {
             git_dirty_mode: GitDirtyMode::Ask,
             napcat_conflict_mode: NapcatConflictMode::Ask,
             llbot_update_mode: LlbotUpdateMode::Prompt,
+            snowluma_swap_mode: SnowlumaSwapMode::Ask,
         }
     }
 
@@ -677,6 +678,7 @@ impl App {
             match protocol {
                 BotProtocol::NapCat => self.install_napcat(&plan)?,
                 BotProtocol::LuckyLilliaBot => self.install_llbot(&plan)?,
+                BotProtocol::SnowLuma => bail!("SnowLuma 当前仅支持 Linux Docker 部署"),
             }
         }
         self.save_config(&self.plan_to_config(&plan))?;
