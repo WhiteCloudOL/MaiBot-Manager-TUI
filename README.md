@@ -425,7 +425,7 @@ maibot snowluma remove-container                # 只删除容器，保留数据
 maibot snowluma exec                            # 进入容器 shell
 ```
 
-首次安装会在 `SnowLuma/.env` 写入随机 16 位 VNC 密码（包含大小写、数字和 `%@+-`）。选择 SnowLuma 时还会默认同步 `Mai-with-u/MaiBot-SnowLuma-Adapter`，并在插件目录首次生成已启用的 `config.toml`：默认连接 `127.0.0.1:3001`，访问令牌和群/私聊名单留空，避免写入共享凭据或特定 QQ。访问汇总会显示 `http://<ip>:5099/` 与 `http://<ip>:6081/`；WebUI 仅尝试读取首次全新数据启动时日志输出的一次性临时密码，永久密码不会显示。Docker 准备完成后、写入并启动 SnowLuma Compose 前，若内存不超过 4 GB 且未启用 Swap，会询问是否创建 2 GB Swap；脚本可使用 `--snowluma-swap enable|skip`，省略该参数时仍会询问。若同名容器或默认端口被 Docker 容器占用，也会询问是否删除冲突容器后重建；脚本可使用 `--snowluma-conflict recreate|cancel`。
+首次安装会在 `SnowLuma/.env` 写入随机 16 位 VNC 密码（包含大小写、数字和 `%@+-`）。选择 SnowLuma 时还会默认同步 `Mai-with-u/MaiBot-SnowLuma-Adapter`，并在插件目录首次生成已启用的 `config.toml`：默认连接 `127.0.0.1:3001`，访问令牌和群/私聊名单留空，避免写入共享凭据或特定 QQ。访问配置会自动启用当前已安装的 NapCat 或 SnowLuma Adapter，并兼容两者的 QQ 名单格式。访问汇总会显示 `http://<ip>:5099/` 与 `http://<ip>:6081/`；WebUI 仅尝试读取首次全新数据启动时日志输出的一次性临时密码，永久密码不会显示。Docker 准备完成后、写入并启动 SnowLuma Compose 前，若内存不超过 4 GB 且未启用 Swap，会询问是否创建 2 GB Swap；脚本可使用 `--snowluma-swap enable|skip`，省略该参数时仍会询问。若同名容器或默认端口被 Docker 容器占用，也会询问是否删除冲突容器后重建；脚本可使用 `--snowluma-conflict recreate|cancel`。
 
 *(注：也可以使用聚合入口，例如 `maibot protocol napcat restart`)*
 
