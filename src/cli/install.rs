@@ -2,7 +2,8 @@ use crate::{
     app::App,
     model::{
         BotProtocol, DockerMirror, GitDirtyMode, GithubFallbackMode, InstallMode, InstallPlan,
-        LlbotUpdateMode, NapcatConflictMode, PythonEnv, SnowlumaSwapMode, VenvMode,
+        LlbotUpdateMode, NapcatConflictMode, PythonEnv, SnowlumaConflictMode, SnowlumaSwapMode,
+        VenvMode,
     },
     utils::{normalize_path, normalize_url},
 };
@@ -144,6 +145,15 @@ fn parse_options(plan: &mut InstallPlan, args: &[String]) -> Result<()> {
                     "skip" => SnowlumaSwapMode::Skip,
                     other => bail!("未知 SnowLuma Swap 选项: {other}"),
                 };
+                idx += 2;
+            }
+            "--snowluma-conflict" => {
+                plan.snowluma_conflict_mode =
+                    match value(args, idx, "--snowluma-conflict <recreate|cancel>")? {
+                        "recreate" => SnowlumaConflictMode::Recreate,
+                        "cancel" => SnowlumaConflictMode::Cancel,
+                        other => bail!("未知 SnowLuma 冲突处理选项: {other}"),
+                    };
                 idx += 2;
             }
             other => bail!("未知安装参数: {other}"),

@@ -130,6 +130,7 @@ pub(crate) fn print_help() {
   --napcat-conflict <recreate|cancel>
   --llbot-update <update|skip>
   --snowluma-swap <enable|skip>
+  --snowluma-conflict <recreate|cancel>
 
 安装选项说明:
   --mode normal      保留目标目录，更新或修复已有安装
@@ -161,6 +162,10 @@ pub(crate) fn print_help() {
                     Linux 内存不超过 4 GB 且尚未启用 Swap 时，自动创建并启用 2 GB Swap
   --snowluma-swap skip
                     跳过 SnowLuma 的 2 GB Swap 提示
+  --snowluma-conflict recreate
+                    检测到 SnowLuma 同名容器或默认端口被 Docker 容器占用时，删除冲突容器并重新部署
+  --snowluma-conflict cancel
+                    检测到 SnowLuma 容器或端口冲突时，不再询问并直接取消部署
 
 CLI 交互策略:
   install/update     默认允许交互确认。单独的 MaiBot uv.lock 改动会自动丢弃；其他 Git 改动、

@@ -58,6 +58,7 @@ pub struct InstallPlan {
     pub napcat_conflict_mode: NapcatConflictMode,
     pub llbot_update_mode: LlbotUpdateMode,
     pub snowluma_swap_mode: SnowlumaSwapMode,
+    pub snowluma_conflict_mode: SnowlumaConflictMode,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -138,6 +139,14 @@ pub enum SnowlumaSwapMode {
     Ask,
     Enable,
     Skip,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SnowlumaConflictMode {
+    #[default]
+    Ask,
+    Recreate,
+    Cancel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

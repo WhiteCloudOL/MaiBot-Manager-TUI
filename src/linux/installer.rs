@@ -845,6 +845,7 @@ impl App {
             napcat_conflict_mode: NapcatConflictMode::Ask,
             llbot_update_mode: LlbotUpdateMode::Prompt,
             snowluma_swap_mode: SnowlumaSwapMode::Ask,
+            snowluma_conflict_mode: SnowlumaConflictMode::Ask,
         })
     }
 
@@ -869,6 +870,7 @@ impl App {
             napcat_conflict_mode: NapcatConflictMode::Ask,
             llbot_update_mode: LlbotUpdateMode::Prompt,
             snowluma_swap_mode: SnowlumaSwapMode::Ask,
+            snowluma_conflict_mode: SnowlumaConflictMode::Ask,
         }
     }
 
@@ -1531,10 +1533,113 @@ impl App {
             );
             fs::write(&compose_path, compose)?;
         }
+        self.handle_snowluma_conflict(&snowluma_dir, plan.snowluma_conflict_mode)?;
         self.run_shell(&format!(
             "cd '{}' && docker compose up -d",
             shell_escape(&snowluma_dir)
         ))
+    }
+
+    fn handle_snowluma_conflict(
+        &self,
+        snowluma_dir: &Path,
+        conflict_mode: SnowlumaConflictMode,
+    ) -> Result<()> {
+        const HOST_PORTS: &[u16] = &[5900, 6081, 5099, 3000, 3001];
+        let port_filters = HOST_PORTS
+            .iter()
+            .map(|port| format!("docker ps -aq --filter publish={port}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let query = format!(
+            "(docker ps -aq --filter name=^snowluma$; {port_filters}) | awk 'NF && !seen[$0]++'"
+        );
+        let output = Command::new("bash")
+            .arg("-lc")
+            .arg(&query)
+            .output()
+            .with_context(|| "查询 SnowLuma 容器或端口冲突失败")?;
+        let ids = String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        if !ids.is_empty() {
+            let details = Command::new("docker")
+                .arg("inspect")
+                .arg("--format")
+                .arg("{{.Name}}  {{.State.Status}}  {{.Config.Image}}")
+                .args(&ids)
+                .output()
+                .ok()
+                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+                .unwrap_or_default();
+            println!();
+            println!(
+                "  {}",
+                style("⚠  检测到 SnowLuma 同名容器或默认端口已被 Docker 容器占用")
+                    .yellow()
+                    .bold()
+            );
+            if !details.is_empty() {
+                for line in details.lines() {
+                    println!("    {}", style(line).dim());
+                }
+            }
+            println!(
+                "    {}",
+                style(format!("compose 目录: {}", snowluma_dir.display())).dim()
+            );
+            println!(
+                "    {}",
+                style("继续部署会删除上述容器；数据目录不会被删除").dim()
+            );
+
+            match conflict_mode {
+                SnowlumaConflictMode::Ask => {
+                    self.drain_pending_input();
+                    let confirmed = Confirm::with_theme(&self.theme)
+                        .with_prompt("删除冲突容器并重新部署 SnowLuma？")
+                        .default(true)
+                        .interact()
+                        .with_context(|| "读取确认失败")?;
+                    if !confirmed {
+                        return Err(anyhow!(UserCanceled(
+                            "已取消：保留冲突容器，未重新部署 SnowLuma".to_string()
+                        )));
+                    }
+                }
+                SnowlumaConflictMode::Recreate => {}
+                SnowlumaConflictMode::Cancel => {
+                    return Err(anyhow!(UserCanceled(
+                        "已取消：检测到 SnowLuma 容器或端口冲突；CLI 可使用 --snowluma-conflict recreate 允许重建".to_string()
+                    )));
+                }
+            }
+            self.run_shell(&format!("docker rm -f {}", ids.join(" ")))?;
+        }
+
+        let ports = HOST_PORTS
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        let listeners = Command::new("bash")
+            .arg("-lc")
+            .arg(format!(
+                "if command -v ss >/dev/null 2>&1; then ss -ltnH 2>/dev/null | awk '$4 ~ /:({ports})$/ {{print $4}}'; fi"
+            ))
+            .output()
+            .ok()
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .unwrap_or_default();
+        if !listeners.is_empty() {
+            anyhow::bail!(
+                "SnowLuma 默认端口仍被非 Docker 服务占用: {}。请停止该服务或修改 SnowLuma/.env 的端口后重试",
+                listeners.lines().collect::<Vec<_>>().join(", ")
+            );
+        }
+        Ok(())
     }
 
     fn ensure_snowluma_swap(&self, mode: SnowlumaSwapMode) -> Result<()> {

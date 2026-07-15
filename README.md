@@ -272,6 +272,8 @@ TUI 全局使用 Nord 冷色调：背景 `#2E3440`、常规文本 `#D8DEE9`、�
 
 TUI 的内容区移动和普通操作弹窗打开走缓存重绘路径，不会在每次按键时重新探测服务状态。访问汇总这类信息弹窗只在用户明确打开时读取对应报告，并在当前界面内重绘；公网 IP 只在可见入口确实需要外部地址时查询。Linux 状态页会批量读取 `screen -list`，NapCat 使用带短超时的 `docker ps` 探测；服务日志摘要只读取文件尾部，避免大日志拖慢切换。
 
+TUI 内任何安装、服务、访问或插件任务失败时，管理器会返回「概览」主界面并显示居中的失败原因弹窗，不会因单个任务失败而退出。CLI 仍会输出错误并以非零状态退出，便于脚本判断结果。
+
 **按键操作说明：**
 
 | 按键 | 功能 |
@@ -342,6 +344,7 @@ maibot update --protocol llbot --llbot-update update \
 | `--protocol <napcat│llbot│snowluma│none>` | 选择绑定安装的底层协议端；SnowLuma 仅支持 Linux Docker，macOS 目前仅支持 `none` |
 | `--docker <one-ms│official...│keep>` | Linux Docker 换源/官方脚本，或 `keep` 不修改 Docker daemon 配置；Windows/macOS 会忽略 |
 | `--snowluma-swap <enable│skip>` | Linux 低内存且没有 Swap 时，自动创建 2 GB Swap 或跳过该提示 |
+| `--snowluma-conflict <recreate│cancel>` | SnowLuma 同名容器或默认端口被 Docker 容器占用时，自动重建或取消 |
 
 **自动化静默/回退策略参数：**
 
@@ -358,6 +361,8 @@ maibot update --protocol llbot --llbot-update update \
 | `--llbot-update skip` | 有新 release 时跳过询问，保留当前 LLBot 不更新 |
 | `--snowluma-swap enable` | 内存不超过 4 GB 且未启用 Swap 时，不再询问，创建并启用 2 GB Swap |
 | `--snowluma-swap skip` | 跳过 SnowLuma 的 Swap 创建提示 |
+| `--snowluma-conflict recreate` | 删除占用 SnowLuma 名称或默认端口的 Docker 容器，然后重新部署 |
+| `--snowluma-conflict cancel` | 检测到 SnowLuma 容器或端口冲突时直接取消 |
 
 > 未指定的安装参数优先从 `~/.maibot_config` 读取，无历史记录则采用推荐默认值（Linux/Windows 为 `~/maimai` 目录、`uv` 环境、`NapCatQQ` 协议端；macOS 为 `~/maimai` 目录、`uv` 环境、无协议端）。
 > *特殊逻辑*：如果 MaiBot 主仓库只有 `uv.lock` 一个文件被修改，程序会自动丢弃该锁文件改动继续同步上游；其他本地改动则按 `--git-dirty` 策略处理。
@@ -420,7 +425,7 @@ maibot snowluma remove-container                # 只删除容器，保留数据
 maibot snowluma exec                            # 进入容器 shell
 ```
 
-首次安装会在 `SnowLuma/.env` 写入随机 16 位 VNC 密码（包含大小写、数字和 `%@+-`）。访问汇总会显示 `http://<ip>:5099/` 与 `http://<ip>:6081/`；WebUI 仅尝试读取首次全新数据启动时日志输出的一次性临时密码，永久密码不会显示。内存不超过 4 GB 且未启用 Swap 时会询问是否创建 2 GB Swap；脚本可使用 `--snowluma-swap enable|skip`。
+首次安装会在 `SnowLuma/.env` 写入随机 16 位 VNC 密码（包含大小写、数字和 `%@+-`）。访问汇总会显示 `http://<ip>:5099/` 与 `http://<ip>:6081/`；WebUI 仅尝试读取首次全新数据启动时日志输出的一次性临时密码，永久密码不会显示。Docker 准备完成后、写入并启动 SnowLuma Compose 前，若内存不超过 4 GB 且未启用 Swap，会询问是否创建 2 GB Swap；脚本可使用 `--snowluma-swap enable|skip`，省略该参数时仍会询问。若同名容器或默认端口被 Docker 容器占用，也会询问是否删除冲突容器后重建；脚本可使用 `--snowluma-conflict recreate|cancel`。
 
 *(注：也可以使用聚合入口，例如 `maibot protocol napcat restart`)*
 
