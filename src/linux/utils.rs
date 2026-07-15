@@ -83,7 +83,7 @@ pub fn clean_install_dir(dir: &Path) -> Result<()> {
         .canonicalize()
         .ok();
     let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    if canonical == PathBuf::from("/") || protected.as_ref() == Some(&canonical) {
+    if canonical == Path::new("/") || protected.as_ref() == Some(&canonical) {
         bail!("拒绝清空危险目录: {}", dir.display());
     }
     for entry in fs::read_dir(dir)? {

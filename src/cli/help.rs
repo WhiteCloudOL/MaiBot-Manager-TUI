@@ -37,6 +37,8 @@ pub(crate) fn print_help() {
   napcat logs        使用 docker compose logs
   napcat exec        进入 napcat 容器 shell
   napcat rebuild     执行 down + pull + up -d
+  snowluma           管理 SnowLuma Docker Compose
+  snowluma recreate-data  删除数据目录后全新启动，生成新的临时密码
   llbot              管理 LuckyLilliaBot screen 会话
   llbot logs         通过 screen hardcopy 读取日志缓冲，不影响 screen 会话
   llbot exec         执行 screen -r llbot，进入前会提示退出方式
@@ -98,6 +100,7 @@ pub(crate) fn print_help() {
   maibot core logs --tail 200
   maibot core exec
   maibot napcat restart
+  maibot snowluma restart
   maibot llbot password my-new-password
   maibot access show
   maibot plugin install username/repo
@@ -120,12 +123,14 @@ pub(crate) fn print_help() {
   --venv <keep|recreate>         保留或重建虚拟环境
   --github <auto|direct|URL>     GitHub 线路
   --pip <system|aliyun|tencent|tsinghua|ustc|official|URL>
-  --protocol <napcat|llbot|none> 协议端
+  --protocol <napcat|llbot|snowluma|none> 协议端（SnowLuma 仅 Linux）
   --docker <one-ms|xuanyuan|official|keep>  Linux NapCat Docker 部署使用；Windows/macOS 会忽略
   --github-fallback <direct|cancel>
   --git-dirty <stash|discard|cancel>
   --napcat-conflict <recreate|cancel>
   --llbot-update <update|skip>
+  --snowluma-swap <enable|skip>
+  --snowluma-conflict <recreate|cancel>
 
 安装选项说明:
   --mode normal      保留目标目录，更新或修复已有安装
@@ -153,6 +158,14 @@ pub(crate) fn print_help() {
                     已安装 LuckyLilliaBot 且有新 release 时不再询问，执行更新并保留 data/default_config.json
   --llbot-update skip
                     已安装 LuckyLilliaBot 且有新 release 时不再询问，跳过更新
+  --snowluma-swap enable
+                    Linux 内存不超过 4 GB 且尚未启用 Swap 时，自动创建并启用 2 GB Swap
+  --snowluma-swap skip
+                    跳过 SnowLuma 的 2 GB Swap 提示
+  --snowluma-conflict recreate
+                    检测到 SnowLuma 同名容器或默认端口被 Docker 容器占用时，删除冲突容器并重新部署
+  --snowluma-conflict cancel
+                    检测到 SnowLuma 容器或端口冲突时，不再询问并直接取消部署
 
 CLI 交互策略:
   install/update     默认允许交互确认。单独的 MaiBot uv.lock 改动会自动丢弃；其他 Git 改动、
@@ -176,6 +189,13 @@ MaiBot 核心:
   maibot napcat rebuild
   maibot napcat remove-container
   maibot napcat exec
+
+  maibot snowluma start|stop|restart|status
+  maibot snowluma logs [--tail 100] [-f|--follow]
+  maibot snowluma rebuild
+  maibot snowluma recreate-data
+  maibot snowluma remove-container
+  maibot snowluma exec
 
   maibot llbot start|stop|restart|status
   maibot llbot logs [--tail 100] [-f|--follow]

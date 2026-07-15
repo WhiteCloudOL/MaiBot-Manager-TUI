@@ -16,6 +16,7 @@ impl App {
             Some("core") => services::run_core(self, &args[1..]),
             Some("napcat") => services::run_napcat(self, &args[1..]),
             Some("llbot") => services::run_llbot(self, &args[1..]),
+            Some("snowluma") => services::run_snowluma(self, &args[1..]),
             Some("protocol" | "bot") => services::run_protocol(self, &args[1..]),
             Some("access" | "config") => access::run(self, &args[1..]),
             Some("plugin" | "plugins") => plugins::run(self, &args[1..]),

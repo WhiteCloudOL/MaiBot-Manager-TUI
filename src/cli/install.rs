@@ -2,7 +2,8 @@ use crate::{
     app::App,
     model::{
         BotProtocol, DockerMirror, GitDirtyMode, GithubFallbackMode, InstallMode, InstallPlan,
-        LlbotUpdateMode, NapcatConflictMode, PythonEnv, VenvMode,
+        LlbotUpdateMode, NapcatConflictMode, PythonEnv, SnowlumaConflictMode, SnowlumaSwapMode,
+        VenvMode,
     },
     utils::{normalize_path, normalize_url},
 };
@@ -81,12 +82,14 @@ fn parse_options(plan: &mut InstallPlan, args: &[String]) -> Result<()> {
                 idx += 2;
             }
             "--protocol" => {
-                plan.bot_protocols = match value(args, idx, "--protocol <napcat|llbot|none>")? {
-                    "napcat" => vec![BotProtocol::NapCat],
-                    "llbot" => vec![BotProtocol::LuckyLilliaBot],
-                    "none" => Vec::new(),
-                    other => bail!("未知协议端: {other}"),
-                };
+                plan.bot_protocols =
+                    match value(args, idx, "--protocol <napcat|llbot|snowluma|none>")? {
+                        "napcat" => vec![BotProtocol::NapCat],
+                        "llbot" => vec![BotProtocol::LuckyLilliaBot],
+                        "snowluma" => vec![BotProtocol::SnowLuma],
+                        "none" => Vec::new(),
+                        other => bail!("未知协议端: {other}"),
+                    };
                 idx += 2;
             }
             "--docker" => {
@@ -134,6 +137,23 @@ fn parse_options(plan: &mut InstallPlan, args: &[String]) -> Result<()> {
                     "skip" => LlbotUpdateMode::Skip,
                     other => bail!("未知 LLBot 更新选项: {other}"),
                 };
+                idx += 2;
+            }
+            "--snowluma-swap" => {
+                plan.snowluma_swap_mode = match value(args, idx, "--snowluma-swap <enable|skip>")? {
+                    "enable" => SnowlumaSwapMode::Enable,
+                    "skip" => SnowlumaSwapMode::Skip,
+                    other => bail!("未知 SnowLuma Swap 选项: {other}"),
+                };
+                idx += 2;
+            }
+            "--snowluma-conflict" => {
+                plan.snowluma_conflict_mode =
+                    match value(args, idx, "--snowluma-conflict <recreate|cancel>")? {
+                        "recreate" => SnowlumaConflictMode::Recreate,
+                        "cancel" => SnowlumaConflictMode::Cancel,
+                        other => bail!("未知 SnowLuma 冲突处理选项: {other}"),
+                    };
                 idx += 2;
             }
             other => bail!("未知安装参数: {other}"),

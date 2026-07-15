@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     model::*,
-    plugins::{NAPCAT_ADAPTER_PLUGIN_ID, NAPCAT_ADAPTER_REPO_NAME},
+    plugins::{NAPCAT_ADAPTER_PLUGIN_ID, NAPCAT_ADAPTER_REPO_NAME, SNOWLUMA_ADAPTER_REPO_NAME},
     terminal::{TerminalUiGuard, restore_terminal_state},
     utils::*,
 };
@@ -12,6 +12,7 @@ use dialoguer::{Confirm, Input, Select};
 use serde_json::Value;
 use std::{
     fmt, fs,
+    io::Read,
     path::{Path, PathBuf},
     process::Command,
     thread,
@@ -19,6 +20,80 @@ use std::{
 };
 
 const LLBOT_RELEASE_TAG_FILE: &str = ".maibot-llbot-release";
+const SNOWLUMA_ADAPTER_DEFAULT_CONFIG: &str = r#"[plugin]
+enabled = true
+enable_ada_debug_raw_message_log = false
+enable_ada_debug_raw_outbound_message_log = false
+enable_private_chat_tool = false
+qq_face_parse_mode = "description"
+config_version = "1.0.5"
+
+[luma_client]
+server = "127.0.0.1"
+port = 3001
+token = ""
+connection_id = ""
+reconnect_delay_sec = 5.0
+action_timeout_sec = 10.0
+
+[chat]
+enable_chat_list_filter = true
+show_dropped_chat_list_messages = false
+group_list_type = "whitelist"
+group_list = []
+private_list_type = "blacklist"
+private_list = []
+ban_user_id = []
+ban_qq_bot = false
+
+[notice]
+enabled = true
+enable_poke = true
+enable_friend_recall = true
+enable_group_recall = true
+enable_group_ban = true
+enable_group_msg_emoji_like = true
+enable_group_upload = true
+enable_group_increase = true
+enable_group_decrease = true
+enable_group_admin = true
+enable_essence = true
+enable_group_name = true
+
+[filters]
+ignore_self_message = true
+"#;
+
+fn snowluma_vnc_password() -> Result<String> {
+    const UPPER: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const LOWER: &[u8] = b"abcdefghijkmnopqrstuvwxyz";
+    const DIGITS: &[u8] = b"23456789";
+    const SYMBOLS: &[u8] = b"%@+-";
+    const ALL: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789%@+-";
+
+    let mut random = [0_u8; 64];
+    fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let mut offset = 0;
+    let mut take = |alphabet: &[u8]| {
+        let byte = random[offset];
+        offset += 1;
+        alphabet[(byte as usize) % alphabet.len()] as char
+    };
+    let mut password = vec![take(UPPER), take(LOWER), take(DIGITS), take(SYMBOLS)];
+    for _ in password.len()..16 {
+        password.push(take(ALL));
+    }
+    for index in (1..password.len()).rev() {
+        let swap_index = (random[offset] as usize) % (index + 1);
+        offset += 1;
+        password.swap(index, swap_index);
+    }
+    Ok(password.into_iter().collect())
+}
+
+fn yaml_double_quote(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
 
 #[derive(Debug)]
 struct LlbotReleaseInfo {
@@ -368,6 +443,7 @@ impl App {
             PlanField::BotProtocols => vec![
                 "仅 NapCatQQ".into(),
                 "仅 LuckyLilliaBot".into(),
+                "仅 SnowLuma（Docker）".into(),
                 "暂不安装附加协议端".into(),
             ],
             PlanField::DockerMirror => vec![
@@ -494,6 +570,7 @@ impl App {
             PlanField::BotProtocols => match choice_idx {
                 0 => plan.bot_protocols == vec![BotProtocol::NapCat],
                 1 => plan.bot_protocols == vec![BotProtocol::LuckyLilliaBot],
+                2 => plan.bot_protocols == vec![BotProtocol::SnowLuma],
                 _ => plan.bot_protocols.is_empty(),
             },
             PlanField::DockerMirror => {
@@ -692,14 +769,19 @@ impl App {
                 plan.bot_protocols = match choice_idx {
                     0 => vec![BotProtocol::NapCat],
                     1 => vec![BotProtocol::LuckyLilliaBot],
+                    2 => vec![BotProtocol::SnowLuma],
                     _ => Vec::new(),
                 };
-                if !plan.bot_protocols.contains(&BotProtocol::NapCat) {
+                if !plan.bot_protocols.contains(&BotProtocol::NapCat)
+                    && !plan.bot_protocols.contains(&BotProtocol::SnowLuma)
+                {
                     plan.docker_mirror = DockerMirror::Keep;
                 }
             }
             PlanField::DockerMirror => {
-                if plan.bot_protocols.contains(&BotProtocol::NapCat) {
+                if plan.bot_protocols.contains(&BotProtocol::NapCat)
+                    || plan.bot_protocols.contains(&BotProtocol::SnowLuma)
+                {
                     plan.docker_mirror = match choice_idx {
                         0 => DockerMirror::OneMs,
                         1 => DockerMirror::Xuanyuan,
@@ -708,7 +790,7 @@ impl App {
                     };
                 } else {
                     self.with_prompt_mode(|| {
-                        self.pause("当前未选择 NapCatQQ，无需配置 Docker 镜像；按回车继续")
+                        self.pause("当前未选择 Docker 协议端，无需配置 Docker 镜像；按回车继续")
                     })?;
                 }
             }
@@ -742,6 +824,7 @@ impl App {
                 .filter_map(|s| match s.trim() {
                     "napcat" => Some(BotProtocol::NapCat),
                     "llbot" => Some(BotProtocol::LuckyLilliaBot),
+                    "snowluma" => Some(BotProtocol::SnowLuma),
                     _ => None,
                 })
                 .collect()
@@ -804,6 +887,8 @@ impl App {
             git_dirty_mode: GitDirtyMode::Ask,
             napcat_conflict_mode: NapcatConflictMode::Ask,
             llbot_update_mode: LlbotUpdateMode::Prompt,
+            snowluma_swap_mode: SnowlumaSwapMode::Ask,
+            snowluma_conflict_mode: SnowlumaConflictMode::Ask,
         })
     }
 
@@ -827,6 +912,8 @@ impl App {
             git_dirty_mode: GitDirtyMode::Ask,
             napcat_conflict_mode: NapcatConflictMode::Ask,
             llbot_update_mode: LlbotUpdateMode::Prompt,
+            snowluma_swap_mode: SnowlumaSwapMode::Ask,
+            snowluma_conflict_mode: SnowlumaConflictMode::Ask,
         }
     }
 
@@ -857,6 +944,7 @@ impl App {
                 .map(|p| match p {
                     BotProtocol::NapCat => "napcat",
                     BotProtocol::LuckyLilliaBot => "llbot",
+                    BotProtocol::SnowLuma => "snowluma",
                 })
                 .collect::<Vec<_>>()
                 .join(","),
@@ -1024,7 +1112,9 @@ impl App {
             clean_install_dir(&plan.install_path)?;
         }
         fs::create_dir_all(&plan.install_path)?;
-        if plan.bot_protocols.contains(&BotProtocol::NapCat) {
+        if plan.bot_protocols.contains(&BotProtocol::NapCat)
+            || plan.bot_protocols.contains(&BotProtocol::SnowLuma)
+        {
             self.prepare_docker(&plan)?;
         }
         self.clone_or_update_repo(
@@ -1035,13 +1125,26 @@ impl App {
             true,
             plan.git_dirty_mode,
         )?;
-        self.sync_plugin_repo_with_manifest_dir(
-            &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-Napcat-Adapter"),
-            &plan.install_path.join("MaiBot").join("plugins"),
-            NAPCAT_ADAPTER_REPO_NAME,
-            Some("main"),
-            plan.install_mode,
-        )?;
+        let plugins_dir = plan.install_path.join("MaiBot").join("plugins");
+        if plan.bot_protocols.contains(&BotProtocol::NapCat) {
+            self.sync_plugin_repo_with_manifest_dir(
+                &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-Napcat-Adapter"),
+                &plugins_dir,
+                NAPCAT_ADAPTER_REPO_NAME,
+                Some("main"),
+                plan.install_mode,
+            )?;
+        }
+        if plan.bot_protocols.contains(&BotProtocol::SnowLuma) {
+            let adapter_dir = self.sync_plugin_repo_with_manifest_dir(
+                &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-SnowLuma-Adapter"),
+                &plugins_dir,
+                SNOWLUMA_ADAPTER_REPO_NAME,
+                Some("main"),
+                plan.install_mode,
+            )?;
+            self.ensure_snowluma_adapter_config(&adapter_dir)?;
+        }
         self.setup_python_env(&plan)?;
         self.save_config(&self.plan_to_config(&plan))?;
         if plan.bot_protocols.contains(&BotProtocol::NapCat) {
@@ -1049,6 +1152,9 @@ impl App {
         }
         if plan.bot_protocols.contains(&BotProtocol::LuckyLilliaBot) {
             self.install_llbot(&plan)?;
+        }
+        if plan.bot_protocols.contains(&BotProtocol::SnowLuma) {
+            self.install_snowluma(&plan)?;
         }
         Ok(())
     }
@@ -1145,6 +1251,7 @@ impl App {
 
     /// 如果目标仓库工作区有本地修改或未跟踪文件，列出后请用户选择处理方式：
     /// 1) git stash 临时保存；2) 丢弃；3) 取消更新。
+    ///
     /// 丢弃前还会再确认一次，避免误操作。
     pub(crate) fn ensure_clean_worktree(
         &self,
@@ -1422,6 +1529,233 @@ impl App {
             "cd '{}' && docker compose up -d",
             shell_escape(&napcat_dir)
         ))
+    }
+
+    /// SnowLuma uses bind-mounted directories rather than a named volume.  Removing
+    /// these directories is therefore the explicit "new identity" operation and
+    /// causes the upstream image to emit a new one-time WebUI password.
+    pub(crate) fn install_snowluma(&self, plan: &InstallPlan) -> Result<()> {
+        self.ensure_snowluma_swap(plan.snowluma_swap_mode)?;
+        let snowluma_dir = plan.install_path.join("SnowLuma");
+        fs::create_dir_all(&snowluma_dir)?;
+
+        let env_path = snowluma_dir.join(".env");
+        if !env_path.exists() {
+            fs::write(
+                &env_path,
+                format!("VNC_PASSWD={}\n", snowluma_vnc_password()?),
+            )?;
+        }
+
+        let compose_path = snowluma_dir.join("docker-compose.yml");
+        if !compose_path.exists() {
+            let maibot_path =
+                yaml_double_quote(&plan.install_path.join("MaiBot").display().to_string());
+            let compose = format!(
+                r#"services:
+  snowluma:
+    image: ${{SNOWLUMA_IMAGE:-motricseven7/snowluma:latest}}
+    container_name: ${{SNOWLUMA_CONTAINER:-snowluma}}
+    restart: unless-stopped
+    shm_size: 1gb
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      VNC_PASSWD: ${{VNC_PASSWD:-vncpasswd}}
+      SNOWLUMA_UID: ${{SNOWLUMA_UID:-1000}}
+      SNOWLUMA_GID: ${{SNOWLUMA_GID:-1000}}
+      SNOWLUMA_WEBUI_PORT: ${{SNOWLUMA_WEBUI_PORT:-5099}}
+      SNOWLUMA_LOG_LEVEL: ${{SNOWLUMA_LOG_LEVEL:-info}}
+      SNOWLUMA_SCREEN: ${{SNOWLUMA_SCREEN:-1920x1080x16}}
+      SNOWLUMA_HOOK_AUTOLOAD: ${{SNOWLUMA_HOOK_AUTOLOAD:-1}}
+      SNOWLUMA_EXTRA_QQ_HOMES: "${{SNOWLUMA_EXTRA_QQ_HOMES:-}}"
+      SNOWLUMA_QQ_FLAGS: "${{SNOWLUMA_QQ_FLAGS:---disable-gpu --disable-software-rasterizer --disable-gpu-compositing}}"
+    ports:
+      - "${{VNC_PORT:-5900}}:5900"
+      - "${{NOVNC_PORT:-6081}}:6081"
+      - "${{SNOWLUMA_WEBUI_HOST_PORT:-5099}}:${{SNOWLUMA_WEBUI_PORT:-5099}}"
+      - "${{ONEBOT_HTTP_PORT:-3000}}:3000"
+      - "${{ONEBOT_WS_PORT:-3001}}:3001"
+    volumes:
+      - ./snowluma-data:/app/snowluma-data
+      - ./snowluma-qq-config:/app/.config
+      - ./snowluma-qq-data:/app/.local/share
+      - "{maibot_path}:{maibot_path}:ro"
+"#,
+            );
+            fs::write(&compose_path, compose)?;
+        }
+        self.handle_snowluma_conflict(&snowluma_dir, plan.snowluma_conflict_mode)?;
+        self.run_shell(&format!(
+            "cd '{}' && docker compose up -d",
+            shell_escape(&snowluma_dir)
+        ))
+    }
+
+    fn ensure_snowluma_adapter_config(&self, adapter_dir: &Path) -> Result<()> {
+        let config_path = adapter_dir.join("config.toml");
+        if !config_path.exists() {
+            fs::write(&config_path, SNOWLUMA_ADAPTER_DEFAULT_CONFIG)?;
+            println!(
+                "已生成 SnowLuma Adapter 默认配置: {}",
+                config_path.display()
+            );
+        }
+        Ok(())
+    }
+
+    fn handle_snowluma_conflict(
+        &self,
+        snowluma_dir: &Path,
+        conflict_mode: SnowlumaConflictMode,
+    ) -> Result<()> {
+        const HOST_PORTS: &[u16] = &[5900, 6081, 5099, 3000, 3001];
+        let port_filters = HOST_PORTS
+            .iter()
+            .map(|port| format!("docker ps -aq --filter publish={port}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let query = format!(
+            "(docker ps -aq --filter name=^snowluma$; {port_filters}) | awk 'NF && !seen[$0]++'"
+        );
+        let output = Command::new("bash")
+            .arg("-lc")
+            .arg(&query)
+            .output()
+            .with_context(|| "查询 SnowLuma 容器或端口冲突失败")?;
+        let ids = String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        if !ids.is_empty() {
+            let details = Command::new("docker")
+                .arg("inspect")
+                .arg("--format")
+                .arg("{{.Name}}  {{.State.Status}}  {{.Config.Image}}")
+                .args(&ids)
+                .output()
+                .ok()
+                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+                .unwrap_or_default();
+            println!();
+            println!(
+                "  {}",
+                style("⚠  检测到 SnowLuma 同名容器或默认端口已被 Docker 容器占用")
+                    .yellow()
+                    .bold()
+            );
+            if !details.is_empty() {
+                for line in details.lines() {
+                    println!("    {}", style(line).dim());
+                }
+            }
+            println!(
+                "    {}",
+                style(format!("compose 目录: {}", snowluma_dir.display())).dim()
+            );
+            println!(
+                "    {}",
+                style("继续部署会删除上述容器；数据目录不会被删除").dim()
+            );
+
+            match conflict_mode {
+                SnowlumaConflictMode::Ask => {
+                    self.drain_pending_input();
+                    let confirmed = Confirm::with_theme(&self.theme)
+                        .with_prompt("删除冲突容器并重新部署 SnowLuma？")
+                        .default(true)
+                        .interact()
+                        .with_context(|| "读取确认失败")?;
+                    if !confirmed {
+                        return Err(anyhow!(UserCanceled(
+                            "已取消：保留冲突容器，未重新部署 SnowLuma".to_string()
+                        )));
+                    }
+                }
+                SnowlumaConflictMode::Recreate => {}
+                SnowlumaConflictMode::Cancel => {
+                    return Err(anyhow!(UserCanceled(
+                        "已取消：检测到 SnowLuma 容器或端口冲突；CLI 可使用 --snowluma-conflict recreate 允许重建".to_string()
+                    )));
+                }
+            }
+            self.run_shell(&format!("docker rm -f {}", ids.join(" ")))?;
+        }
+
+        let ports = HOST_PORTS
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        let listeners = Command::new("bash")
+            .arg("-lc")
+            .arg(format!(
+                "if command -v ss >/dev/null 2>&1; then ss -ltnH 2>/dev/null | awk '$4 ~ /:({ports})$/ {{print $4}}'; fi"
+            ))
+            .output()
+            .ok()
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .unwrap_or_default();
+        if !listeners.is_empty() {
+            anyhow::bail!(
+                "SnowLuma 默认端口仍被非 Docker 服务占用: {}。请停止该服务或修改 SnowLuma/.env 的端口后重试",
+                listeners.lines().collect::<Vec<_>>().join(", ")
+            );
+        }
+        Ok(())
+    }
+
+    fn ensure_snowluma_swap(&self, mode: SnowlumaSwapMode) -> Result<()> {
+        let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
+        let memory_kib = meminfo
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("MemTotal:")?
+                    .split_whitespace()
+                    .next()?
+                    .parse::<u64>()
+                    .ok()
+            })
+            .unwrap_or(0);
+        let swap_kib = meminfo
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("SwapTotal:")?
+                    .split_whitespace()
+                    .next()?
+                    .parse::<u64>()
+                    .ok()
+            })
+            .unwrap_or(0);
+        if memory_kib == 0 || memory_kib > 4 * 1024 * 1024 || swap_kib > 0 {
+            return Ok(());
+        }
+
+        println!("⚠ 检测到系统内存不超过 4 GB，SnowLuma 建议启用 2 GB Swap。");
+        let enable_swap = match mode {
+            SnowlumaSwapMode::Enable => true,
+            SnowlumaSwapMode::Skip => false,
+            SnowlumaSwapMode::Ask => self.with_prompt_mode(|| {
+                Confirm::with_theme(&self.theme)
+                    .with_prompt("现在创建并启用 2 GB Swap？")
+                    .default(true)
+                    .interact()
+                    .map_err(Into::into)
+            })?,
+        };
+        if enable_swap {
+            self.run_shell(
+                "sudo sh -c 'test -f /swapfile || (fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048); chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile; grep -q \"^/swapfile \" /etc/fstab || echo \"/swapfile none swap sw 0 0\" >> /etc/fstab'",
+            )?;
+        } else {
+            println!("已跳过 Swap；内存不足时 SnowLuma 可能无法稳定运行。");
+        }
+        Ok(())
     }
 
     /// `docker compose up -d` 在同名容器（非本 compose 项目托管）存在时会冲突。

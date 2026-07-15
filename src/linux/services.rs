@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, napcat_running},
+    app::{App, napcat_running, snowluma_running},
     ui::{ActionItem, StatusCard},
     utils::*,
 };
@@ -198,6 +198,82 @@ impl App {
         self.run_shell("docker exec -it napcat /bin/sh")
     }
 
+    fn snowluma_dir(&self) -> Result<PathBuf> {
+        let cfg = self.require_config()?;
+        Ok(PathBuf::from(cfg.mai_path).join("SnowLuma"))
+    }
+
+    pub(crate) fn start_snowluma(&self) -> Result<()> {
+        let dir = self.snowluma_dir()?;
+        self.run_shell(&format!(
+            "cd '{}' && docker compose up -d",
+            shell_escape(&dir)
+        ))
+    }
+
+    pub(crate) fn stop_snowluma(&self) -> Result<()> {
+        let dir = self.snowluma_dir()?;
+        self.run_shell(&format!(
+            "cd '{}' && docker compose stop",
+            shell_escape(&dir)
+        ))
+    }
+
+    pub(crate) fn restart_snowluma(&self) -> Result<()> {
+        let dir = self.snowluma_dir()?;
+        self.run_shell(&format!(
+            "cd '{}' && docker compose restart",
+            shell_escape(&dir)
+        ))
+    }
+
+    pub(crate) fn rebuild_snowluma(&self) -> Result<()> {
+        let dir = self.snowluma_dir()?;
+        self.run_shell(&format!(
+            "cd '{}' && docker compose down && docker compose pull && docker compose up -d",
+            shell_escape(&dir)
+        ))
+    }
+
+    pub(crate) fn recreate_snowluma_data(&self) -> Result<()> {
+        let dir = self.snowluma_dir()?;
+        self.run_shell(&format!(
+            "cd '{}' && docker compose down && rm -rf snowluma-data snowluma-qq-config snowluma-qq-data && docker compose up -d",
+            shell_escape(&dir)
+        ))
+    }
+
+    pub(crate) fn remove_snowluma_container(&self) -> Result<()> {
+        self.run_shell(
+            "docker ps -a --format '{{.Names}}' | grep '^snowluma$' | xargs -r docker rm -f",
+        )
+    }
+
+    pub(crate) fn print_snowluma_logs(&self, tail: usize, follow: bool) -> Result<()> {
+        let dir = self.snowluma_dir()?;
+        let follow_flag = if follow { "-f " } else { "" };
+        self.run_shell(&format!(
+            "cd '{}' && docker compose logs {follow_flag}--tail={tail}",
+            shell_escape(&dir)
+        ))
+    }
+
+    pub(crate) fn print_snowluma_status(&self) -> Result<()> {
+        println!(
+            "snowluma: {}",
+            if snowluma_running() {
+                "running"
+            } else {
+                "stopped"
+            }
+        );
+        Ok(())
+    }
+
+    pub(crate) fn exec_snowluma_shell(&self) -> Result<()> {
+        self.run_shell("docker exec -it snowluma /bin/sh")
+    }
+
     fn llbot_dir(&self) -> Result<PathBuf> {
         let cfg = self.require_config()?;
         if cfg.mai_llbot_path.is_empty() {
@@ -251,12 +327,14 @@ impl App {
             let actions = [
                 ActionItem::primary("NapCatQQ", "Docker Compose 协议端"),
                 ActionItem::normal("LuckyLilliaBot", "screen 托管的 CLI 协议端"),
+                ActionItem::normal("SnowLuma", "Linux Docker Compose 协议端"),
                 ActionItem::back("返回", "回到主菜单"),
             ];
             let choice = self.select_action("选择协议端", &actions)?;
             let result = match choice {
                 0 => self.manage_napcat_menu(),
                 1 => self.manage_llbot_menu(),
+                2 => self.manage_snowluma_menu(),
                 _ => break,
             };
             self.handle_menu_result(result)?;
@@ -422,6 +500,57 @@ impl App {
                     }
                     Ok(())
                 }
+                _ => break,
+            };
+            if self.handle_menu_result(result)? {
+                self.pause("操作已执行，按回车继续")?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn manage_snowluma_menu(&self) -> Result<()> {
+        let dir = self.snowluma_dir()?;
+        loop {
+            self.clear();
+            self.print_header(None);
+            self.print_section("SnowLuma", "Docker 容器、数据重建与日志管理");
+            self.print_kv("目录", &dir.display().to_string());
+            let cards = [if snowluma_running() {
+                StatusCard::running("SnowLuma", "Docker 容器 snowluma 正在运行")
+            } else {
+                StatusCard::stopped("SnowLuma", "Docker 容器未运行")
+            }];
+            self.print_status_cards("服务状态", &cards);
+            let actions = [
+                ActionItem::primary("启动 SnowLuma", "docker compose up -d"),
+                ActionItem::destructive("停止 SnowLuma", "docker compose stop"),
+                ActionItem::normal("重启 SnowLuma", "重启容器进程"),
+                ActionItem::normal("查看实时日志", "跟随 docker compose logs"),
+                ActionItem::normal("重建容器", "down + pull + up -d，保留数据"),
+                ActionItem::destructive("删除数据并重建", "清空数据目录，新的首次启动密码会生成"),
+                ActionItem::destructive("移除容器", "删除 snowluma 容器，保留数据目录"),
+                ActionItem::back("返回", "回到协议端服务"),
+            ];
+            let choice = self.select_action("选择 SnowLuma 操作", &actions)?;
+            let result = match choice {
+                0 => self.start_snowluma(),
+                1 => self.stop_snowluma(),
+                2 => self.restart_snowluma(),
+                3 => self.print_snowluma_logs(100, true),
+                4 => self.rebuild_snowluma(),
+                5 => {
+                    if Confirm::with_theme(&self.theme)
+                        .with_prompt("确认删除 SnowLuma 的全部数据并重建？")
+                        .default(false)
+                        .interact()?
+                    {
+                        self.recreate_snowluma_data()
+                    } else {
+                        Ok(())
+                    }
+                }
+                6 => self.remove_snowluma_container(),
                 _ => break,
             };
             if self.handle_menu_result(result)? {

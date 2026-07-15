@@ -2,12 +2,12 @@ use crate::{app::App, data, model::DashboardPopup, ui::ActionItem};
 use anyhow::{Result, anyhow, bail};
 use dialoguer::{Confirm, Input, Select};
 
-use crate::plugins::NAPCAT_ADAPTER_PLUGIN_ID;
+use crate::plugins::{NAPCAT_ADAPTER_PLUGIN_ID, SNOWLUMA_ADAPTER_PLUGIN_ID};
 use crate::theme::AppTheme;
 use dialoguer::console::style;
 use regex::Regex;
 use serde_json::Value;
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, process::Command};
 use toml_edit::{Array, DocumentMut, Item, Value as TomlValue, value};
 
 const CHAT_TABLE: &str = "chat";
@@ -48,14 +48,35 @@ impl AccessInfoReport {
 }
 
 impl App {
-    fn napcat_adapter_dir(&self) -> Result<PathBuf> {
+    fn adapter_dir(&self) -> Result<Option<PathBuf>> {
         let cfg = self.require_config()?;
         let plugins_dir = PathBuf::from(cfg.mai_path).join("MaiBot/plugins");
-        self.require_plugin_dir_by_id(&plugins_dir, NAPCAT_ADAPTER_PLUGIN_ID)
+        let mut preferred = Vec::new();
+        for protocol in cfg.bot_protocols.split(',').map(str::trim) {
+            match protocol {
+                "snowluma" => preferred.push(SNOWLUMA_ADAPTER_PLUGIN_ID),
+                "napcat" => preferred.push(NAPCAT_ADAPTER_PLUGIN_ID),
+                _ => {}
+            }
+        }
+        for plugin_id in [SNOWLUMA_ADAPTER_PLUGIN_ID, NAPCAT_ADAPTER_PLUGIN_ID] {
+            if !preferred.contains(&plugin_id) {
+                preferred.push(plugin_id);
+            }
+        }
+        for plugin_id in preferred {
+            if let Some(path) = self.resolve_plugin_dir_by_id(&plugins_dir, plugin_id)? {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
     }
 
     fn adapter_config_path(&self) -> Result<PathBuf> {
-        let path = self.napcat_adapter_dir()?.join("config.toml");
+        let path = self
+            .adapter_dir()?
+            .ok_or_else(|| anyhow!("未找到已安装的 NapCat 或 SnowLuma Adapter"))?
+            .join("config.toml");
         if !path.exists() {
             bail!("未找到 Adapter 配置文件: {}", path.display());
         }
@@ -66,10 +87,16 @@ impl App {
         loop {
             self.clear();
             self.print_header(None);
-            self.print_section("配置与访问", "集中维护 WebUI 入口、密钥和 Adapter 策略");
+            self.print_section(
+                "配置与访问",
+                "集中维护 WebUI 入口、密钥和已安装 Adapter 策略",
+            );
             let actions = [
-                ActionItem::primary("查看访问信息", "汇总 MaiBot / NapCat / LLBot WebUI"),
-                ActionItem::normal("初始化访问配置", "绑定 IPv4/IPv6 全地址并启用 Adapter"),
+                ActionItem::primary("查看访问信息", "汇总 MaiBot 与各协议端 WebUI"),
+                ActionItem::normal(
+                    "初始化访问配置",
+                    "绑定 IPv4/IPv6 全地址并启用已安装 Adapter",
+                ),
                 ActionItem::normal("黑白名单策略", "维护群聊、私聊和黑名单规则"),
                 ActionItem::destructive(
                     "清空数据文件",
@@ -106,7 +133,6 @@ impl App {
                 lines: report.popup_lines(),
                 actions: vec!["取消".to_string()],
                 selected: 0,
-                ..DashboardPopup::default()
             },
             Err(error) => DashboardPopup {
                 title: "访问汇总".to_string(),
@@ -117,7 +143,6 @@ impl App {
                 ],
                 actions: vec!["取消".to_string()],
                 selected: 0,
-                ..DashboardPopup::default()
             },
         }
     }
@@ -220,8 +245,28 @@ impl App {
                 ],
             });
         }
+        let snowluma_dir = root.join("SnowLuma");
+        if snowluma_dir.exists() {
+            let host = cached_public_ip(self, &mut public_ip);
+            let vnc_password = snowluma_vnc_password(&snowluma_dir)
+                .unwrap_or_else(|| "未找到 .env 中的 VNC_PASSWD".to_string());
+            endpoints.push(AccessEndpoint {
+                title: "SnowLuma WebUI",
+                fields: vec![
+                    ("地址", format!("http://{host}:5099/")),
+                    ("临时密码", snowluma_initial_password()),
+                ],
+            });
+            endpoints.push(AccessEndpoint {
+                title: "SnowLuma VNC",
+                fields: vec![
+                    ("地址", format!("http://{host}:6081/")),
+                    ("密码", vnc_password),
+                ],
+            });
+        }
         Ok(AccessInfoReport {
-            subtitle: "集中查看 MaiBot、NapCat 与 LLBot 的访问入口",
+            subtitle: "集中查看 MaiBot、协议端与 SnowLuma 的访问入口",
             ip_label: "本机 / 公网 IP",
             public_ip: public_ip.unwrap_or_else(|| "未读取（当前没有外部地址）".to_string()),
             endpoints,
@@ -286,7 +331,7 @@ impl App {
         self.print_header(None);
         self.print_section(
             "初始化访问配置",
-            "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用 Napcat 适配器",
+            "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用已安装的 Adapter",
         );
         self.print_hint(
             "注意：监听 0.0.0.0 和 :: 会让 WebUI 暴露在外部网络，请确认已设置访问令牌或防火墙规则。",
@@ -310,7 +355,6 @@ impl App {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
         let bot_cfg = root.join("MaiBot/config/bot_config.toml");
-        let adapter_cfg = self.napcat_adapter_dir()?.join("config.toml");
         if bot_cfg.exists() {
             let mut doc: DocumentMut = fs::read_to_string(&bot_cfg)?.parse()?;
             if doc["webui"].is_none() {
@@ -319,13 +363,16 @@ impl App {
             doc["webui"]["host"] = webui_host_all_interfaces();
             fs::write(&bot_cfg, doc.to_string())?;
         }
-        if adapter_cfg.exists() {
-            let mut doc: DocumentMut = fs::read_to_string(&adapter_cfg)?.parse()?;
-            if doc["plugin"].is_none() {
-                doc["plugin"] = Item::Table(Default::default());
+        if let Some(adapter_dir) = self.adapter_dir()? {
+            let adapter_cfg = adapter_dir.join("config.toml");
+            if adapter_cfg.exists() {
+                let mut doc: DocumentMut = fs::read_to_string(&adapter_cfg)?.parse()?;
+                if doc["plugin"].is_none() {
+                    doc["plugin"] = Item::Table(Default::default());
+                }
+                doc["plugin"]["enabled"] = value(true);
+                fs::write(&adapter_cfg, doc.to_string())?;
             }
-            doc["plugin"]["enabled"] = value(true);
-            fs::write(&adapter_cfg, doc.to_string())?;
         }
         Ok(())
     }
@@ -474,6 +521,29 @@ impl App {
     }
 }
 
+fn snowluma_vnc_password(dir: &std::path::Path) -> Option<String> {
+    fs::read_to_string(dir.join(".env"))
+        .ok()?
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("VNC_PASSWD=").map(str::to_string))
+}
+
+fn snowluma_initial_password() -> String {
+    let output = Command::new("bash")
+        .arg("-lc")
+        .arg("docker logs snowluma 2>&1 | sed -nE 's/.*(临时密码: |initial credentials: user=admin password=)([^[:space:]]+).*/\\2/p' | tail -n 1")
+        .output();
+    let password = output
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default();
+    if password.is_empty() {
+        "未找到；临时密码只会在全新数据首次启动时输出，永久密码不会显示".to_string()
+    } else {
+        password
+    }
+}
+
 fn webui_host_all_interfaces() -> Item {
     let mut host = Array::default();
     host.push("0.0.0.0");
@@ -505,8 +575,12 @@ fn cached_public_ip(app: &App, cached: &mut Option<String>) -> String {
 
 fn display_array(arr: &toml_edit::Array) -> String {
     arr.iter()
-        .filter_map(|v| v.as_integer())
-        .map(|v| v.to_string())
+        .filter_map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| value.as_integer().map(|number| number.to_string()))
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -529,7 +603,7 @@ fn config_array_display(doc: &DocumentMut, table: &str, key: &str) -> String {
 }
 
 fn ensure_table(doc: &mut DocumentMut, table: &str) {
-    if !doc.get(table).and_then(Item::as_table).is_some() {
+    if doc.get(table).and_then(Item::as_table).is_none() {
         doc[table] = Item::Table(Default::default());
     }
 }
@@ -577,6 +651,7 @@ fn update_numeric_array(
     add: bool,
 ) -> Result<()> {
     ensure_table(doc, table);
+    let uses_string_values = doc["luma_client"].is_table();
     if doc[table].get(key).map(Item::is_none).unwrap_or(true) {
         doc[table][key] = Item::Value(TomlValue::Array(Default::default()));
     }
@@ -585,14 +660,22 @@ fn update_numeric_array(
         .ok_or_else(|| anyhow!("{}.{} 不是数组", table, key))?;
     let values = arr
         .iter()
-        .filter_map(|v| v.as_integer())
-        .map(|v| v.to_string())
+        .filter_map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| value.as_integer().map(|number| number.to_string()))
+        })
         .collect::<Vec<_>>();
     if add {
         if !values.iter().any(|value| value == input) {
-            arr.push(input.parse::<i64>()?);
+            if uses_string_values {
+                arr.push(input);
+            } else {
+                arr.push(input.parse::<i64>()?);
+            }
         }
-    } else if let Some(pos) = values.iter().position(|v| v == &input) {
+    } else if let Some(pos) = values.iter().position(|v| v == input) {
         arr.remove(pos);
     }
     Ok(())

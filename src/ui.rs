@@ -223,6 +223,7 @@ impl App {
                     .map(|v| match v {
                         BotProtocol::NapCat => "NapCatQQ",
                         BotProtocol::LuckyLilliaBot => "LuckyLilliaBot",
+                        BotProtocol::SnowLuma => "SnowLuma",
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -1493,6 +1494,16 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
                     "修改密码".to_string(),
                     "取消".to_string(),
                 ]
+            } else if card.id == "snowluma" {
+                vec![
+                    "启动".to_string(),
+                    "停止".to_string(),
+                    "重启".to_string(),
+                    "查看日志".to_string(),
+                    "重建容器".to_string(),
+                    "确认删除数据并重建".to_string(),
+                    "取消".to_string(),
+                ]
             } else {
                 vec!["启动".to_string(), "停止".to_string(), "取消".to_string()]
             }
@@ -1828,11 +1839,17 @@ fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> Vec<String>
             choices.push("输入自定义 PyPI".to_string());
             choices
         }
-        PlanField::BotProtocols => vec![
-            BotProtocol::NapCat.label().to_string(),
-            BotProtocol::LuckyLilliaBot.label().to_string(),
-            "暂不安装协议端".to_string(),
-        ],
+        PlanField::BotProtocols => {
+            let mut choices = vec![
+                BotProtocol::NapCat.label().to_string(),
+                BotProtocol::LuckyLilliaBot.label().to_string(),
+            ];
+            if cfg!(target_os = "linux") {
+                choices.push(BotProtocol::SnowLuma.label().to_string());
+            }
+            choices.push("暂不安装协议端".to_string());
+            choices
+        }
         PlanField::DockerMirror => vec![
             DockerMirror::OneMs.label().to_string(),
             DockerMirror::Xuanyuan.label().to_string(),
@@ -1898,7 +1915,11 @@ fn planner_choice_active_for_plan(plan: &InstallPlan, field: PlanField, idx: usi
         PlanField::BotProtocols => {
             (idx == 0 && plan.bot_protocols.as_slice() == [BotProtocol::NapCat])
                 || (idx == 1 && plan.bot_protocols.as_slice() == [BotProtocol::LuckyLilliaBot])
-                || (idx == 2 && plan.bot_protocols.is_empty())
+                || (cfg!(target_os = "linux")
+                    && idx == 2
+                    && plan.bot_protocols.as_slice() == [BotProtocol::SnowLuma])
+                || (idx == if cfg!(target_os = "linux") { 3 } else { 2 }
+                    && plan.bot_protocols.is_empty())
         }
         PlanField::DockerMirror => {
             matches!(
@@ -2275,14 +2296,19 @@ fn apply_cached_planner_choice(plan: &mut InstallPlan, field: PlanField, idx: us
             plan.bot_protocols = match idx {
                 0 => vec![BotProtocol::NapCat],
                 1 => vec![BotProtocol::LuckyLilliaBot],
+                2 if cfg!(target_os = "linux") => vec![BotProtocol::SnowLuma],
                 _ => Vec::new(),
             };
-            if !plan.bot_protocols.contains(&BotProtocol::NapCat) {
+            if !plan.bot_protocols.contains(&BotProtocol::NapCat)
+                && !plan.bot_protocols.contains(&BotProtocol::SnowLuma)
+            {
                 plan.docker_mirror = DockerMirror::Keep;
             }
         }
         PlanField::DockerMirror => {
-            if plan.bot_protocols.contains(&BotProtocol::NapCat) {
+            if plan.bot_protocols.contains(&BotProtocol::NapCat)
+                || plan.bot_protocols.contains(&BotProtocol::SnowLuma)
+            {
                 plan.docker_mirror = match idx {
                     0 => DockerMirror::OneMs,
                     1 => DockerMirror::Xuanyuan,
@@ -3090,7 +3116,8 @@ mod tests {
             PlanField::PipSource,
             0
         ));
-        apply_cached_planner_choice(&mut plan, PlanField::BotProtocols, 2);
+        let no_protocol_choice = if cfg!(target_os = "linux") { 3 } else { 2 };
+        apply_cached_planner_choice(&mut plan, PlanField::BotProtocols, no_protocol_choice);
 
         assert!(plan.bot_protocols.is_empty());
         assert_eq!(plan.docker_mirror, DockerMirror::Keep);

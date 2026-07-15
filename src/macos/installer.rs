@@ -537,6 +537,8 @@ impl App {
             git_dirty_mode: GitDirtyMode::Ask,
             napcat_conflict_mode: NapcatConflictMode::Ask,
             llbot_update_mode: LlbotUpdateMode::Prompt,
+            snowluma_swap_mode: SnowlumaSwapMode::Ask,
+            snowluma_conflict_mode: SnowlumaConflictMode::Ask,
         }
     }
 

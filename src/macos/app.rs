@@ -1,5 +1,4 @@
 use anyhow::{Error, Result, anyhow, bail};
-use dialoguer::console::style;
 use std::{
     cell::RefCell,
     fs,
@@ -103,6 +102,32 @@ impl App {
         cache.plugin_update_cache.clear();
     }
 
+    fn recover_dashboard_error(&self, state: &mut DashboardState, error: &Error) {
+        let mut lines = vec![format!("原因: {error}")];
+        lines.extend(
+            error
+                .chain()
+                .skip(1)
+                .take(3)
+                .map(|cause| format!("详情: {cause}")),
+        );
+        state.active_tab = DashboardTab::Overview;
+        state.current_tab = DashboardTab::Overview.sidebar_index();
+        state.focus = DashboardFocus::Sidebar;
+        state.mode = crate::model::AppMode::Navigation;
+        state.search_query.clear();
+        state.set_selected(0);
+        state.popup = Some(DashboardPopup {
+            title: "任务执行失败".to_string(),
+            subtitle: "已返回主界面；请根据原因修正后重试".to_string(),
+            lines,
+            actions: vec!["返回主界面".to_string()],
+            selected: 0,
+        });
+        state.set_status_message("任务失败，已返回主界面");
+        self.invalidate_dashboard_cache();
+    }
+
     pub(crate) fn run(&mut self) -> Result<()> {
         let mut dashboard = DashboardState::default();
         dashboard.focus = DashboardFocus::Sidebar;
@@ -114,57 +139,65 @@ impl App {
                 |state| self.build_dashboard_view(state),
                 |state, view| self.open_inline_dashboard_info_popup(state, view),
             )?;
-            match event {
-                DashboardEvent::ClearSearch => {
-                    if !dashboard.search_query.is_empty() {
-                        dashboard.search_query.clear();
-                        let len = self
-                            .dashboard_cards(&dashboard.active_tab, &dashboard.search_query)?
-                            .len();
-                        dashboard.clamp_selected(len);
+            let event_result = (|| -> Result<bool> {
+                match event {
+                    DashboardEvent::ClearSearch => {
+                        if !dashboard.search_query.is_empty() {
+                            dashboard.search_query.clear();
+                            let len = self
+                                .dashboard_cards(&dashboard.active_tab, &dashboard.search_query)?
+                                .len();
+                            dashboard.clamp_selected(len);
+                        }
                     }
-                }
-                DashboardEvent::Activate => {
-                    dashboard.clear_status_message();
-                    if matches!(dashboard.focus, DashboardFocus::Sidebar) {
-                        dashboard.focus = DashboardFocus::Content;
-                    } else if !self.activate_dashboard_selection(&mut dashboard)? {
-                        break;
+                    DashboardEvent::Activate => {
+                        dashboard.clear_status_message();
+                        if matches!(dashboard.focus, DashboardFocus::Sidebar) {
+                            dashboard.focus = DashboardFocus::Content;
+                        } else if !self.activate_dashboard_selection(&mut dashboard)? {
+                            return Ok(false);
+                        }
                     }
-                }
-                DashboardEvent::CommitDeployChoice { field, choice_idx } => {
-                    let current = self.load_config().unwrap_or_default();
-                    let mut plan = dashboard.deploy_plan.take().unwrap_or_else(|| {
-                        self.build_default_install_plan(&current)
-                            .unwrap_or_else(|_| self.build_recommended_defaults())
-                    });
-                    self.apply_planner_choice(&current, &mut plan, field, choice_idx)?;
-                    dashboard.deploy_plan = Some(plan);
-                    dashboard.commit_deploy_choice_selection(field, choice_idx);
-                    dashboard.set_status_message("部署选项已确认");
-                }
-                DashboardEvent::ResetDeployPlan => {
-                    let reset = self.build_recommended_defaults();
-                    dashboard.deploy_plan = Some(reset);
-                    dashboard.reset_deploy_choice_selections();
-                    dashboard.set_status_message("已恢复推荐默认部署配置");
-                }
-                DashboardEvent::RunDeployPlan => {
-                    let plan = if let Some(plan) = dashboard.deploy_plan.as_ref() {
-                        plan.clone()
-                    } else {
+                    DashboardEvent::CommitDeployChoice { field, choice_idx } => {
                         let current = self.load_config().unwrap_or_default();
-                        self.build_default_install_plan(&current)?
-                    };
-                    self.handle_menu_result(self.run_install(&plan))?;
-                    dashboard.deploy_plan = Some(plan);
-                    dashboard.set_status_message("安装流程已执行");
-                    self.invalidate_dashboard_cache();
+                        let mut plan = dashboard.deploy_plan.take().unwrap_or_else(|| {
+                            self.build_default_install_plan(&current)
+                                .unwrap_or_else(|_| self.build_recommended_defaults())
+                        });
+                        self.apply_planner_choice(&current, &mut plan, field, choice_idx)?;
+                        dashboard.deploy_plan = Some(plan);
+                        dashboard.commit_deploy_choice_selection(field, choice_idx);
+                        dashboard.set_status_message("部署选项已确认");
+                    }
+                    DashboardEvent::ResetDeployPlan => {
+                        let reset = self.build_recommended_defaults();
+                        dashboard.deploy_plan = Some(reset);
+                        dashboard.reset_deploy_choice_selections();
+                        dashboard.set_status_message("已恢复推荐默认部署配置");
+                    }
+                    DashboardEvent::RunDeployPlan => {
+                        let plan = if let Some(plan) = dashboard.deploy_plan.as_ref() {
+                            plan.clone()
+                        } else {
+                            let current = self.load_config().unwrap_or_default();
+                            self.build_default_install_plan(&current)?
+                        };
+                        self.handle_menu_result(self.run_install(&plan))?;
+                        dashboard.deploy_plan = Some(plan);
+                        dashboard.set_status_message("安装流程已执行");
+                        self.invalidate_dashboard_cache();
+                    }
+                    DashboardEvent::AttachTerminal { .. } => {
+                        // Not supported on this platform — ignore
+                    }
+                    DashboardEvent::Exit => return Ok(false),
                 }
-                DashboardEvent::AttachTerminal { .. } => {
-                    // Not supported on this platform — ignore
-                }
-                DashboardEvent::Exit => break,
+                Ok(true)
+            })();
+            match event_result {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => self.recover_dashboard_error(&mut dashboard, &error),
             }
         }
         Ok(())
@@ -1317,9 +1350,7 @@ impl App {
                             state.set_status_message(format!("已清理 {removed} 个数据条目"));
                             self.invalidate_dashboard_cache();
                         }
-                        Err(error) => {
-                            state.set_status_message(format!("清理失败: {error}"));
-                        }
+                        Err(error) => return Err(error),
                     }
                 }
                 _ if action_idx == 0 => {
@@ -1444,28 +1475,7 @@ impl App {
     }
 
     pub(crate) fn handle_menu_result(&self, result: Result<()>) -> Result<bool> {
-        match result {
-            Ok(()) => Ok(true),
-            Err(error) => {
-                self.print_menu_error(&error)?;
-                Ok(false)
-            }
-        }
-    }
-
-    fn print_menu_error(&self, error: &Error) -> Result<()> {
-        println!();
-        println!(
-            "  {} {}",
-            style("!").red().bold(),
-            style("操作失败").red().bold()
-        );
-        println!("  {}", style(error.to_string()).red());
-        for cause in error.chain().skip(1) {
-            println!("    {}", style(format!("原因: {cause}")).dim());
-        }
-        self.pause("按回车返回当前菜单")?;
-        Ok(())
+        result.map(|()| true)
     }
 
     #[allow(dead_code)]

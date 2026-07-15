@@ -57,6 +57,8 @@ pub struct InstallPlan {
     pub git_dirty_mode: GitDirtyMode,
     pub napcat_conflict_mode: NapcatConflictMode,
     pub llbot_update_mode: LlbotUpdateMode,
+    pub snowluma_swap_mode: SnowlumaSwapMode,
+    pub snowluma_conflict_mode: SnowlumaConflictMode,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -84,6 +86,7 @@ pub enum VenvMode {
 pub enum BotProtocol {
     NapCat,
     LuckyLilliaBot,
+    SnowLuma,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -126,6 +129,24 @@ pub enum LlbotUpdateMode {
     Prompt,
     Update,
     Skip,
+}
+
+/// Swap is an installation-time safety choice and is intentionally not persisted:
+/// the system's active swap state is checked again on every SnowLuma deployment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SnowlumaSwapMode {
+    #[default]
+    Ask,
+    Enable,
+    Skip,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SnowlumaConflictMode {
+    #[default]
+    Ask,
+    Recreate,
+    Cancel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -511,6 +532,7 @@ impl BotProtocol {
         match self {
             Self::NapCat => "NapCatQQ",
             Self::LuckyLilliaBot => "LuckyLilliaBot",
+            Self::SnowLuma => "SnowLuma",
         }
     }
 }

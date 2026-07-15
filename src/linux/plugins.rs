@@ -26,6 +26,8 @@ pub(crate) struct PluginSummary {
 
 pub(crate) const NAPCAT_ADAPTER_REPO_NAME: &str = "MaiBot-Napcat-Adapter";
 pub(crate) const NAPCAT_ADAPTER_PLUGIN_ID: &str = "maibot-team.napcat-adapter";
+pub(crate) const SNOWLUMA_ADAPTER_REPO_NAME: &str = "MaiBot-SnowLuma-Adapter";
+pub(crate) const SNOWLUMA_ADAPTER_PLUGIN_ID: &str = "maibot-team.snowluma-adapter";
 
 impl App {
     fn plugin_context(&self) -> Result<(PathBuf, PathBuf, PathBuf, String)> {
