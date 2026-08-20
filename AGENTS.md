@@ -17,8 +17,7 @@ cargo build --release --target aarch64-unknown-linux-musl
 # Windows release build
 cargo build --release --target x86_64-pc-windows-msvc
 
-# macOS local release build, both artifacts (what build-release.sh does on macOS)
-cargo build --release --target x86_64-apple-darwin
+# macOS local release build (Apple Silicon; what build-release.sh does on macOS)
 cargo build --release --target aarch64-apple-darwin
 
 # Full local pipelines
@@ -30,7 +29,7 @@ Linux release builds use musl static targets so the binaries do not depend on th
 `build-release.ps1` intentionally uses `target/build-release-windows` instead of Cargo's default target dir so a manually launched TUI exe cannot block release builds. `output/` artifact names are fixed release contract names; do not write timestamped or alternate release filenames. If `output/maibot-manager-windows-x86_64.exe` is running, the script should fail with a clear close-and-rerun message. WSL output is captured through `Start-Process` redirected files rather than `2>&1 | ...` because Windows PowerShell can treat native stderr as terminating errors under `$ErrorActionPreference = "Stop"`; keep filtering the known WSL localhost proxy warning so build logs do not get mojibake.
 
 GitHub Actions publishes `main` pushes as the stable latest release tagged `v<version>`, and `dev` pushes as prereleases tagged `<version>-dev-<short-sha>` (for example `0.3.0-dev-abcdef1`). Release notes should compare the current build with the latest stable GitHub Release and use user-facing `Feature:` and `Fix:` sections only; omit development, testing, CI, and implementation-process statements.
-The release workflow runs on `main` and `dev` pushes. Keep both branches in `.github/workflows/release.yml` when changing workflow triggers. It builds Linux x86_64/arm64, Windows x86_64, and macOS x86_64/arm64 artifacts. Build both macOS artifacts on the newer Apple Silicon `macos-15` GitHub-hosted runner; the x86_64 macOS artifact is cross-compiled there to avoid waiting on older Intel runner capacity.
+The release workflow runs on `main` and `dev` pushes. Keep both branches in `.github/workflows/release.yml` when changing workflow triggers. It builds Linux x86_64/arm64, Windows x86_64, and macOS Apple Silicon artifacts. Build the macOS artifact on the `macos-15` GitHub-hosted runner.
 
 Windows and macOS support are compiled as separate targets. Linux-only implementations live in `src/linux/`, Windows-only implementations live in `src/win/`, macOS-only implementations live in `src/macos/`, and `src/main.rs` selects them with `#[cfg(target_os = "...")]` plus `#[path = "..."]`. Do not import non-current-platform modules from shared code, because release binaries should not include dead platform code.
 

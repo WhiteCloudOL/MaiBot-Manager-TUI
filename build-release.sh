@@ -76,14 +76,8 @@ case "${HOST_OS}" in
         )
         ;;
     Darwin)
-        TARGETS=(
-            x86_64-apple-darwin
-            aarch64-apple-darwin
-        )
-        OUTPUT_NAMES=(
-            maibot-manager-macos-x86_64
-            maibot-manager-macos-arm64
-        )
+        TARGETS=(aarch64-apple-darwin)
+        OUTPUT_NAMES=(maibot-manager-macos-arm64)
         ;;
     *)
         die "Unsupported build host: ${HOST_OS}. Use Linux/WSL for Linux artifacts or macOS for macOS artifacts."
