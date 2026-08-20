@@ -1022,17 +1022,18 @@ impl App {
 
     fn install_napcat_adapter(&self, plan: &InstallPlan) -> Result<()> {
         let plugins_dir = plan.install_path.join("MaiBot").join("plugins");
-        let target = plugins_dir.join(NAPCAT_ADAPTER_PLUGIN_ID);
-        self.clone_or_update_repo(
+        self.sync_plugin_repo_with_manifest_dir_at_root(
             &plan.install_path,
             &repo_url(
                 &plan.github_proxy,
                 &format!("Mai-with-u/{NAPCAT_ADAPTER_REPO_NAME}"),
             ),
-            &target,
-            "main",
-            plan.git_dirty_mode,
-        )
+            &plugins_dir,
+            NAPCAT_ADAPTER_REPO_NAME,
+            Some("main"),
+            plan.install_mode,
+        )?;
+        Ok(())
     }
 
     pub(crate) fn setup_python_env(&self, plan: &InstallPlan) -> Result<()> {
@@ -1040,7 +1041,7 @@ impl App {
         let maibot_dir = root.join("MaiBot");
         let adapter_req = maibot_dir
             .join("plugins")
-            .join(NAPCAT_ADAPTER_PLUGIN_ID)
+            .join(plugin_dir_name(NAPCAT_ADAPTER_PLUGIN_ID))
             .join("requirements.txt");
         match plan.python_env {
             PythonEnv::Uv => {

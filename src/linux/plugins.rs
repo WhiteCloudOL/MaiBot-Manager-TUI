@@ -131,7 +131,7 @@ impl App {
         plugins_dir: &Path,
         plugin_id: &str,
     ) -> Result<Option<PathBuf>> {
-        let preferred = plugins_dir.join(plugin_id);
+        let preferred = plugins_dir.join(plugin_dir_name(plugin_id));
         if preferred.exists() {
             return Ok(Some(preferred));
         }
@@ -167,7 +167,7 @@ impl App {
 
         if repo_path.exists() {
             let plugin_id = self.plugin_id_from_dir(&repo_path)?;
-            let canonical = plugins_dir.join(&plugin_id);
+            let canonical = plugins_dir.join(plugin_dir_name(&plugin_id));
             if canonical != repo_path {
                 if canonical.exists() {
                     self.move_plugin_dir_to_backup(&repo_path)?;
@@ -189,8 +189,35 @@ impl App {
         self.clone_or_update_repo(url, &target, branch, mode, false, GitDirtyMode::Ask)?;
 
         let plugin_id = self.plugin_id_from_dir(&target)?;
-        let canonical = plugins_dir.join(&plugin_id);
+        let canonical = plugins_dir.join(plugin_dir_name(&plugin_id));
         if canonical == target {
+            return Ok(canonical);
+        }
+
+        let legacy_canonical = plugins_dir.join(&plugin_id);
+        if legacy_canonical != canonical && legacy_canonical != target && legacy_canonical.exists()
+        {
+            if target_existed_before {
+                self.move_plugin_dir_to_backup(&target)?;
+            } else {
+                fs::remove_dir_all(&target)
+                    .with_context(|| format!("无法清理临时插件目录 {}", target.display()))?;
+            }
+            self.clone_or_update_repo(
+                url,
+                &legacy_canonical,
+                branch,
+                mode,
+                false,
+                GitDirtyMode::Ask,
+            )?;
+            fs::rename(&legacy_canonical, &canonical).with_context(|| {
+                format!(
+                    "无法将旧插件目录 {} 重命名为 {}",
+                    legacy_canonical.display(),
+                    canonical.display()
+                )
+            })?;
             return Ok(canonical);
         }
 

@@ -47,23 +47,29 @@ impl App {
         Ok(())
     }
 
-    fn maibot_paths(&self) -> Result<(PathBuf, PathBuf, String)> {
+    fn maibot_paths(&self) -> Result<(PathBuf, PathBuf, String, String, String)> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
         Ok((
             root.join("MaiBot"),
             root.join("venv/bin/activate"),
             cfg.mai_python_env,
+            cfg.pip_index,
+            cfg.pip_host,
         ))
     }
 
     pub(crate) fn start_maibot_core(&self, attach: bool) -> Result<()> {
-        let (maibot_dir, venv_activate, py_env) = self.maibot_paths()?;
+        let (maibot_dir, venv_activate, py_env, pip_index, pip_host) = self.maibot_paths()?;
+        let pypi_env = pypi_runtime_env(&pip_index, &pip_host);
         let body = if py_env == "uv" {
-            format!("cd '{}' && uv run bot.py", shell_escape(&maibot_dir))
+            format!(
+                "cd '{}' && {pypi_env}uv run bot.py",
+                shell_escape(&maibot_dir)
+            )
         } else {
             format!(
-                "cd '{}' && . '{}' && python3 bot.py",
+                "cd '{}' && {pypi_env}. '{}' && python3 bot.py",
                 shell_escape(&maibot_dir),
                 shell_escape(&venv_activate)
             )
@@ -561,6 +567,23 @@ impl App {
     }
 }
 
+/// 运行时的源优先级高于项目配置；UV_NO_CONFIG 会屏蔽 pyproject.toml/uv.toml 的索引。
+fn pypi_runtime_env(pip_index: &str, pip_host: &str) -> String {
+    if pip_index.trim().is_empty() {
+        return String::new();
+    }
+
+    let index = shell_escape_raw(pip_index);
+    let trusted_host = if pip_host.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" PIP_TRUSTED_HOST='{}'", shell_escape_raw(pip_host))
+    };
+    format!(
+        "export PIP_INDEX_URL='{index}' UV_DEFAULT_INDEX='{index}' UV_INDEX_URL='{index}' UV_NO_CONFIG=1{trusted_host}; "
+    )
+}
+
 fn print_screen_status(session: &str) -> Result<()> {
     if screen_exists(session)? {
         println!("{session}: running");
@@ -568,4 +591,23 @@ fn print_screen_status(session: &str) -> Result<()> {
         println!("{session}: stopped");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pypi_runtime_env;
+
+    #[test]
+    fn runtime_pypi_environment_overrides_project_configuration() {
+        let env = pypi_runtime_env("https://pypi.example/simple", "pypi.example");
+        assert!(env.contains("PIP_INDEX_URL='https://pypi.example/simple'"));
+        assert!(env.contains("UV_DEFAULT_INDEX='https://pypi.example/simple'"));
+        assert!(env.contains("UV_NO_CONFIG=1"));
+        assert!(env.contains("PIP_TRUSTED_HOST='pypi.example'"));
+    }
+
+    #[test]
+    fn runtime_pypi_environment_preserves_project_defaults_when_unset() {
+        assert!(pypi_runtime_env("", "").is_empty());
+    }
 }

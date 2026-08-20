@@ -138,8 +138,8 @@ pub(crate) fn print_help() {
   --github auto      并行测速 GitHub 官方线路和镜像源，自动选择最快线路
   --github direct    使用 https://github.com 直连
   --github URL       使用自定义 GitHub 代理前缀
-  --pip system       不写 pip.conf，使用系统默认 PyPI 配置
-  --pip URL          使用自定义 PyPI 镜像；仅写入当前 venv，不污染全局 pip 配置
+  --pip system       使用系统默认 PyPI 配置
+  --pip URL          使用自定义 PyPI 镜像；保存为后续安装与 MaiBot 启动时的默认源
   --protocol none    只部署 MaiBot 核心，不安装额外协议端
   --docker keep      Linux 下不修改 /etc/docker/daemon.json；Windows/macOS 下 NapCat 不使用 Docker
   --github-fallback direct
@@ -240,12 +240,12 @@ MaiBot 核心:
   maibot plugin remove <插件目录名>
 
 说明:
-  plugin install     克隆或同步插件仓库；会读取 _manifest.json 中的 id 作为最终目录名
+  plugin install     克隆或同步插件仓库；会读取 _manifest.json 中的 id，并将 . 替换为 _ 作为最终目录名
   plugin update      拉取已安装插件仓库的最新提交
   plugin remove      删除 MaiBot/plugins 下对应插件目录
 
 配置文件:
-  ~/.maibot_config   记录安装目录、Python 环境、LLBot 路径、安装偏好等
+  ~/.maibot_config   记录安装目录、Python 环境、PyPI 源、LLBot 路径、安装偏好等
 
 {console_tip}
 "#

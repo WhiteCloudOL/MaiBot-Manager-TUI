@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     ui::{ActionItem, StatusCard},
-    utils::{bat_quote, windows_tools_path_prelude},
+    utils::{bat_arg, bat_quote, windows_tools_path_prelude},
 };
 use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
@@ -50,16 +50,18 @@ impl App {
         Ok(())
     }
 
-    fn maibot_paths(&self) -> Result<(PathBuf, String)> {
+    fn maibot_paths(&self) -> Result<(PathBuf, String, String, String)> {
         let cfg = self.require_config()?;
         Ok((
             PathBuf::from(cfg.mai_path).join("MaiBot"),
             cfg.mai_python_env,
+            cfg.pip_index,
+            cfg.pip_host,
         ))
     }
 
     pub(crate) fn start_maibot_core(&self, _attach: bool) -> Result<()> {
-        let (maibot_dir, py_env) = self.maibot_paths()?;
+        let (maibot_dir, py_env, pip_index, pip_host) = self.maibot_paths()?;
         let root = maibot_dir.parent().unwrap_or(&maibot_dir).to_path_buf();
         let logs_dir = root.join("logs");
         fs::create_dir_all(&logs_dir)?;
@@ -71,14 +73,15 @@ impl App {
         let _ = fs::remove_file(&pid_path);
 
         let tools_prelude = windows_tools_path_prelude(&root);
+        let pypi_env = pypi_runtime_env(&pip_index, &pip_host);
         let run = if py_env == "uv" {
             format!(
-                "{tools_prelude}where uv >nul 2>nul || (echo [ERROR] uv was not found. Install uv or reinstall MaiBot. & pause & exit /b 1)\r\n\
+                "{tools_prelude}{pypi_env}where uv >nul 2>nul || (echo [ERROR] uv was not found. Install uv or reinstall MaiBot. & pause & exit /b 1)\r\n\
              uv run bot.py"
             )
         } else {
             format!(
-                "{tools_prelude}if not exist ..\\venv\\Scripts\\activate.bat (echo [ERROR] virtualenv was not found: ..\\venv\\Scripts\\activate.bat & pause & exit /b 1)\r\n\
+                "{tools_prelude}{pypi_env}if not exist ..\\venv\\Scripts\\activate.bat (echo [ERROR] virtualenv was not found: ..\\venv\\Scripts\\activate.bat & pause & exit /b 1)\r\n\
              call ..\\venv\\Scripts\\activate.bat\r\n\
              python bot.py"
             )
@@ -452,6 +455,22 @@ impl App {
     }
 }
 
+/// 仅在用户选定 PyPI 源后写入运行时环境，强制 uv 忽略项目内的索引配置。
+fn pypi_runtime_env(pip_index: &str, pip_host: &str) -> String {
+    if pip_index.trim().is_empty() {
+        return String::new();
+    }
+
+    let index = bat_arg(pip_index);
+    let mut env = format!(
+        "set PIP_INDEX_URL={index}\r\nset UV_DEFAULT_INDEX={index}\r\nset UV_INDEX_URL={index}\r\nset UV_NO_CONFIG=1\r\n"
+    );
+    if !pip_host.trim().is_empty() {
+        env.push_str(&format!("set PIP_TRUSTED_HOST={}\r\n", bat_arg(pip_host)));
+    }
+    env
+}
+
 fn window_running(title: &str) -> Result<bool> {
     let title_pattern = ps_single_quote(&format!("{title}*"));
     powershell_success_with_timeout(
@@ -658,5 +677,24 @@ fn command_output_with_timeout(command: &mut Command, timeout: Duration) -> Resu
             return Ok(None);
         }
         thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pypi_runtime_env;
+
+    #[test]
+    fn runtime_pypi_environment_overrides_project_configuration() {
+        let env = pypi_runtime_env("https://pypi.example/simple", "pypi.example");
+        assert!(env.contains("set PIP_INDEX_URL=\"https://pypi.example/simple\""));
+        assert!(env.contains("set UV_DEFAULT_INDEX=\"https://pypi.example/simple\""));
+        assert!(env.contains("set UV_NO_CONFIG=1"));
+        assert!(env.contains("set PIP_TRUSTED_HOST=\"pypi.example\""));
+    }
+
+    #[test]
+    fn runtime_pypi_environment_preserves_project_defaults_when_unset() {
+        assert!(pypi_runtime_env("", "").is_empty());
     }
 }

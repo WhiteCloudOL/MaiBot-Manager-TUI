@@ -23,6 +23,11 @@ pub fn list_plugins(dir: &Path) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Maps a plugin manifest id to the directory name required by MaiBot.
+pub fn plugin_dir_name(plugin_id: &str) -> String {
+    plugin_id.replace('.', "_")
+}
+
 pub fn normalize_path(input: &str) -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("无法定位 HOME 目录"))?;
     let path = if let Some(rest) = input.strip_prefix("~/") {

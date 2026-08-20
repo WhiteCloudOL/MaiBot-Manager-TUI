@@ -374,6 +374,7 @@ pub struct DashboardPopup {
     pub lines: Vec<String>,
     pub actions: Vec<String>,
     pub selected: usize,
+    pub scroll: u16,
 }
 
 #[derive(Clone, Debug)]
