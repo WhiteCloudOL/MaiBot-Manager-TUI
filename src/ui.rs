@@ -1121,7 +1121,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, view: &DashboardView) {
             }
         }
         AppMode::PopupActive => {
-            "[←/→] 操作   [Enter] 执行   [Esc] 关闭   [Ctrl+1] 导航   [Ctrl+Q] 退出"
+            "[↑/↓] 浏览内容   [←/→] 操作   [Enter] 执行   [Esc] 关闭   [Ctrl+1] 导航"
         }
     };
     let branch = "分支: main";
@@ -1158,6 +1158,18 @@ fn render_popup(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
         .constraints([Constraint::Min(1), Constraint::Length(action_height)])
         .split(inner);
 
+    let body = Paragraph::new(Text::from(popup_body_lines(popup)))
+        .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
+        .wrap(Wrap { trim: true })
+        .scroll((popup.scroll, 0));
+    frame.render_widget(body, chunks[0]);
+
+    if action_height > 0 {
+        render_popup_actions(frame, chunks[1], popup);
+    }
+}
+
+fn popup_body_lines(popup: &DashboardPopup) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if !popup.subtitle.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -1168,17 +1180,8 @@ fn render_popup(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
         )));
         lines.push(Line::from(""));
     }
-    for line in &popup.lines {
-        lines.push(popup_body_line(line));
-    }
-    let body = Paragraph::new(Text::from(lines))
-        .style(Style::default().fg(TEXT_PRIMARY).bg(SURFACE_DIM))
-        .wrap(Wrap { trim: true });
-    frame.render_widget(body, chunks[0]);
-
-    if action_height > 0 {
-        render_popup_actions(frame, chunks[1], popup);
-    }
+    lines.extend(popup.lines.iter().map(|line| popup_body_line(line)));
+    lines
 }
 
 fn render_popup_actions(frame: &mut Frame<'_>, area: Rect, popup: &DashboardPopup) {
@@ -1330,10 +1333,28 @@ fn popup_area(popup: &DashboardPopup, area: Rect) -> Rect {
     } else {
         3_usize
     };
-    let desired_height = (subtitle_lines + body_lines + action_height + 4).clamp(9, 22) as u16;
-    let max_height = area.height.saturating_sub(4).max(7);
+    let desired_height = (subtitle_lines + body_lines + action_height + 4).clamp(9, 30) as u16;
+    let max_height = area.height.saturating_sub(2).max(7);
     let height = desired_height.min(max_height);
     centered_rect_cells(width, height, area)
+}
+
+fn popup_scroll_limit(popup: &DashboardPopup) -> u16 {
+    let (width, height) = size().unwrap_or((80, 24));
+    let area = popup_area(popup, Rect::new(0, 0, width, height));
+    let inner = modal_block(Some(popup.title.as_str())).inner(area);
+    let action_height = if popup.actions.is_empty() { 0 } else { 3 };
+    let body_height = usize::from(inner.height.saturating_sub(action_height));
+    let body_width = usize::from(inner.width).max(1);
+    let body_lines = popup
+        .lines
+        .iter()
+        .map(|line| wrapped_line_count(line, body_width))
+        .sum::<usize>()
+        + usize::from(!popup.subtitle.is_empty()) * 2;
+    body_lines
+        .saturating_sub(body_height)
+        .min(u16::MAX as usize) as u16
 }
 
 fn popup_action_areas(area: Rect, actions: &[String]) -> Vec<Rect> {
@@ -1543,6 +1564,7 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
         lines,
         actions,
         selected: 0,
+        scroll: 0,
     })
 }
 
@@ -1567,6 +1589,7 @@ fn inline_info_loading_popup(view: &DashboardView) -> DashboardPopup {
         lines: vec!["请稍候。".to_string()],
         actions: Vec::new(),
         selected: 0,
+        scroll: 0,
     }
 }
 
@@ -1778,7 +1801,7 @@ fn cached_planner_field_value(plan: &InstallPlan, field: PlanField) -> String {
     }
 }
 
-fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> Vec<String> {
+pub(crate) fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> Vec<String> {
     match field {
         PlanField::InstallPath => vec![plan.install_path.display().to_string()],
         PlanField::InstallMode => vec![
@@ -1840,6 +1863,9 @@ fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> Vec<String>
             choices
         }
         PlanField::BotProtocols => {
+            if cfg!(target_os = "macos") {
+                return vec!["macOS 暂不安装协议端".to_string()];
+            }
             let mut choices = vec![
                 BotProtocol::NapCat.label().to_string(),
                 BotProtocol::LuckyLilliaBot.label().to_string(),
@@ -1913,6 +1939,9 @@ fn planner_choice_active_for_plan(plan: &InstallPlan, field: PlanField, idx: usi
             )
         }
         PlanField::BotProtocols => {
+            if cfg!(target_os = "macos") {
+                return idx == 0;
+            }
             (idx == 0 && plan.bot_protocols.as_slice() == [BotProtocol::NapCat])
                 || (idx == 1 && plan.bot_protocols.as_slice() == [BotProtocol::LuckyLilliaBot])
                 || (cfg!(target_os = "linux")
@@ -2022,16 +2051,38 @@ fn handle_dashboard_key(
                 state.popup = None;
                 DashboardInputAction::Redraw
             }
-            KeyCode::Up | KeyCode::Left => {
+            KeyCode::Up => {
+                popup.scroll = popup.scroll.saturating_sub(1);
+                DashboardInputAction::Redraw
+            }
+            KeyCode::Down => {
+                popup.scroll = popup
+                    .scroll
+                    .saturating_add(1)
+                    .min(popup_scroll_limit(popup));
+                DashboardInputAction::Redraw
+            }
+            KeyCode::PageUp => {
+                popup.scroll = popup.scroll.saturating_sub(5);
+                DashboardInputAction::Redraw
+            }
+            KeyCode::PageDown => {
+                popup.scroll = popup
+                    .scroll
+                    .saturating_add(5)
+                    .min(popup_scroll_limit(popup));
+                DashboardInputAction::Redraw
+            }
+            KeyCode::Left | KeyCode::BackTab => {
                 if popup.actions.is_empty() {
-                    popup.actions.push("取消".to_string());
+                    return DashboardInputAction::Idle;
                 }
                 popup.selected = wrap_index(popup.selected, popup.actions.len(), -1);
                 DashboardInputAction::Redraw
             }
-            KeyCode::Down | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+            KeyCode::Right | KeyCode::Tab => {
                 if popup.actions.is_empty() {
-                    popup.actions.push("取消".to_string());
+                    return DashboardInputAction::Idle;
                 }
                 popup.selected = wrap_index(popup.selected, popup.actions.len(), 1);
                 DashboardInputAction::Redraw
@@ -2712,6 +2763,7 @@ mod tests {
                 "取消".to_string(),
             ],
             selected: 0,
+            scroll: 0,
         };
         let actions = render_buffer_text(60, 3, |frame| {
             render_popup_actions(frame, Rect::new(0, 0, 60, 3), &popup);
@@ -2954,6 +3006,7 @@ mod tests {
             lines: Vec::new(),
             actions: vec!["返回".to_string()],
             selected: 0,
+            scroll: 0,
         });
         assert!(!dashboard_idle_should_rebuild(&view, &state));
 
@@ -3350,6 +3403,7 @@ mod tests {
             ],
             actions: vec!["取消".to_string()],
             selected: 0,
+            scroll: 0,
         };
         let area = popup_area(&popup, Rect::new(0, 0, 132, 42));
         assert!(area.width <= 72, "info popup should stay compact: {area:?}");
@@ -3366,6 +3420,56 @@ mod tests {
         assert!(visible.contains("访问汇总"));
         assert!(visible.contains("MaiBotWebUI"));
         assert!(visible.contains("取消"));
+    }
+
+    #[test]
+    fn popup_scroll_reveals_later_access_entries() {
+        let mut popup = DashboardPopup {
+            title: "访问汇总".to_string(),
+            subtitle: "集中查看访问入口".to_string(),
+            lines: vec![
+                "本机 / 公网 IP 127.0.0.1".to_string(),
+                String::new(),
+                "MaiBot WebUI".to_string(),
+                "地址 http://127.0.0.1:8001".to_string(),
+                "密钥 maibot-token".to_string(),
+                String::new(),
+                "SnowLuma WebUI".to_string(),
+                "地址 http://127.0.0.1:5099".to_string(),
+                "密码 temporary-password".to_string(),
+            ],
+            actions: vec!["取消".to_string()],
+            selected: 0,
+            scroll: 0,
+        };
+        let area = Rect::new(0, 0, 52, 16);
+        let popup_area = popup_area(&popup, area);
+        let initial = compact_visible_text(&render_buffer_text(52, 16, |frame| {
+            render_popup(frame, popup_area, &popup);
+        }));
+        assert!(initial.contains("MaiBotWebUI"));
+        assert!(!initial.contains("SnowLumaWebUI"));
+
+        popup.scroll = 6;
+        let scrolled = compact_visible_text(&render_buffer_text(52, 16, |frame| {
+            render_popup(frame, popup_area, &popup);
+        }));
+        assert!(scrolled.contains("SnowLumaWebUI"));
+        assert!(scrolled.contains("temporary-password"));
+    }
+
+    #[test]
+    fn dashboard_protocol_labels_do_not_change_after_cached_redraw() {
+        let plan = InstallPlan::default();
+        let choices = planner_choices_for_plan(&plan, PlanField::BotProtocols);
+
+        assert!(choices.iter().all(|choice| !choice.starts_with('仅')));
+        if cfg!(target_os = "macos") {
+            assert_eq!(choices, vec!["macOS 暂不安装协议端"]);
+        } else {
+            assert_eq!(choices.first().map(String::as_str), Some("NapCatQQ"));
+            assert_eq!(choices.last().map(String::as_str), Some("暂不安装协议端"));
+        }
     }
 
     #[test]

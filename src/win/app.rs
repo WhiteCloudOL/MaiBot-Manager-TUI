@@ -14,7 +14,7 @@ use crate::model::{
 use crate::plugin_status::PluginUpdateCache;
 use crate::plugins::windows_plugin_update_status;
 use crate::theme::AppTheme;
-use crate::ui::{ActionItem, StatusCard};
+use crate::ui::{ActionItem, StatusCard, planner_choices_for_plan};
 use crate::utils::list_plugins;
 
 pub(crate) struct App {
@@ -133,6 +133,7 @@ impl App {
             lines,
             actions: vec!["返回主界面".to_string()],
             selected: 0,
+            scroll: 0,
         });
         state.set_status_message("任务失败，已返回主界面");
         self.invalidate_dashboard_cache();
@@ -1225,7 +1226,7 @@ impl App {
         let Some(field) = deploy_card_field(card_id) else {
             return Ok(Vec::new());
         };
-        let choices = self.planner_choices(plan, field);
+        let choices = planner_choices_for_plan(plan, field);
         Ok(choices
             .into_iter()
             .enumerate()
@@ -1380,6 +1381,7 @@ impl App {
                                 ],
                                 actions: vec!["确认清空数据".to_string(), "取消".to_string()],
                                 selected: 0,
+                                scroll: 0,
                             });
                         }
                     }

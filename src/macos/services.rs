@@ -57,7 +57,7 @@ impl App {
         Ok(())
     }
 
-    fn maibot_paths(&self) -> Result<(PathBuf, PathBuf, PathBuf, String)> {
+    fn maibot_paths(&self) -> Result<(PathBuf, PathBuf, PathBuf, String, String, String)> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
         Ok((
@@ -65,11 +65,13 @@ impl App {
             root.join("MaiBot"),
             root.join("venv/bin/activate"),
             cfg.mai_python_env,
+            cfg.pip_index,
+            cfg.pip_host,
         ))
     }
 
     pub(crate) fn start_maibot_core(&self, attach: bool) -> Result<()> {
-        let (root, maibot_dir, venv_activate, py_env) = self.maibot_paths()?;
+        let (root, maibot_dir, venv_activate, py_env, pip_index, pip_host) = self.maibot_paths()?;
         if !maibot_dir.exists() {
             bail!("未找到 MaiBot 目录: {}", maibot_dir.display());
         }
@@ -91,6 +93,8 @@ impl App {
                     &maibot_dir,
                     &venv_activate,
                     &py_env,
+                    &pip_index,
+                    &pip_host,
                     &pid_path,
                     &log_path,
                 );
@@ -100,13 +104,15 @@ impl App {
                 &maibot_dir,
                 &venv_activate,
                 &py_env,
+                &pip_index,
+                &pip_host,
                 &logs_dir,
                 &pid_path,
                 &log_path,
             );
         }
 
-        let run = maibot_run_command(&root, &venv_activate, &py_env);
+        let run = maibot_run_command(&root, &venv_activate, &py_env, &pip_index, &pip_host);
         let launch = format!(
             "printf '%s\\n' $$ > '{pid}'; \
              printf '\\n===== MaiBot Manager macOS background session started =====\\n' >> '{log}'; \
@@ -178,12 +184,14 @@ impl App {
         maibot_dir: &Path,
         venv_activate: &Path,
         py_env: &str,
+        pip_index: &str,
+        pip_host: &str,
         logs_dir: &Path,
         pid_path: &Path,
         log_path: &Path,
     ) -> Result<()> {
         let launcher_path = logs_dir.join("start-maibot-terminal.zsh");
-        let run = maibot_run_command(root, venv_activate, py_env);
+        let run = maibot_run_command(root, venv_activate, py_env, pip_index, pip_host);
         let script = format!(
             r#"#!/bin/zsh
 cd '{workdir}' || exit 1
@@ -257,10 +265,12 @@ exit "$status"
         maibot_dir: &Path,
         venv_activate: &Path,
         py_env: &str,
+        pip_index: &str,
+        pip_host: &str,
         pid_path: &Path,
         log_path: &Path,
     ) -> Result<()> {
-        let run = maibot_run_command(root, venv_activate, py_env);
+        let run = maibot_run_command(root, venv_activate, py_env, pip_index, pip_host);
         let launch = format!(
             "printf '%s\\n' $$ > '{pid}'; \
              printf '\\n===== MaiBot Manager macOS attached terminal started =====\\n' >> '{log}'; \
@@ -502,16 +512,40 @@ fn maibot_runtime_paths(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
     (logs_dir, pid_path, log_path)
 }
 
-fn maibot_run_command(root: &Path, venv_activate: &Path, py_env: &str) -> String {
+fn maibot_run_command(
+    root: &Path,
+    venv_activate: &Path,
+    py_env: &str,
+    pip_index: &str,
+    pip_host: &str,
+) -> String {
+    let pypi_env = pypi_runtime_env(pip_index, pip_host);
     if py_env == "uv" {
-        format!("{} uv run bot.py", macos_tools_prelude(root))
+        format!("{} {pypi_env}uv run bot.py", macos_tools_prelude(root))
     } else {
         format!(
-            "{} . '{}' && python3 bot.py",
+            "{} {pypi_env}. '{}' && python3 bot.py",
             macos_tools_prelude(root),
             shell_escape(venv_activate)
         )
     }
+}
+
+/// 运行时的源优先级高于项目配置；UV_NO_CONFIG 会屏蔽 pyproject.toml/uv.toml 的索引。
+fn pypi_runtime_env(pip_index: &str, pip_host: &str) -> String {
+    if pip_index.trim().is_empty() {
+        return String::new();
+    }
+
+    let index = shell_escape_raw(pip_index);
+    let trusted_host = if pip_host.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" PIP_TRUSTED_HOST='{}'", shell_escape_raw(pip_host))
+    };
+    format!(
+        "export PIP_INDEX_URL='{index}' UV_DEFAULT_INDEX='{index}' UV_INDEX_URL='{index}' UV_NO_CONFIG=1{trusted_host}; "
+    )
 }
 
 fn applescript_escape(input: &str) -> String {
@@ -533,4 +567,23 @@ fn print_log_file(app: &App, path: &Path, tail: usize, follow: bool) -> Result<(
         format!("{} tail -n {tail} '{}'", macos_path_export(), escaped)
     };
     app.run_shell(&cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pypi_runtime_env;
+
+    #[test]
+    fn runtime_pypi_environment_overrides_project_configuration() {
+        let env = pypi_runtime_env("https://pypi.example/simple", "pypi.example");
+        assert!(env.contains("PIP_INDEX_URL='https://pypi.example/simple'"));
+        assert!(env.contains("UV_DEFAULT_INDEX='https://pypi.example/simple'"));
+        assert!(env.contains("UV_NO_CONFIG=1"));
+        assert!(env.contains("PIP_TRUSTED_HOST='pypi.example'"));
+    }
+
+    #[test]
+    fn runtime_pypi_environment_preserves_project_defaults_when_unset() {
+        assert!(pypi_runtime_env("", "").is_empty());
+    }
 }

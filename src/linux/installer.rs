@@ -41,7 +41,7 @@ enable_chat_list_filter = true
 show_dropped_chat_list_messages = false
 group_list_type = "whitelist"
 group_list = []
-private_list_type = "blacklist"
+private_list_type = "whitelist"
 private_list = []
 ban_user_id = []
 ban_qq_bot = false
@@ -1496,8 +1496,8 @@ impl App {
                     "cd '{}' && . venv/bin/activate && {}pip install --upgrade pip && if [ -f MaiBot/requirements.txt ]; then pip install -r MaiBot/requirements.txt; fi && if [ -f MaiBot/plugins/{}/requirements.txt ]; then pip install -r MaiBot/plugins/{}/requirements.txt; fi",
                     shell_escape(root),
                     pip_prefix,
-                    NAPCAT_ADAPTER_PLUGIN_ID,
-                    NAPCAT_ADAPTER_PLUGIN_ID
+                    plugin_dir_name(NAPCAT_ADAPTER_PLUGIN_ID),
+                    plugin_dir_name(NAPCAT_ADAPTER_PLUGIN_ID)
                 ))?;
             }
         }

@@ -179,7 +179,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 仓库根的 `app.toml` 是构建时配置（**非运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
 
 ```toml
-version          = "0.3.3"   # 标题栏显示的版本号
+version          = "0.3.4"   # 标题栏显示的版本号
 header_title     = "..."     # 标头第一行标题
 header_subtitle  = "..."     # 标头第二行副标题
 header_credit    = "..."     # 作者 / License 行
@@ -340,7 +340,7 @@ maibot update --protocol llbot --llbot-update update \
 | `--python <system│uv>` | `system`: 系统 Python + venv；`uv`: 使用 uv 创建并同步环境。Windows 缺少系统 Python 时会自动使用安装目录内的 uv 创建本地 venv；macOS 缺少 uv/Python 时通过 Homebrew 补齐 |
 | `--venv <keep│recreate>` | 保留或强制重建虚拟环境 |
 | `--github <auto│direct│URL>` | `auto`: 并行测速；`direct`: 强制官方直连；`URL`: 自定义代理前缀 |
-| `--pip <system│aliyun...│URL>` | 系统源/内置国内源/自定义源（仅写入当前虚拟环境配置，不污染全局） |
+| `--pip <system│aliyun...│URL>` | 系统源/内置国内源/自定义源（写入当前虚拟环境，并保存为后续安装与启动的默认源） |
 | `--protocol <napcat│llbot│snowluma│none>` | 选择绑定安装的底层协议端；SnowLuma 仅支持 Linux Docker，macOS 目前仅支持 `none` |
 | `--docker <one-ms│official...│keep>` | Linux Docker 换源/官方脚本，或 `keep` 不修改 Docker daemon 配置；Windows/macOS 会忽略 |
 | `--snowluma-swap <enable│skip>` | Linux 低内存且没有 Swap 时，自动创建 2 GB Swap 或跳过该提示 |
@@ -472,12 +472,12 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 * **安装模式**：默认正常更新 / 修复
 * **Python 环境**：沿用历史配置，否则默认 `uv`（Python 3.14）
 * **GitHub**：默认执行时并行测速；全部失败提供重试 / 直连 / 取消
-* **PyPI**：默认系统源；选自定义源时**只在 venv 目录写 `pip.conf`**，不污染用户全局 `~/.pip/`
+* **PyPI**：默认系统源；选自定义源时写入 venv 目录的 `pip.conf`，并保存到 `~/.maibot_config`。后续安装会自动读取；启动 MaiBot 时会以环境变量强制使用该源，uv 会忽略项目内的 PyPI 配置，不污染用户全局 `~/.pip/`
 * **协议端**：Linux 支持 NapCat / LLBot / SnowLuma，Windows 支持 NapCat / LLBot；未检测到时默认安装 NapCatQQ。macOS 默认不安装协议端，并在协议端入口说明当前平台能力
 *(可修改模块：安装目录 / 安装模式 / Python 环境 / 虚拟环境处理 / GitHub 线路 / PyPI 源 / Bot 协议端 / Docker 镜像；macOS 默认隐藏协议端 / Docker 安装项)*
 
 **配置文件记录**：
-`~/.maibot_config` 用于记录安装路径、Python 环境与协议端选择（包括 SnowLuma），便于管理菜单自动定位。
+`~/.maibot_config` 用于记录安装路径、Python 环境、PyPI 源与协议端选择（包括 SnowLuma），便于管理菜单自动定位与复用安装偏好。
 
 ---
 

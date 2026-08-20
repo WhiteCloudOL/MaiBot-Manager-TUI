@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "maibot-manager-tui"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "crossterm 0.29.0",

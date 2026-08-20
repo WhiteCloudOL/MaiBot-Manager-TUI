@@ -4,7 +4,7 @@ use crate::{
     ui::ActionItem,
     utils::{
         apply_windows_tools_env, bat_arg, bat_quote, convert_github_url, list_plugins,
-        with_windows_tools_path,
+        plugin_dir_name, with_windows_tools_path,
     },
 };
 use anyhow::{Context, Result, bail};
@@ -100,7 +100,7 @@ impl App {
         plugins_dir: &Path,
         plugin_id: &str,
     ) -> Result<Option<PathBuf>> {
-        let preferred = plugins_dir.join(plugin_id);
+        let preferred = plugins_dir.join(plugin_dir_name(plugin_id));
         if preferred.exists() {
             return Ok(Some(preferred));
         }
@@ -139,29 +139,137 @@ impl App {
         }
     }
 
-    pub(crate) fn sync_plugin_repo_with_manifest_dir(
+    fn plugin_backup_path(&self, path: &Path) -> PathBuf {
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let stem = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("plugin");
+        for index in 1.. {
+            let candidate = parent.join(format!("{stem}.legacy-backup-{index}"));
+            if !candidate.exists() {
+                return candidate;
+            }
+        }
+        unreachable!()
+    }
+
+    fn move_plugin_dir_to_backup(&self, path: &Path) -> Result<PathBuf> {
+        let backup = self.plugin_backup_path(path);
+        fs::rename(path, &backup).with_context(|| {
+            format!(
+                "插件目录冲突，无法将 {} 迁移到备份目录 {}",
+                path.display(),
+                backup.display()
+            )
+        })?;
+        println!(
+            "检测到插件目录冲突，已将旧目录移动到备份位置: {}",
+            backup.display()
+        );
+        Ok(backup)
+    }
+
+    pub(crate) fn sync_plugin_repo_with_manifest_dir_at_root(
         &self,
+        root: &Path,
         url: &str,
         plugins_dir: &Path,
         repo_name: &str,
         _branch: Option<&str>,
         _mode: InstallMode,
     ) -> Result<PathBuf> {
-        let cfg = self.require_config()?;
-        let root = PathBuf::from(cfg.mai_path);
         fs::create_dir_all(plugins_dir)?;
         let repo_path = plugins_dir.join(repo_name);
-        self.clone_or_update_plugin(&root, url, &repo_path)?;
-        let plugin_id = self.plugin_id_from_dir(&repo_path)?;
-        let canonical = plugins_dir.join(plugin_id);
-        if canonical != repo_path {
-            if canonical.exists() {
-                fs::remove_dir_all(&repo_path)?;
-            } else {
-                fs::rename(&repo_path, &canonical)?;
+        let mut target = repo_path.clone();
+
+        if repo_path.exists() {
+            let plugin_id = self.plugin_id_from_dir(&repo_path)?;
+            let canonical = plugins_dir.join(plugin_dir_name(&plugin_id));
+            if canonical != repo_path {
+                if canonical.exists() {
+                    self.move_plugin_dir_to_backup(&repo_path)?;
+                    target = canonical;
+                } else {
+                    fs::rename(&repo_path, &canonical).with_context(|| {
+                        format!(
+                            "无法将旧插件目录 {} 重命名为 {}",
+                            repo_path.display(),
+                            canonical.display()
+                        )
+                    })?;
+                    target = canonical;
+                }
             }
         }
+
+        let target_existed_before = target.exists();
+        self.clone_or_update_plugin(root, url, &target)?;
+        let plugin_id = self.plugin_id_from_dir(&target)?;
+        let canonical = plugins_dir.join(plugin_dir_name(&plugin_id));
+        if canonical == target {
+            return Ok(canonical);
+        }
+
+        let legacy_canonical = plugins_dir.join(&plugin_id);
+        if legacy_canonical != canonical && legacy_canonical != target && legacy_canonical.exists()
+        {
+            if target_existed_before {
+                self.move_plugin_dir_to_backup(&target)?;
+            } else {
+                fs::remove_dir_all(&target)
+                    .with_context(|| format!("无法清理临时插件目录 {}", target.display()))?;
+            }
+            self.clone_or_update_plugin(root, url, &legacy_canonical)?;
+            fs::rename(&legacy_canonical, &canonical).with_context(|| {
+                format!(
+                    "无法将旧插件目录 {} 重命名为 {}",
+                    legacy_canonical.display(),
+                    canonical.display()
+                )
+            })?;
+            return Ok(canonical);
+        }
+
+        if canonical.exists() {
+            if target_existed_before {
+                self.move_plugin_dir_to_backup(&target)?;
+            } else {
+                fs::remove_dir_all(&target)
+                    .with_context(|| format!("无法清理临时插件目录 {}", target.display()))?;
+            }
+            self.clone_or_update_plugin(root, url, &canonical)?;
+            return Ok(canonical);
+        }
+
+        fs::rename(&target, &canonical).with_context(|| {
+            format!(
+                "无法将插件目录 {} 重命名为 {}",
+                target.display(),
+                canonical.display()
+            )
+        })?;
         Ok(canonical)
+    }
+
+    pub(crate) fn sync_plugin_repo_with_manifest_dir(
+        &self,
+        url: &str,
+        plugins_dir: &Path,
+        repo_name: &str,
+        branch: Option<&str>,
+        _mode: InstallMode,
+    ) -> Result<PathBuf> {
+        let cfg = self.require_config()?;
+        let root = PathBuf::from(cfg.mai_path);
+        self.sync_plugin_repo_with_manifest_dir_at_root(
+            &root,
+            url,
+            plugins_dir,
+            repo_name,
+            branch,
+            _mode,
+        )
     }
 
     pub(crate) fn install_plugin_from_input(&self, input: &str) -> Result<()> {
