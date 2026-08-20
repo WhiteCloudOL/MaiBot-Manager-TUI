@@ -145,7 +145,7 @@ maibot install --protocol none
 
 **macOS：**
 
-* **系统架构**：macOS x86_64 或 Apple Silicon
+* **系统架构**：macOS Apple Silicon
 * **基础工具**：优先使用 macOS 自带 `curl` / `unzip`；缺少 Homebrew 时自动调用官方脚本安装，缺少 Git / uv / Python 时通过 Homebrew 补齐
 * **Python 环境**：推荐 `uv`；uv 缓存与托管 Python 目录固定在 `<MaiBot安装目录>/tools`
 * **协议端**：NapCat / LLBot / SnowLuma 在当前平台保留说明入口，macOS 默认只部署 MaiBot 核心
@@ -227,8 +227,7 @@ output/maibot-manager-linux-arm64
 # Windows build-release.ps1
 output/maibot-manager-windows-x86_64.exe
 
-# macOS
-output/maibot-manager-macos-x86_64
+# macOS Apple Silicon
 output/maibot-manager-macos-arm64
 
 ```
@@ -483,7 +482,7 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 
 ## ⚠️ 注意事项
 
-* 请下载与平台匹配的产物：Linux 使用 `maibot-manager-linux-x86_64` / `maibot-manager-linux-arm64`，Windows 使用 `maibot-manager-windows-x86_64.exe`，macOS 使用 `maibot-manager-macos-x86_64` / `maibot-manager-macos-arm64`。
+* 请下载与平台匹配的产物：Linux 使用 `maibot-manager-linux-x86_64` / `maibot-manager-linux-arm64`，Windows 使用 `maibot-manager-windows-x86_64.exe`，macOS Apple Silicon 使用 `maibot-manager-macos-arm64`。
 * Linux LLBot 安装时会尝试自动安装 LinuxQQ，`apt` 环境下可能需要输入 `sudo` 密码。
 * Windows NapCat Shell 与 LLBot Desktop 启动时会请求管理员权限，这是上游程序运行需要。
 * Windows 缺失 Git / uv / Python 时会在 MaiBot 安装目录的 `tools` 子目录准备便携工具链，不会写入系统安装目录。

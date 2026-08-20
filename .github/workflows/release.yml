@@ -37,10 +37,6 @@ jobs:
             output_name: maibot-manager-windows-x86_64.exe
             binary_path: target/x86_64-pc-windows-msvc/release/maibot-manager-tui.exe
           - os: macos-15
-            target: x86_64-apple-darwin
-            output_name: maibot-manager-macos-x86_64
-            binary_path: target/x86_64-apple-darwin/release/maibot-manager-tui
-          - os: macos-15
             target: aarch64-apple-darwin
             output_name: maibot-manager-macos-arm64
             binary_path: target/aarch64-apple-darwin/release/maibot-manager-tui
@@ -123,7 +119,6 @@ jobs:
           test -f dist/maibot-manager-linux-x86_64
           test -f dist/maibot-manager-linux-arm64
           test -f dist/maibot-manager-windows-x86_64.exe
-          test -f dist/maibot-manager-macos-x86_64
           test -f dist/maibot-manager-macos-arm64
 
       - name: Build release metadata
@@ -236,7 +231,6 @@ jobs:
             echo "- \`maibot-manager-linux-x86_64\`: Linux x86_64"
             echo "- \`maibot-manager-linux-arm64\`: Linux aarch64"
             echo "- \`maibot-manager-windows-x86_64.exe\`: Windows 10/11 x86_64"
-            echo "- \`maibot-manager-macos-x86_64\`: macOS x86_64"
             echo "- \`maibot-manager-macos-arm64\`: macOS Apple Silicon"
           } > dist/release-notes.md
 
@@ -262,7 +256,6 @@ jobs:
             dist/maibot-manager-linux-x86_64
             dist/maibot-manager-linux-arm64
             dist/maibot-manager-windows-x86_64.exe
-            dist/maibot-manager-macos-x86_64
             dist/maibot-manager-macos-arm64
           )
 
