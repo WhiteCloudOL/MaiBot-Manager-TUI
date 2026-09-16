@@ -64,7 +64,6 @@ detect_asset() {
     case "${system}:${arch}" in
         Linux:x86_64|Linux:amd64)    echo "maibot-manager-linux-x86_64" ;;
         Linux:aarch64|Linux:arm64)   echo "maibot-manager-linux-arm64"  ;;
-        Darwin:x86_64|Darwin:amd64)  echo "maibot-manager-macos-x86_64" ;;
         Darwin:aarch64|Darwin:arm64) echo "maibot-manager-macos-arm64"  ;;
         *)
             err "当前系统 / 架构暂不支持: ${system}/${arch}"
