@@ -179,7 +179,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 仓库根的 `app.toml` 是构建时配置（**非运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
 
 ```toml
-version          = "0.3.4"   # 标题栏显示的版本号
+version          = "0.4.4"   # 标题栏显示的版本号
 header_title     = "..."     # 标头第一行标题
 header_subtitle  = "..."     # 标头第二行副标题
 header_credit    = "..."     # 作者 / License 行
@@ -424,7 +424,7 @@ maibot snowluma remove-container                # 只删除容器，保留数据
 maibot snowluma exec                            # 进入容器 shell
 ```
 
-首次安装会在 `SnowLuma/.env` 写入随机 16 位 VNC 密码（包含大小写、数字和 `%@+-`）。选择 SnowLuma 时还会默认同步 `Mai-with-u/MaiBot-SnowLuma-Adapter`，并在插件目录首次生成已启用的 `config.toml`：默认连接 `127.0.0.1:3001`，访问令牌和群/私聊名单留空，避免写入共享凭据或特定 QQ。访问配置会自动启用当前已安装的 NapCat 或 SnowLuma Adapter，并兼容两者的 QQ 名单格式。访问汇总会显示 `http://<ip>:5099/` 与 `http://<ip>:6081/`；WebUI 仅尝试读取首次全新数据启动时日志输出的一次性临时密码，永久密码不会显示。Docker 准备完成后、写入并启动 SnowLuma Compose 前，若内存不超过 4 GB 且未启用 Swap，会询问是否创建 2 GB Swap；脚本可使用 `--snowluma-swap enable|skip`，省略该参数时仍会询问。若同名容器或默认端口被 Docker 容器占用，也会询问是否删除冲突容器后重建；脚本可使用 `--snowluma-conflict recreate|cancel`。
+首次安装会在 `SnowLuma/.env` 写入随机 16 位 VNC 密码（包含大小写、数字和 `%@+-`）。选择 SnowLuma 时还会默认同步 `Mai-with-u/MaiBot-SnowLuma-Adapter`，并在插件目录首次生成已启用的 `config.toml`：默认连接 `127.0.0.1:3001`，访问令牌和群/私聊名单留空，避免写入共享凭据或特定 QQ。访问配置会启用已安装的统一 QQ 适配器，群聊/私聊名单由主程序 `adapter_policy.toml` 管理。访问汇总会显示 `http://<ip>:5099/` 与 `http://<ip>:6081/`；WebUI 仅尝试读取首次全新数据启动时日志输出的一次性临时密码，永久密码不会显示。Docker 准备完成后、写入并启动 SnowLuma Compose 前，若内存不超过 4 GB 且未启用 Swap，会询问是否创建 2 GB Swap；脚本可使用 `--snowluma-swap enable|skip`，省略该参数时仍会询问。若同名容器或默认端口被 Docker 容器占用，也会询问是否删除冲突容器后重建；脚本可使用 `--snowluma-conflict recreate|cancel`。
 
 *(注：也可以使用聚合入口，例如 `maibot protocol napcat restart`)*
 
@@ -432,23 +432,47 @@ maibot snowluma exec                            # 进入容器 shell
 
 ```bash
 maibot access show              # 直接输出配置地址与密钥
-maibot access init              # 绑定 WebUI 到所有 IPv4/IPv6 地址（Linux/Windows 同时启用 Napcat Adapter，macOS 保留核心配置能力）
+maibot access init              # 绑定 WebUI 到所有 IPv4/IPv6 地址（Linux/Windows 同时启用统一 QQ 适配器，macOS 保留核心配置能力）
 maibot access init --yes        # 跳过交互确认直接应用（适合确信防火墙安全的脚本环境）
 maibot access clear-data        # 清空 MaiBot/data 中除 webui.json 外的所有内容，默认需要确认
 maibot access clear-data --yes  # 跳过确认直接清理数据文件
 
 # Adapter 黑白名单设置
 maibot access adapter show                      # 查看群聊、私聊和封禁 QQ 配置
-maibot access adapter group-mode whitelist      # 设置群聊名单模式：whitelist 或 blacklist
+maibot access adapter group-mode whitelist      # 设置群聊名单模式：whitelist、blacklist 或 inherit
 maibot access adapter group-add 123456          # 添加群号到群聊列表
 maibot access adapter group-remove 123456       # 从群聊列表移除群号
-maibot access adapter private-mode blacklist    # 设置私聊名单模式：whitelist 或 blacklist
+maibot access adapter private-mode blacklist    # 设置私聊名单模式：whitelist、blacklist 或 inherit
 maibot access adapter private-add 10001         # 添加 QQ 到私聊列表
 maibot access adapter private-remove 10001      # 从私聊列表移除 QQ
+maibot access adapter group-allow-add 123456    # 明确添加到允许群聊名单
+maibot access adapter group-deny-add 987654     # 明确添加到拒绝群聊名单
+maibot access adapter private-allow-add 10001   # 明确添加到允许私聊名单
+maibot access adapter private-deny-add 10002    # 明确添加到拒绝私聊名单
+maibot access adapter group-mode inherit       # 恢复使用默认，保留允许 / 拒绝例外
+maibot access adapter group-mode whitelist --rule 2 # 多账号时按 show 显示的规则编号编辑
 maibot access adapter ban-add 10001             # 添加 QQ 到封禁列表
 maibot access adapter ban-remove 10001          # 从封禁列表移除 QQ
 
 ```
+
+NapCat 和 SnowLuma 的 QQ 连接共用官方 [MaiBot-SnowLuma-Adapter](https://github.com/Mai-with-u/MaiBot-SnowLuma-Adapter)，安装目录为 `MaiBot/plugins/maibot-team_snowluma-adapter`。新安装使用 `[client] client_type = "auto"`，连接后识别 NapCat / SnowLuma；全新目录默认使用空群聊/私聊白名单，添加允许号码后才接收消息；更新时保留已有连接参数、令牌与启用状态。旧 NapCat 插件及被迁移的配置保存在 `<install>/adapter-backups`，避免同时加载两个适配器。已有主程序专属策略优先保留，旧插件名单可从备份中核对并补充。
+
+设置中的「黑白名单管理」维护 `MaiBot/config/adapter_policy.toml`：白名单是 `default_action = "block"` 加 `allow_ids`，黑名单是 `default_action = "allow"` 加 `deny_ids`；群聊填写群号，私聊填写对方 QQ。两份名单可分别编辑，添加到一份名单时会从相反名单移除。切换默认动作保留两份名单，不会把允许号码自动变成拒绝号码。`inherit` 删除默认动作字段，保留例外并继承后续规则。保存后后续入站消息立即使用新策略，无需重启。
+
+旧 `group-add/remove`、`private-add/remove` 命令按当前白名单/黑名单模式选择允许/拒绝数组；使用默认时需要明确使用 `*-allow-*` 或 `*-deny-*`。它们也提供对应 `*-remove` 操作。多条账号或网关规则时，TUI 会让你选择目标，CLI 必须指定 `--rule <编号>`，不会覆盖其他账号或适配器规则。发送者黑名单写入统一插件 `[filters].ban_user_id`，过滤该 QQ 在所有群聊和私聊中的聊天消息。
+
+Linux SnowLuma Compose 使用以下持久化映射，并将 MaiBot 本机目录以只读方式映射到容器内同一绝对路径：
+
+```yaml
+volumes:
+  - ./snowluma-data:/app/data
+  - ./snowluma-qq-config:/app/.config
+  - ./snowluma-qq-data:/app/.local/share
+  - "/实际安装目录/MaiBot:/实际安装目录/MaiBot:ro"
+```
+
+更新会先备份已有 Compose，仅将 SnowLuma 的旧 `./snowluma-data:/app/snowluma-data` 映射改为 `/app/data`；其他自定义配置与 `.env` 保留。
 
 ### 5. 插件管理
 

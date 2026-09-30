@@ -4,6 +4,8 @@ mod cli;
 mod data;
 mod model;
 mod plugin_status;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod qq_adapter;
 mod terminal;
 mod theme;
 mod ui;

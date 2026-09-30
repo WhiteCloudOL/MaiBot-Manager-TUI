@@ -776,10 +776,10 @@ impl App {
             DashboardCard {
                 id: "adapter",
                 icon: "󰙨",
-                title: "Adapter 策略".to_string(),
-                subtitle: "黑白名单与初始化配置".to_string(),
+                title: "黑白名单管理".to_string(),
+                subtitle: "群聊、私聊与发送者名单".to_string(),
                 badge: "安全".to_string(),
-                detail: "适合先完成初始化，再维护群聊和私聊名单。".to_string(),
+                detail: "NapCat / SnowLuma 共用名单策略，保存后无需重启。".to_string(),
                 kind: StatusKind::Neutral,
             },
         ])
@@ -1136,7 +1136,7 @@ impl App {
                             lines.push(
                                 "会把 MaiBot WebUI host 改为 [\"0.0.0.0\", \"::\"]。".to_string(),
                             );
-                            lines.push("会同时启用 NapCat Adapter 插件。".to_string());
+                            lines.push("会同时启用统一 QQ 适配器插件。".to_string());
                             lines.push("执行后需要重启 MaiBot 才会完全生效。".to_string());
                         }
                         "access-clear-data" => {
@@ -1152,9 +1152,8 @@ impl App {
                         }
                         "adapter" => {
                             lines.push("可维护群聊白名单/黑名单、私聊名单和封禁 QQ。".to_string());
-                            lines
-                                .push("配置文件: MaiBot/plugins/<adapter>/config.toml".to_string());
-                            lines.push("黑白名单编辑面板会维护群聊、私聊与封禁名单。".to_string());
+                            lines.push("聊天策略: MaiBot/config/adapter_policy.toml".to_string());
+                            lines.push("发送者黑名单: 统一插件 [filters].ban_user_id".to_string());
                         }
                         _ => {}
                     }

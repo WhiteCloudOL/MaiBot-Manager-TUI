@@ -27,9 +27,6 @@ pub(crate) struct PluginSummary {
     pub(crate) dir_name: String,
 }
 
-pub(crate) const NAPCAT_ADAPTER_REPO_NAME: &str = "MaiBot-Napcat-Adapter";
-pub(crate) const NAPCAT_ADAPTER_PLUGIN_ID: &str = "maibot-team.napcat-adapter";
-
 impl App {
     fn plugin_context(&self) -> Result<(PathBuf, PathBuf, PathBuf, String)> {
         let cfg = self.require_config()?;

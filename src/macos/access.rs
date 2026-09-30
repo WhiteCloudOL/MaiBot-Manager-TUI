@@ -232,7 +232,12 @@ impl App {
         macos_adapter_todo()
     }
 
-    pub(crate) fn set_adapter_list_mode(&self, _key: &str, _mode: &str) -> Result<()> {
+    pub(crate) fn set_adapter_list_mode(
+        &self,
+        _key: &str,
+        _mode: &str,
+        _rule: Option<usize>,
+    ) -> Result<()> {
         macos_adapter_todo()
     }
 
@@ -241,6 +246,7 @@ impl App {
         _key: &str,
         _input: &str,
         _add: bool,
+        _rule: Option<usize>,
     ) -> Result<()> {
         macos_adapter_todo()
     }

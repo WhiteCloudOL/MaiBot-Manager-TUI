@@ -1,15 +1,9 @@
-use crate::{
-    app::App, data, model::DashboardPopup, plugins::NAPCAT_ADAPTER_PLUGIN_ID, theme::AppTheme,
-    ui::ActionItem,
-};
-use anyhow::{Result, anyhow, bail};
-use dialoguer::{Confirm, Input, Select};
-use regex::Regex;
+use crate::{app::App, data, model::DashboardPopup, ui::ActionItem};
+use anyhow::Result;
+use dialoguer::Confirm;
 use serde_json::Value;
 use std::{fs, path::PathBuf};
-use toml_edit::{Array, DocumentMut, Item, Value as TomlValue, value};
-
-const CHAT_TABLE: &str = "chat";
+use toml_edit::{Array, DocumentMut, Item, value};
 
 #[derive(Debug)]
 struct AccessInfoReport {
@@ -47,20 +41,6 @@ impl AccessInfoReport {
 }
 
 impl App {
-    fn napcat_adapter_dir(&self) -> Result<PathBuf> {
-        let cfg = self.require_config()?;
-        let plugins_dir = PathBuf::from(cfg.mai_path).join("MaiBot").join("plugins");
-        self.require_plugin_dir_by_id(&plugins_dir, NAPCAT_ADAPTER_PLUGIN_ID)
-    }
-
-    fn adapter_config_path(&self) -> Result<PathBuf> {
-        let path = self.napcat_adapter_dir()?.join("config.toml");
-        if !path.exists() {
-            bail!("未找到 Adapter 配置文件: {}", path.display());
-        }
-        Ok(path)
-    }
-
     pub(crate) fn manage_config_access_menu(&self) -> Result<()> {
         loop {
             self.clear();
@@ -212,65 +192,12 @@ impl App {
         })
     }
 
-    pub(crate) fn print_adapter_config(&self) -> Result<()> {
-        let path = self.adapter_config_path()?;
-        let doc: DocumentMut = fs::read_to_string(path)?.parse()?;
-        self.print_kv(
-            "群聊模式",
-            config_string(&doc, CHAT_TABLE, "group_list_type", "Unknown"),
-        );
-        self.print_kv(
-            "群聊列表",
-            &config_array_display(&doc, CHAT_TABLE, "group_list"),
-        );
-        self.print_kv(
-            "私聊模式",
-            config_string(&doc, CHAT_TABLE, "private_list_type", "Unknown"),
-        );
-        self.print_kv(
-            "私聊列表",
-            &config_array_display(&doc, CHAT_TABLE, "private_list"),
-        );
-        self.print_kv(
-            "封禁 QQ",
-            &config_array_display(&doc, CHAT_TABLE, "ban_user_id"),
-        );
-        Ok(())
-    }
-
-    pub(crate) fn set_adapter_list_mode(&self, key: &str, mode: &str) -> Result<()> {
-        if !matches!(mode, "whitelist" | "blacklist") {
-            bail!("名单模式只能是 whitelist 或 blacklist");
-        }
-        let path = self.adapter_config_path()?;
-        let mut doc: DocumentMut = fs::read_to_string(&path)?.parse()?;
-        set_table_value(&mut doc, CHAT_TABLE, key, value(mode));
-        fs::write(path, doc.to_string())?;
-        Ok(())
-    }
-
-    pub(crate) fn update_adapter_numeric_list(
-        &self,
-        key: &str,
-        input: &str,
-        add: bool,
-    ) -> Result<()> {
-        if !Regex::new(r"^\d+$")?.is_match(input) {
-            bail!("号码必须为纯数字");
-        }
-        let path = self.adapter_config_path()?;
-        let mut doc: DocumentMut = fs::read_to_string(&path)?.parse()?;
-        update_numeric_array(&mut doc, CHAT_TABLE, key, input, add)?;
-        fs::write(path, doc.to_string())?;
-        Ok(())
-    }
-
     pub(crate) fn initialize_maibot_access_config(&self) -> Result<()> {
         self.clear();
         self.print_header(None);
         self.print_section(
             "初始化访问配置",
-            "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用 Napcat Adapter",
+            "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用统一 QQ 适配器",
         );
         self.print_hint(
             "注意：监听 0.0.0.0 和 :: 会让 WebUI 暴露在外部网络，请确认访问令牌和防火墙。",
@@ -298,14 +225,16 @@ impl App {
             doc["webui"]["host"] = webui_host_all_interfaces();
             fs::write(&bot_cfg, doc.to_string())?;
         }
-        let adapter_cfg = self.napcat_adapter_dir()?.join("config.toml");
-        if adapter_cfg.exists() {
-            let mut doc: DocumentMut = fs::read_to_string(&adapter_cfg)?.parse()?;
-            if doc["plugin"].is_none() {
-                doc["plugin"] = Item::Table(Default::default());
+        if let Some(adapter_dir) = self.qq_adapter_dir()? {
+            let adapter_cfg = adapter_dir.join("config.toml");
+            if adapter_cfg.exists() {
+                let mut doc: DocumentMut = fs::read_to_string(&adapter_cfg)?.parse()?;
+                if doc["plugin"].is_none() {
+                    doc["plugin"] = Item::Table(Default::default());
+                }
+                doc["plugin"]["enabled"] = value(true);
+                fs::write(adapter_cfg, doc.to_string())?;
             }
-            doc["plugin"]["enabled"] = value(true);
-            fs::write(adapter_cfg, doc.to_string())?;
         }
         Ok(())
     }
@@ -334,122 +263,6 @@ impl App {
     pub(crate) fn clear_maibot_data_files(&self) -> Result<usize> {
         let cfg = self.require_config()?;
         data::clear_maibot_data_dir(&data::maibot_data_dir(&cfg.mai_path))
-    }
-
-    pub(crate) fn modify_adapter_config(&self) -> Result<()> {
-        let path = self.adapter_config_path()?;
-        loop {
-            let mut doc: DocumentMut = fs::read_to_string(&path)?.parse()?;
-            self.clear();
-            self.print_header(None);
-            self.print_section("Adapter 黑白名单", "查看并修改群聊、私聊和黑名单规则");
-            self.print_kv(
-                "群聊模式",
-                config_string(&doc, CHAT_TABLE, "group_list_type", "Unknown"),
-            );
-            self.print_kv(
-                "群聊列表",
-                &config_array_display(&doc, CHAT_TABLE, "group_list"),
-            );
-            self.print_kv(
-                "私聊模式",
-                config_string(&doc, CHAT_TABLE, "private_list_type", "Unknown"),
-            );
-            self.print_kv(
-                "私聊列表",
-                &config_array_display(&doc, CHAT_TABLE, "private_list"),
-            );
-            self.print_kv(
-                "封禁 QQ",
-                &config_array_display(&doc, CHAT_TABLE, "ban_user_id"),
-            );
-            let choice = Select::with_theme(&self.theme)
-                .with_prompt("Adapter 黑白名单管理")
-                .items([
-                    "切换群聊名单类型",
-                    "添加群号到群聊列表",
-                    "从群聊列表移除群号",
-                    "切换私聊名单类型",
-                    "添加 QQ 到私聊列表",
-                    "从私聊列表移除 QQ",
-                    "添加 QQ 到黑名单",
-                    "从黑名单移除 QQ",
-                    "返回",
-                ])
-                .default(0)
-                .interact()?;
-            let result = match choice {
-                0 => {
-                    toggle_string(
-                        &mut doc,
-                        CHAT_TABLE,
-                        "group_list_type",
-                        "whitelist",
-                        "blacklist",
-                    );
-                    Ok(())
-                }
-                1 => prompt_modify_numeric_array(
-                    &mut doc,
-                    CHAT_TABLE,
-                    "group_list",
-                    true,
-                    &self.theme,
-                ),
-                2 => prompt_modify_numeric_array(
-                    &mut doc,
-                    CHAT_TABLE,
-                    "group_list",
-                    false,
-                    &self.theme,
-                ),
-                3 => {
-                    toggle_string(
-                        &mut doc,
-                        CHAT_TABLE,
-                        "private_list_type",
-                        "whitelist",
-                        "blacklist",
-                    );
-                    Ok(())
-                }
-                4 => prompt_modify_numeric_array(
-                    &mut doc,
-                    CHAT_TABLE,
-                    "private_list",
-                    true,
-                    &self.theme,
-                ),
-                5 => prompt_modify_numeric_array(
-                    &mut doc,
-                    CHAT_TABLE,
-                    "private_list",
-                    false,
-                    &self.theme,
-                ),
-                6 => prompt_modify_numeric_array(
-                    &mut doc,
-                    CHAT_TABLE,
-                    "ban_user_id",
-                    true,
-                    &self.theme,
-                ),
-                7 => prompt_modify_numeric_array(
-                    &mut doc,
-                    CHAT_TABLE,
-                    "ban_user_id",
-                    false,
-                    &self.theme,
-                ),
-                _ => break,
-            };
-            if self.handle_menu_result(
-                result.and_then(|_| fs::write(&path, doc.to_string()).map_err(Into::into)),
-            )? {
-                self.pause("操作已执行，按回车继续")?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -480,99 +293,4 @@ fn cached_public_ip(app: &App, cached: &mut Option<String>) -> String {
     cached
         .get_or_insert_with(|| app.get_public_ip().unwrap_or_else(|_| "127.0.0.1".into()))
         .clone()
-}
-
-fn display_array(arr: &toml_edit::Array) -> String {
-    arr.iter()
-        .filter_map(|v| v.as_integer())
-        .map(|v| v.to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn config_string<'a>(doc: &'a DocumentMut, table: &str, key: &str, default: &'a str) -> &'a str {
-    doc.get(table)
-        .and_then(Item::as_table)
-        .and_then(|table| table.get(key))
-        .and_then(Item::as_str)
-        .unwrap_or(default)
-}
-
-fn config_array_display(doc: &DocumentMut, table: &str, key: &str) -> String {
-    doc.get(table)
-        .and_then(Item::as_table)
-        .and_then(|table| table.get(key))
-        .and_then(Item::as_array)
-        .map(display_array)
-        .unwrap_or_default()
-}
-
-fn ensure_table(doc: &mut DocumentMut, table: &str) {
-    if doc.get(table).and_then(Item::as_table).is_none() {
-        doc[table] = Item::Table(Default::default());
-    }
-}
-
-fn set_table_value(doc: &mut DocumentMut, table: &str, key: &str, new_value: Item) {
-    ensure_table(doc, table);
-    doc[table][key] = new_value;
-}
-
-fn toggle_string(doc: &mut DocumentMut, table: &str, key: &str, left: &str, right: &str) {
-    let current = config_string(doc, table, key, left);
-    set_table_value(
-        doc,
-        table,
-        key,
-        value(if current == left { right } else { left }),
-    );
-}
-
-fn prompt_modify_numeric_array(
-    doc: &mut DocumentMut,
-    table: &str,
-    key: &str,
-    add: bool,
-    theme: &AppTheme,
-) -> Result<()> {
-    let input: String = Input::with_theme(theme)
-        .with_prompt(if add {
-            "输入号码"
-        } else {
-            "输入要移除的号码"
-        })
-        .interact_text()?;
-    if !Regex::new(r"^\d+$")?.is_match(&input) {
-        bail!("号码必须为纯数字");
-    }
-    update_numeric_array(doc, table, key, &input, add)
-}
-
-fn update_numeric_array(
-    doc: &mut DocumentMut,
-    table: &str,
-    key: &str,
-    input: &str,
-    add: bool,
-) -> Result<()> {
-    ensure_table(doc, table);
-    if doc[table].get(key).map(Item::is_none).unwrap_or(true) {
-        doc[table][key] = Item::Value(TomlValue::Array(Default::default()));
-    }
-    let arr = doc[table][key]
-        .as_array_mut()
-        .ok_or_else(|| anyhow!("{}.{} 不是数组", table, key))?;
-    let values = arr
-        .iter()
-        .filter_map(|v| v.as_integer())
-        .map(|v| v.to_string())
-        .collect::<Vec<_>>();
-    if add {
-        if !values.iter().any(|value| value == input) {
-            arr.push(input.parse::<i64>()?);
-        }
-    } else if let Some(pos) = values.iter().position(|v| v == input) {
-        arr.remove(pos);
-    }
-    Ok(())
 }
