@@ -76,7 +76,7 @@ pub(crate) fn print_help() {
     let access_init_note = if cfg!(target_os = "macos") {
         "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址；默认会询问确认"
     } else {
-        "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用 Napcat Adapter；默认会询问确认"
+        "将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用 统一 QQ 适配器；默认会询问确认"
     };
     let access_show_note = if cfg!(target_os = "macos") {
         "显示 MaiBot WebUI 地址和密钥"
@@ -212,12 +212,16 @@ MaiBot 核心:
   maibot access clear-data
   maibot access clear-data --yes
   maibot access adapter show
-  maibot access adapter group-mode <whitelist|blacklist>
+  maibot access adapter group-mode <whitelist|blacklist|inherit>
   maibot access adapter group-add <群号>
   maibot access adapter group-remove <群号>
-  maibot access adapter private-mode <whitelist|blacklist>
+  maibot access adapter private-mode <whitelist|blacklist|inherit>
   maibot access adapter private-add <QQ>
   maibot access adapter private-remove <QQ>
+  maibot access adapter group-allow-add|group-allow-remove <群号>
+  maibot access adapter group-deny-add|group-deny-remove <群号>
+  maibot access adapter private-allow-add|private-allow-remove <QQ>
+  maibot access adapter private-deny-add|private-deny-remove <QQ>
   maibot access adapter ban-add <QQ>
   maibot access adapter ban-remove <QQ>
 
@@ -229,9 +233,13 @@ MaiBot 核心:
   access clear-data --yes
                     跳过确认直接清理数据文件，适合已确认目标目录的脚本环境
   adapter show       查看 Adapter 群聊、私聊、封禁 QQ 配置
-  group-mode         设置群聊名单模式，取值 whitelist 或 blacklist
-  private-mode       设置私聊名单模式，取值 whitelist 或 blacklist
-  *-add/*-remove     增删对应列表中的纯数字号码
+  group-mode         设置群聊名单模式，取值 whitelist、blacklist 或 inherit
+  private-mode       设置私聊名单模式，取值 whitelist、blacklist 或 inherit
+  *-add/*-remove     原有 group/private 命令按当前模式编辑允许或拒绝名单；默认模式下请明确指定 allow/deny
+  --rule <编号>      编辑指定 QQ 账号/网关规则；多条规则时必填，编号由 adapter show 显示
+  allow/deny         显式允许/拒绝名单；添加时自动移出相反名单；切换模式保留已有名单
+  ban-add/ban-remove 发送者黑名单，写入统一适配器 [filters].ban_user_id
+  策略文件           MaiBot/config/adapter_policy.toml；群聊/私聊保存后无需重启
 
 插件:
   maibot plugin list

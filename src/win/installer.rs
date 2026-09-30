@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     model::*,
-    plugins::{NAPCAT_ADAPTER_PLUGIN_ID, NAPCAT_ADAPTER_REPO_NAME},
+    qq_adapter::REPO_NAME as QQ_ADAPTER_REPO_NAME,
     terminal::{TerminalUiGuard, restore_terminal_state},
     utils::*,
 };
@@ -673,7 +673,11 @@ impl App {
             &plan.maibot_branch,
             plan.git_dirty_mode,
         )?;
-        self.install_napcat_adapter(&plan)?;
+        if plan.bot_protocols.contains(&BotProtocol::NapCat)
+            || plan.bot_protocols.contains(&BotProtocol::SnowLuma)
+        {
+            self.install_qq_adapter(&plan)?;
+        }
         self.setup_python_env(&plan)?;
         for protocol in &plan.bot_protocols {
             match protocol {
@@ -1020,29 +1024,25 @@ impl App {
         }
     }
 
-    fn install_napcat_adapter(&self, plan: &InstallPlan) -> Result<()> {
+    fn install_qq_adapter(&self, plan: &InstallPlan) -> Result<()> {
         let plugins_dir = plan.install_path.join("MaiBot").join("plugins");
-        self.sync_plugin_repo_with_manifest_dir_at_root(
+        let adapter_dir = self.sync_plugin_repo_with_manifest_dir_at_root(
             &plan.install_path,
             &repo_url(
                 &plan.github_proxy,
-                &format!("Mai-with-u/{NAPCAT_ADAPTER_REPO_NAME}"),
+                &format!("Mai-with-u/{QQ_ADAPTER_REPO_NAME}"),
             ),
             &plugins_dir,
-            NAPCAT_ADAPTER_REPO_NAME,
+            QQ_ADAPTER_REPO_NAME,
             Some("main"),
             plan.install_mode,
         )?;
-        Ok(())
+        self.finish_qq_adapter_install(plan, &adapter_dir)
     }
 
     pub(crate) fn setup_python_env(&self, plan: &InstallPlan) -> Result<()> {
         let root = &plan.install_path;
         let maibot_dir = root.join("MaiBot");
-        let adapter_req = maibot_dir
-            .join("plugins")
-            .join(plugin_dir_name(NAPCAT_ADAPTER_PLUGIN_ID))
-            .join("requirements.txt");
         match plan.python_env {
             PythonEnv::Uv => {
                 let index = if plan.uv_index.is_empty() {
@@ -1056,13 +1056,14 @@ impl App {
                 if plan.venv_mode == VenvMode::Recreate && maibot_dir.join(".venv").exists() {
                     self.remove_env_dir_safely(&maibot_dir.join(".venv"), root)?;
                 }
-                self.run_shell(&with_windows_tools_path(root, &format!(
-                    "cd /d {}\r\n{}if not exist .venv uv venv --python 3.14\r\nuv sync\r\nif exist {} uv pip install -r {}",
-                    bat_quote(&maibot_dir),
-                    index,
-                    bat_quote(&adapter_req),
-                    bat_quote(&adapter_req)
-                )))
+                self.run_shell(&with_windows_tools_path(
+                    root,
+                    &format!(
+                        "cd /d {}\r\n{}if not exist .venv uv venv --python 3.14\r\nuv sync",
+                        bat_quote(&maibot_dir),
+                        index
+                    ),
+                ))
             }
             PythonEnv::System => {
                 let venv_dir = root.join("venv");
@@ -1092,18 +1093,14 @@ impl App {
                      )\r\n\
                      if not exist {} (echo Python 虚拟环境创建失败: {} & exit /b 1)\r\n\
                      {}{} -m pip install --upgrade pip\r\n\
-                     if exist MaiBot\\requirements.txt {} -m pip install -r MaiBot\\requirements.txt\r\n\
-                     if exist {} {} -m pip install -r {}",
+                     if exist MaiBot\\requirements.txt {} -m pip install -r MaiBot\\requirements.txt",
                     bat_quote(root),
                     bat_quote(&python),
                     bat_quote(&python),
                     python.display(),
                     pip_index,
                     bat_quote(&python),
-                    bat_quote(&python),
-                    bat_quote(&adapter_req),
-                    bat_quote(&python),
-                    bat_quote(&adapter_req)
+                    bat_quote(&python)
                 )))
             }
         }

@@ -261,6 +261,17 @@ impl App {
         );
     }
 
+    pub(crate) fn print_kv_fit(&self, key: &str, value: &str) {
+        self.print_kv(
+            key,
+            &truncate_display(value, content_width().saturating_sub(KEY_WIDTH + 3)),
+        );
+    }
+
+    pub(crate) fn print_hint_fit(&self, text: &str) {
+        self.print_hint(&truncate_display(text, content_width().saturating_sub(2)));
+    }
+
     pub(crate) fn print_line(&self) {
         wln!(
             "  {}",
@@ -2625,7 +2636,7 @@ fn pad_right(input: &str, width: usize) -> String {
     }
 }
 
-fn truncate_display(input: &str, max_width: usize) -> String {
+pub(crate) fn truncate_display(input: &str, max_width: usize) -> String {
     if display_width(input) <= max_width {
         return input.to_string();
     }

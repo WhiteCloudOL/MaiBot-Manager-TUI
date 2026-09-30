@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     model::*,
-    plugins::{NAPCAT_ADAPTER_PLUGIN_ID, NAPCAT_ADAPTER_REPO_NAME, SNOWLUMA_ADAPTER_REPO_NAME},
+    qq_adapter::REPO_NAME as QQ_ADAPTER_REPO_NAME,
     terminal::{TerminalUiGuard, restore_terminal_state},
     utils::*,
 };
@@ -20,49 +20,113 @@ use std::{
 };
 
 const LLBOT_RELEASE_TAG_FILE: &str = ".maibot-llbot-release";
-const SNOWLUMA_ADAPTER_DEFAULT_CONFIG: &str = r#"[plugin]
-enabled = true
-enable_ada_debug_raw_message_log = false
-enable_ada_debug_raw_outbound_message_log = false
-enable_private_chat_tool = false
-qq_face_parse_mode = "description"
-config_version = "1.0.5"
 
-[luma_client]
-server = "127.0.0.1"
-port = 3001
-token = ""
-connection_id = ""
-reconnect_delay_sec = 5.0
-action_timeout_sec = 10.0
+#[cfg(test)]
+mod compose_tests {
+    use super::*;
 
-[chat]
-enable_chat_list_filter = true
-show_dropped_chat_list_messages = false
-group_list_type = "whitelist"
-group_list = []
-private_list_type = "whitelist"
-private_list = []
-ban_user_id = []
-ban_qq_bot = false
+    #[test]
+    fn snowluma_mounts_data_and_maibot_at_the_same_absolute_path() {
+        let path = Path::new("/tmp/Mai Bot's workspace/MaiBot");
+        let compose = snowluma_compose_template(path).unwrap();
+        for mount in [
+            "./snowluma-data:/app/data",
+            "./snowluma-qq-config:/app/.config",
+            "./snowluma-qq-data:/app/.local/share",
+        ] {
+            assert!(compose.contains(mount));
+        }
+        assert!(
+            compose
+                .contains("\"/tmp/Mai Bot's workspace/MaiBot:/tmp/Mai Bot's workspace/MaiBot:ro\"")
+        );
+        assert!(!compose.contains("/app/snowluma-data"));
+        let relative = snowluma_compose_template(Path::new("MaiBot")).unwrap();
+        let absolute = std::path::absolute("MaiBot").unwrap();
+        assert!(relative.contains(&format!("{}:{}:ro", absolute.display(), absolute.display())));
+    }
 
-[notice]
-enabled = true
-enable_poke = true
-enable_friend_recall = true
-enable_group_recall = true
-enable_group_ban = true
-enable_group_msg_emoji_like = true
-enable_group_upload = true
-enable_group_increase = true
-enable_group_decrease = true
-enable_group_admin = true
-enable_essence = true
-enable_group_name = true
+    #[test]
+    fn existing_compose_only_migrates_the_managed_snowluma_data_mount() {
+        let original = "services:\r\n  snowluma:\r\n    image: custom:image\r\n    volumes:\r\n      - ./snowluma-data:/app/snowluma-data # data\r\n      - /custom/path:/custom/path:ro\r\n    ports:\r\n      - '5098:5099'\r\n  other:\r\n    volumes:\r\n      - ./snowluma-data:/app/snowluma-data\r\n";
+        let updated = migrate_snowluma_data_mount(original);
+        assert!(updated.contains("./snowluma-data:/app/data # data\r\n"));
+        assert!(updated.contains("image: custom:image\r\n"));
+        assert!(updated.contains("- /custom/path:/custom/path:ro\r\n"));
+        assert!(updated.contains("- '5098:5099'\r\n"));
+        assert!(updated.contains("./snowluma-data:/app/snowluma-data\r\n"));
+        assert_eq!(migrate_snowluma_data_mount(&updated), updated);
+    }
+}
 
-[filters]
-ignore_self_message = true
-"#;
+fn snowluma_compose_template(maibot_dir: &Path) -> Result<String> {
+    let maibot_path = yaml_double_quote(&std::path::absolute(maibot_dir)?.display().to_string());
+    Ok(format!(
+        r#"services:
+  snowluma:
+    image: ${{SNOWLUMA_IMAGE:-motricseven7/snowluma:latest}}
+    container_name: ${{SNOWLUMA_CONTAINER:-snowluma}}
+    restart: unless-stopped
+    shm_size: 1gb
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      VNC_PASSWD: ${{VNC_PASSWD:-vncpasswd}}
+      SNOWLUMA_UID: ${{SNOWLUMA_UID:-1000}}
+      SNOWLUMA_GID: ${{SNOWLUMA_GID:-1000}}
+      SNOWLUMA_WEBUI_PORT: ${{SNOWLUMA_WEBUI_PORT:-5099}}
+      SNOWLUMA_LOG_LEVEL: ${{SNOWLUMA_LOG_LEVEL:-info}}
+      SNOWLUMA_SCREEN: ${{SNOWLUMA_SCREEN:-1920x1080x16}}
+      SNOWLUMA_HOOK_AUTOLOAD: ${{SNOWLUMA_HOOK_AUTOLOAD:-1}}
+      SNOWLUMA_EXTRA_QQ_HOMES: "${{SNOWLUMA_EXTRA_QQ_HOMES:-}}"
+      SNOWLUMA_QQ_FLAGS: "${{SNOWLUMA_QQ_FLAGS:---disable-gpu --disable-software-rasterizer --disable-gpu-compositing}}"
+    ports:
+      - "${{VNC_PORT:-5900}}:5900"
+      - "${{NOVNC_PORT:-6081}}:6081"
+      - "${{SNOWLUMA_WEBUI_HOST_PORT:-5099}}:${{SNOWLUMA_WEBUI_PORT:-5099}}"
+      - "${{ONEBOT_HTTP_PORT:-3000}}:3000"
+      - "${{ONEBOT_WS_PORT:-3001}}:3001"
+    volumes:
+      - ./snowluma-data:/app/data
+      - ./snowluma-qq-config:/app/.config
+      - ./snowluma-qq-data:/app/.local/share
+      - "{maibot_path}:{maibot_path}:ro"
+"#,
+    ))
+}
+
+fn migrate_snowluma_data_mount(content: &str) -> String {
+    let mut in_service = false;
+    let mut in_volumes = false;
+    content
+        .split_inclusive('\n')
+        .map(|line| {
+            let text = line.trim();
+            let indent = line.len() - line.trim_start().len();
+            if !text.is_empty() && !text.starts_with('#') {
+                if indent == 2 {
+                    in_service = text == "snowluma:";
+                    in_volumes = false;
+                }
+                if in_service && indent == 4 {
+                    in_volumes = text == "volumes:";
+                }
+            }
+            if in_service && in_volumes && indent >= 6 {
+                line.replace(
+                    "./snowluma-data:/app/snowluma-data",
+                    "./snowluma-data:/app/data",
+                )
+            } else {
+                line.to_string()
+            }
+        })
+        .collect()
+}
 
 fn snowluma_vnc_password() -> Result<String> {
     const UPPER: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -1126,24 +1190,20 @@ impl App {
             plan.git_dirty_mode,
         )?;
         let plugins_dir = plan.install_path.join("MaiBot").join("plugins");
-        if plan.bot_protocols.contains(&BotProtocol::NapCat) {
-            self.sync_plugin_repo_with_manifest_dir(
-                &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-Napcat-Adapter"),
-                &plugins_dir,
-                NAPCAT_ADAPTER_REPO_NAME,
-                Some("main"),
-                plan.install_mode,
-            )?;
-        }
-        if plan.bot_protocols.contains(&BotProtocol::SnowLuma) {
+        if plan.bot_protocols.contains(&BotProtocol::NapCat)
+            || plan.bot_protocols.contains(&BotProtocol::SnowLuma)
+        {
             let adapter_dir = self.sync_plugin_repo_with_manifest_dir(
-                &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot-SnowLuma-Adapter"),
+                &repo_url(
+                    &plan.github_proxy,
+                    &format!("Mai-with-u/{QQ_ADAPTER_REPO_NAME}"),
+                ),
                 &plugins_dir,
-                SNOWLUMA_ADAPTER_REPO_NAME,
+                QQ_ADAPTER_REPO_NAME,
                 Some("main"),
                 plan.install_mode,
             )?;
-            self.ensure_snowluma_adapter_config(&adapter_dir)?;
+            self.finish_qq_adapter_install(&plan, &adapter_dir)?;
         }
         self.setup_python_env(&plan)?;
         self.save_config(&self.plan_to_config(&plan))?;
@@ -1493,11 +1553,9 @@ impl App {
                     String::new()
                 };
                 self.run_shell(&format!(
-                    "cd '{}' && . venv/bin/activate && {}pip install --upgrade pip && if [ -f MaiBot/requirements.txt ]; then pip install -r MaiBot/requirements.txt; fi && if [ -f MaiBot/plugins/{}/requirements.txt ]; then pip install -r MaiBot/plugins/{}/requirements.txt; fi",
+                    "cd '{}' && . venv/bin/activate && {}pip install --upgrade pip && if [ -f MaiBot/requirements.txt ]; then pip install -r MaiBot/requirements.txt; fi",
                     shell_escape(root),
-                    pip_prefix,
-                    plugin_dir_name(NAPCAT_ADAPTER_PLUGIN_ID),
-                    plugin_dir_name(NAPCAT_ADAPTER_PLUGIN_ID)
+                    pip_prefix
                 ))?;
             }
         }
@@ -1549,63 +1607,29 @@ impl App {
 
         let compose_path = snowluma_dir.join("docker-compose.yml");
         if !compose_path.exists() {
-            let maibot_path =
-                yaml_double_quote(&plan.install_path.join("MaiBot").display().to_string());
-            let compose = format!(
-                r#"services:
-  snowluma:
-    image: ${{SNOWLUMA_IMAGE:-motricseven7/snowluma:latest}}
-    container_name: ${{SNOWLUMA_CONTAINER:-snowluma}}
-    restart: unless-stopped
-    shm_size: 1gb
-    cap_add:
-      - SYS_PTRACE
-    security_opt:
-      - seccomp=unconfined
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    environment:
-      VNC_PASSWD: ${{VNC_PASSWD:-vncpasswd}}
-      SNOWLUMA_UID: ${{SNOWLUMA_UID:-1000}}
-      SNOWLUMA_GID: ${{SNOWLUMA_GID:-1000}}
-      SNOWLUMA_WEBUI_PORT: ${{SNOWLUMA_WEBUI_PORT:-5099}}
-      SNOWLUMA_LOG_LEVEL: ${{SNOWLUMA_LOG_LEVEL:-info}}
-      SNOWLUMA_SCREEN: ${{SNOWLUMA_SCREEN:-1920x1080x16}}
-      SNOWLUMA_HOOK_AUTOLOAD: ${{SNOWLUMA_HOOK_AUTOLOAD:-1}}
-      SNOWLUMA_EXTRA_QQ_HOMES: "${{SNOWLUMA_EXTRA_QQ_HOMES:-}}"
-      SNOWLUMA_QQ_FLAGS: "${{SNOWLUMA_QQ_FLAGS:---disable-gpu --disable-software-rasterizer --disable-gpu-compositing}}"
-    ports:
-      - "${{VNC_PORT:-5900}}:5900"
-      - "${{NOVNC_PORT:-6081}}:6081"
-      - "${{SNOWLUMA_WEBUI_HOST_PORT:-5099}}:${{SNOWLUMA_WEBUI_PORT:-5099}}"
-      - "${{ONEBOT_HTTP_PORT:-3000}}:3000"
-      - "${{ONEBOT_WS_PORT:-3001}}:3001"
-    volumes:
-      - ./snowluma-data:/app/snowluma-data
-      - ./snowluma-qq-config:/app/.config
-      - ./snowluma-qq-data:/app/.local/share
-      - "{maibot_path}:{maibot_path}:ro"
-"#,
-            );
+            let compose = snowluma_compose_template(&plan.install_path.join("MaiBot"))?;
             fs::write(&compose_path, compose)?;
+        } else {
+            let original = fs::read_to_string(&compose_path)?;
+            let updated = migrate_snowluma_data_mount(&original);
+            if updated != original {
+                let backup = (1..)
+                    .map(|n| snowluma_dir.join(format!("docker-compose.yml.maibot-backup-{n}")))
+                    .find(|p| !p.exists())
+                    .expect("backup name available");
+                fs::copy(&compose_path, &backup)?;
+                fs::write(&compose_path, updated)?;
+                println!(
+                    "SnowLuma 数据映射已更新为 /app/data，原 Compose 已备份: {}",
+                    backup.display()
+                );
+            }
         }
         self.handle_snowluma_conflict(&snowluma_dir, plan.snowluma_conflict_mode)?;
         self.run_shell(&format!(
             "cd '{}' && docker compose up -d",
             shell_escape(&snowluma_dir)
         ))
-    }
-
-    fn ensure_snowluma_adapter_config(&self, adapter_dir: &Path) -> Result<()> {
-        let config_path = adapter_dir.join("config.toml");
-        if !config_path.exists() {
-            fs::write(&config_path, SNOWLUMA_ADAPTER_DEFAULT_CONFIG)?;
-            println!(
-                "已生成 SnowLuma Adapter 默认配置: {}",
-                config_path.display()
-            );
-        }
-        Ok(())
     }
 
     fn handle_snowluma_conflict(
