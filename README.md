@@ -179,7 +179,7 @@ rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 仓库根的 `app.toml` 是构建时配置（**非运行时配置**），由 `build.rs` 在 `cargo build` 阶段读取并烘焙进二进制：
 
 ```toml
-version          = "0.4.4"   # 标题栏显示的版本号
+version          = "0.4.0"   # 标题栏显示的版本号
 header_title     = "..."     # 标头第一行标题
 header_subtitle  = "..."     # 标头第二行副标题
 header_credit    = "..."     # 作者 / License 行
