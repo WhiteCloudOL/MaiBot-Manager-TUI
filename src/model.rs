@@ -8,6 +8,20 @@ pub const APP_HEADER_CREDIT: &str = env!("APP_HEADER_CREDIT");
 pub const APP_HEADER_DOCS: &str = env!("APP_HEADER_DOCS");
 pub const TEST_FILE_PATH: &str = env!("APP_GITHUB_TEST_PATH");
 pub const DOCKER_ONELINER: &str = env!("APP_DOCKER_ONELINER");
+pub const SNOWLUMA_DEPLOY_DOCS: &str = "https://snowluma.github.io/zh/docs/guide/deploy/";
+
+pub fn snowluma_manual_deploy_guide() -> Vec<String> {
+    vec![
+        "请按 SnowLuma 官方文档手动部署，并阅读其 LICENSE、EULA 与隐私政策。".into(),
+        format!("官方文档: {SNOWLUMA_DEPLOY_DOCS}"),
+        "自动化部署其专有组件须事先取得书面授权；本管理器不代为安装、更新或重建。".into(),
+        "已有 Linux Docker 实例可查看状态、日志，并启动、停止、重启已有容器。".into(),
+        "Compose 文件请放在已配置工作区的 SnowLuma 目录，服务名和容器名均为 snowluma。".into(),
+        "可先用 install --protocol none 部署 MaiBot，再从插件中心安装统一 QQ 适配器并配置连接。"
+            .into(),
+        "MaiBot 目录如需在容器内访问，请按官方说明配置同路径只读挂载。".into(),
+    ]
+}
 
 const GITHUB_MIRRORS_RAW: &str = env!("APP_GITHUB_MIRRORS");
 
@@ -57,8 +71,6 @@ pub struct InstallPlan {
     pub git_dirty_mode: GitDirtyMode,
     pub napcat_conflict_mode: NapcatConflictMode,
     pub llbot_update_mode: LlbotUpdateMode,
-    pub snowluma_swap_mode: SnowlumaSwapMode,
-    pub snowluma_conflict_mode: SnowlumaConflictMode,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -86,7 +98,6 @@ pub enum VenvMode {
 pub enum BotProtocol {
     NapCat,
     LuckyLilliaBot,
-    SnowLuma,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -129,24 +140,6 @@ pub enum LlbotUpdateMode {
     Prompt,
     Update,
     Skip,
-}
-
-/// Swap is an installation-time safety choice and is intentionally not persisted:
-/// the system's active swap state is checked again on every SnowLuma deployment.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SnowlumaSwapMode {
-    #[default]
-    Ask,
-    Enable,
-    Skip,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SnowlumaConflictMode {
-    #[default]
-    Ask,
-    Recreate,
-    Cancel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -533,7 +526,6 @@ impl BotProtocol {
         match self {
             Self::NapCat => "NapCatQQ",
             Self::LuckyLilliaBot => "LuckyLilliaBot",
-            Self::SnowLuma => "SnowLuma",
         }
     }
 }

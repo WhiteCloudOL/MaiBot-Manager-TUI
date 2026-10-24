@@ -223,7 +223,6 @@ impl App {
                     .map(|v| match v {
                         BotProtocol::NapCat => "NapCatQQ",
                         BotProtocol::LuckyLilliaBot => "LuckyLilliaBot",
-                        BotProtocol::SnowLuma => "SnowLuma",
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -1528,12 +1527,11 @@ fn popup_for_selection(view: &DashboardView) -> Option<DashboardPopup> {
                 ]
             } else if card.id == "snowluma" {
                 vec![
-                    "启动".to_string(),
+                    "启动已有容器".to_string(),
                     "停止".to_string(),
                     "重启".to_string(),
                     "查看日志".to_string(),
-                    "重建容器".to_string(),
-                    "确认删除数据并重建".to_string(),
+                    "手动部署指南".to_string(),
                     "取消".to_string(),
                 ]
             } else {
@@ -1881,9 +1879,6 @@ pub(crate) fn planner_choices_for_plan(plan: &InstallPlan, field: PlanField) -> 
                 BotProtocol::NapCat.label().to_string(),
                 BotProtocol::LuckyLilliaBot.label().to_string(),
             ];
-            if cfg!(target_os = "linux") {
-                choices.push(BotProtocol::SnowLuma.label().to_string());
-            }
             choices.push("暂不安装协议端".to_string());
             choices
         }
@@ -1955,11 +1950,7 @@ fn planner_choice_active_for_plan(plan: &InstallPlan, field: PlanField, idx: usi
             }
             (idx == 0 && plan.bot_protocols.as_slice() == [BotProtocol::NapCat])
                 || (idx == 1 && plan.bot_protocols.as_slice() == [BotProtocol::LuckyLilliaBot])
-                || (cfg!(target_os = "linux")
-                    && idx == 2
-                    && plan.bot_protocols.as_slice() == [BotProtocol::SnowLuma])
-                || (idx == if cfg!(target_os = "linux") { 3 } else { 2 }
-                    && plan.bot_protocols.is_empty())
+                || (idx == 2 && plan.bot_protocols.is_empty())
         }
         PlanField::DockerMirror => {
             matches!(
@@ -2106,6 +2097,12 @@ fn handle_dashboard_key(
                 if cancel {
                     state.popup = None;
                     DashboardInputAction::Redraw
+                } else if popup
+                    .actions
+                    .get(popup.selected)
+                    .is_some_and(|action| action == "手动部署指南")
+                {
+                    DashboardInputAction::OpenInlineInfoPopup
                 } else {
                     DashboardInputAction::Event(DashboardEvent::Activate)
                 }
@@ -2358,19 +2355,14 @@ fn apply_cached_planner_choice(plan: &mut InstallPlan, field: PlanField, idx: us
             plan.bot_protocols = match idx {
                 0 => vec![BotProtocol::NapCat],
                 1 => vec![BotProtocol::LuckyLilliaBot],
-                2 if cfg!(target_os = "linux") => vec![BotProtocol::SnowLuma],
                 _ => Vec::new(),
             };
-            if !plan.bot_protocols.contains(&BotProtocol::NapCat)
-                && !plan.bot_protocols.contains(&BotProtocol::SnowLuma)
-            {
+            if !plan.bot_protocols.contains(&BotProtocol::NapCat) {
                 plan.docker_mirror = DockerMirror::Keep;
             }
         }
         PlanField::DockerMirror => {
-            if plan.bot_protocols.contains(&BotProtocol::NapCat)
-                || plan.bot_protocols.contains(&BotProtocol::SnowLuma)
-            {
+            if plan.bot_protocols.contains(&BotProtocol::NapCat) {
                 plan.docker_mirror = match idx {
                     0 => DockerMirror::OneMs,
                     1 => DockerMirror::Xuanyuan,
@@ -2754,6 +2746,32 @@ mod tests {
         let truncated = truncate_display("󰏗 插件中心：长长长长长长长长", 12);
         assert!(display_width(&truncated) <= 12);
         assert!(truncated.ends_with('…'));
+    }
+
+    #[test]
+    fn snowluma_guide_opens_inline_for_new_and_existing_instances() {
+        let mut view = sample_dashboard_view(0);
+        view.active_tab = DashboardTab::Protocol;
+        view.selected = 0;
+        view.cards[0].id = "snowluma-note";
+        assert!(direct_info_popup_card(&view));
+
+        view.cards[0].id = "snowluma";
+        let mut popup = popup_for_selection(&view).unwrap();
+        assert!(!popup.actions.iter().any(|action| action.contains("重建")));
+        popup.selected = popup
+            .actions
+            .iter()
+            .position(|action| action == "手动部署指南")
+            .unwrap();
+        let mut state = DashboardState::default();
+        state.active_tab = DashboardTab::Protocol;
+        state.focus = DashboardFocus::Content;
+        state.popup = Some(popup);
+        assert_eq!(
+            handle_dashboard_key(&mut state, &view, KeyCode::Enter, KeyModifiers::empty()),
+            DashboardInputAction::OpenInlineInfoPopup
+        );
     }
 
     #[test]

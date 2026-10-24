@@ -206,13 +206,29 @@ impl App {
 
     fn snowluma_dir(&self) -> Result<PathBuf> {
         let cfg = self.require_config()?;
-        Ok(PathBuf::from(cfg.mai_path).join("SnowLuma"))
+        let dir = PathBuf::from(cfg.mai_path).join("SnowLuma");
+        if ![
+            "compose.yaml",
+            "compose.yml",
+            "docker-compose.yaml",
+            "docker-compose.yml",
+        ]
+        .iter()
+        .any(|name| dir.join(name).is_file())
+        {
+            anyhow::bail!(
+                "未找到 SnowLuma Compose 配置，请先按官方文档手动部署：{}；管理目录：{}",
+                crate::model::SNOWLUMA_DEPLOY_DOCS,
+                dir.display()
+            );
+        }
+        Ok(dir)
     }
 
     pub(crate) fn start_snowluma(&self) -> Result<()> {
         let dir = self.snowluma_dir()?;
         self.run_shell(&format!(
-            "cd '{}' && docker compose up -d",
+            "cd '{}' && if ! docker compose ps -a -q snowluma | grep -q .; then printf '%s\\n' '未找到已有 SnowLuma 容器，请先运行 maibot snowluma guide 查看手动部署说明' >&2; exit 1; fi && docker compose start snowluma",
             shell_escape(&dir)
         ))
     }
@@ -220,7 +236,7 @@ impl App {
     pub(crate) fn stop_snowluma(&self) -> Result<()> {
         let dir = self.snowluma_dir()?;
         self.run_shell(&format!(
-            "cd '{}' && docker compose stop",
+            "cd '{}' && docker compose stop snowluma",
             shell_escape(&dir)
         ))
     }
@@ -228,38 +244,24 @@ impl App {
     pub(crate) fn restart_snowluma(&self) -> Result<()> {
         let dir = self.snowluma_dir()?;
         self.run_shell(&format!(
-            "cd '{}' && docker compose restart",
-            shell_escape(&dir)
-        ))
-    }
-
-    pub(crate) fn rebuild_snowluma(&self) -> Result<()> {
-        let dir = self.snowluma_dir()?;
-        self.run_shell(&format!(
-            "cd '{}' && docker compose down && docker compose pull && docker compose up -d",
-            shell_escape(&dir)
-        ))
-    }
-
-    pub(crate) fn recreate_snowluma_data(&self) -> Result<()> {
-        let dir = self.snowluma_dir()?;
-        self.run_shell(&format!(
-            "cd '{}' && docker compose down && rm -rf snowluma-data snowluma-qq-config snowluma-qq-data && docker compose up -d",
+            "cd '{}' && docker compose restart snowluma",
             shell_escape(&dir)
         ))
     }
 
     pub(crate) fn remove_snowluma_container(&self) -> Result<()> {
-        self.run_shell(
-            "docker ps -a --format '{{.Names}}' | grep '^snowluma$' | xargs -r docker rm -f",
-        )
+        let dir = self.snowluma_dir()?;
+        self.run_shell(&format!(
+            "cd '{}' && docker compose rm -s -f snowluma",
+            shell_escape(&dir)
+        ))
     }
 
     pub(crate) fn print_snowluma_logs(&self, tail: usize, follow: bool) -> Result<()> {
         let dir = self.snowluma_dir()?;
         let follow_flag = if follow { "-f " } else { "" };
         self.run_shell(&format!(
-            "cd '{}' && docker compose logs {follow_flag}--tail={tail}",
+            "cd '{}' && docker compose logs {follow_flag}--tail={tail} snowluma",
             shell_escape(&dir)
         ))
     }
@@ -516,11 +518,12 @@ impl App {
     }
 
     pub(crate) fn manage_snowluma_menu(&self) -> Result<()> {
-        let dir = self.snowluma_dir()?;
+        let cfg = self.require_config()?;
+        let dir = PathBuf::from(cfg.mai_path).join("SnowLuma");
         loop {
             self.clear();
             self.print_header(None);
-            self.print_section("SnowLuma", "Docker 容器、数据重建与日志管理");
+            self.print_section("SnowLuma", "手动部署指南与已有容器管理");
             self.print_kv("目录", &dir.display().to_string());
             let cards = [if snowluma_running() {
                 StatusCard::running("SnowLuma", "Docker 容器 snowluma 正在运行")
@@ -529,12 +532,11 @@ impl App {
             }];
             self.print_status_cards("服务状态", &cards);
             let actions = [
-                ActionItem::primary("启动 SnowLuma", "docker compose up -d"),
+                ActionItem::primary("启动 SnowLuma", "仅启动已有容器"),
                 ActionItem::destructive("停止 SnowLuma", "docker compose stop"),
                 ActionItem::normal("重启 SnowLuma", "重启容器进程"),
                 ActionItem::normal("查看实时日志", "跟随 docker compose logs"),
-                ActionItem::normal("重建容器", "down + pull + up -d，保留数据"),
-                ActionItem::destructive("删除数据并重建", "清空数据目录，新的首次启动密码会生成"),
+                ActionItem::normal("手动部署指南", "按官方文档部署、更新或重建"),
                 ActionItem::destructive("移除容器", "删除 snowluma 容器，保留数据目录"),
                 ActionItem::back("返回", "回到协议端服务"),
             ];
@@ -544,19 +546,13 @@ impl App {
                 1 => self.stop_snowluma(),
                 2 => self.restart_snowluma(),
                 3 => self.print_snowluma_logs(100, true),
-                4 => self.rebuild_snowluma(),
-                5 => {
-                    if Confirm::with_theme(&self.theme)
-                        .with_prompt("确认删除 SnowLuma 的全部数据并重建？")
-                        .default(false)
-                        .interact()?
-                    {
-                        self.recreate_snowluma_data()
-                    } else {
-                        Ok(())
+                4 => {
+                    for line in crate::model::snowluma_manual_deploy_guide() {
+                        println!("{line}");
                     }
+                    Ok(())
                 }
-                6 => self.remove_snowluma_container(),
+                5 => self.remove_snowluma_container(),
                 _ => break,
             };
             if self.handle_menu_result(result)? {

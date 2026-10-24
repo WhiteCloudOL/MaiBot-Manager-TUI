@@ -534,7 +534,7 @@ impl App {
                     }
                     .to_string()
                 } else {
-                    "部署计划中可启用（仅 Linux）".to_string()
+                    "按官方文档手动部署".to_string()
                 },
                 badge: if snowluma_running {
                     "运行中"
@@ -544,7 +544,7 @@ impl App {
                     "未安装"
                 }
                 .to_string(),
-                detail: "WebUI、VNC、数据重建和容器管理入口。".to_string(),
+                detail: "手动部署指南、WebUI、VNC 与已有容器管理。".to_string(),
                 kind: if snowluma_running && snowluma_installed {
                     StatusKind::Running
                 } else if snowluma_running {
@@ -702,7 +702,11 @@ impl App {
                 },
             },
             DashboardCard {
-                id: "snowluma",
+                id: if snowluma_installed {
+                    "snowluma"
+                } else {
+                    "snowluma-note"
+                },
                 icon: "󰘨",
                 title: "SnowLuma".to_string(),
                 subtitle: if snowluma_running && !snowluma_installed {
@@ -710,7 +714,7 @@ impl App {
                 } else if snowluma_installed {
                     "Docker Compose 协议端 · WebUI + VNC".to_string()
                 } else {
-                    "尚未安装（仅 Linux）".to_string()
+                    "请按官方文档手动部署".to_string()
                 },
                 badge: if snowluma_running {
                     "运行中"
@@ -720,7 +724,7 @@ impl App {
                     "未安装"
                 }
                 .to_string(),
-                detail: "支持启停、日志、重建及删除数据后全新初始化。".to_string(),
+                detail: "查看部署指南，或管理手动部署的已有容器。".to_string(),
                 kind: if snowluma_running && snowluma_installed {
                     StatusKind::Running
                 } else if snowluma_running {
@@ -1084,7 +1088,7 @@ impl App {
                             lines.push("控制台: screen -r llbot".to_string());
                             lines.push("日志: screen hardcopy + tail".to_string());
                         }
-                        "snowluma" => {
+                        "snowluma" | "snowluma-note" => {
                             lines.push(format!(
                                 "目录: {}",
                                 PathBuf::from(&cfg.mai_path).join("SnowLuma").display()
@@ -1098,6 +1102,7 @@ impl App {
                                 }
                             ));
                             lines.push("容器名: snowluma".to_string());
+                            lines.push(format!("手动部署: {}", crate::model::SNOWLUMA_DEPLOY_DOCS));
                             lines.push(
                                 "WebUI: 5099 · VNC: 6081 · 日志: docker compose logs".to_string(),
                             );
@@ -1248,12 +1253,13 @@ impl App {
                             actions.push("LLBot 管理支持控制台与密码维护".to_string());
                             actions.push("支持启动 / 停止 / 控制台 / 密码修改".to_string());
                         }
-                        "snowluma" => {
+                        "snowluma" | "snowluma-note" => {
                             actions.push(
                                 "SnowLuma 使用 Docker Compose，并提供 WebUI 与 VNC".to_string(),
                             );
                             actions.push(
-                                "支持启动 / 停止 / 重启 / 日志 / 重建 / 删除数据重建".to_string(),
+                                "支持已有容器启停、重启、日志；部署与更新请按官方指南操作"
+                                    .to_string(),
                             );
                         }
                         _ => {
@@ -1352,6 +1358,15 @@ impl App {
             return Ok(false);
         };
         match (view.active_tab, card.id) {
+            (DashboardTab::Protocol, "snowluma" | "snowluma-note") => {
+                state.popup = Some(DashboardPopup {
+                    title: "SnowLuma 手动部署指南".into(),
+                    subtitle: "部署与更新由用户按官方文档完成".into(),
+                    lines: crate::model::snowluma_manual_deploy_guide(),
+                    ..DashboardPopup::default()
+                });
+                Ok(true)
+            }
             (DashboardTab::Access, "access-summary") => {
                 state.popup = Some(self.dashboard_access_summary_popup());
                 state.set_status_message("已生成访问汇总");
@@ -1652,14 +1667,6 @@ impl App {
                             self.handle_menu_result(self.print_snowluma_logs(100, true))?;
                             state.set_status_message("已打开 SnowLuma 日志");
                         }
-                        4 => {
-                            self.handle_menu_result(self.rebuild_snowluma())?;
-                            state.set_status_message("已重建 SnowLuma 容器");
-                        }
-                        5 => {
-                            self.handle_menu_result(self.recreate_snowluma_data())?;
-                            state.set_status_message("已删除 SnowLuma 数据并全新启动");
-                        }
                         _ => {}
                     },
                     _ => {}
@@ -1915,7 +1922,20 @@ fn napcat_installed(mai_path: &str) -> bool {
 }
 
 fn snowluma_installed(mai_path: &str) -> bool {
-    !mai_path.is_empty() && PathBuf::from(mai_path).join("SnowLuma").exists()
+    !mai_path.is_empty()
+        && [
+            "compose.yaml",
+            "compose.yml",
+            "docker-compose.yaml",
+            "docker-compose.yml",
+        ]
+        .iter()
+        .any(|name| {
+            PathBuf::from(mai_path)
+                .join("SnowLuma")
+                .join(name)
+                .is_file()
+        })
 }
 
 fn llbot_installed(cfg: &crate::model::AppConfig) -> bool {

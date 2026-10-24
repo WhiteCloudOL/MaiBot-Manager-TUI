@@ -60,6 +60,11 @@ pub(super) fn run_llbot(app: &App, args: &[String]) -> Result<()> {
 
 pub(super) fn run_snowluma(app: &App, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str).unwrap_or("help") {
+        "guide" => {
+            for line in crate::model::snowluma_manual_deploy_guide() {
+                println!("{line}");
+            }
+        }
         "start" => app.start_snowluma()?,
         "stop" => app.stop_snowluma()?,
         "restart" => app.restart_snowluma()?,
@@ -68,8 +73,10 @@ pub(super) fn run_snowluma(app: &App, args: &[String]) -> Result<()> {
             let (tail, follow) = parse_tail(&args[1..], 100)?;
             app.print_snowluma_logs(tail, follow)?;
         }
-        "rebuild" => app.rebuild_snowluma()?,
-        "recreate-data" => app.recreate_snowluma_data()?,
+        "rebuild" | "recreate-data" => bail!(
+            "SnowLuma 自动重建已移除；请按官方文档手动操作：{}",
+            crate::model::SNOWLUMA_DEPLOY_DOCS
+        ),
         "remove-container" => app.remove_snowluma_container()?,
         "exec" => app.exec_snowluma_shell()?,
         "-h" | "--help" | "help" => crate::cli::print_help(),

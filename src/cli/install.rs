@@ -2,8 +2,7 @@ use crate::{
     app::App,
     model::{
         BotProtocol, DockerMirror, GitDirtyMode, GithubFallbackMode, InstallMode, InstallPlan,
-        LlbotUpdateMode, NapcatConflictMode, PythonEnv, SnowlumaConflictMode, SnowlumaSwapMode,
-        VenvMode,
+        LlbotUpdateMode, NapcatConflictMode, PythonEnv, SNOWLUMA_DEPLOY_DOCS, VenvMode,
     },
     utils::{normalize_path, normalize_url},
 };
@@ -82,14 +81,15 @@ fn parse_options(plan: &mut InstallPlan, args: &[String]) -> Result<()> {
                 idx += 2;
             }
             "--protocol" => {
-                plan.bot_protocols =
-                    match value(args, idx, "--protocol <napcat|llbot|snowluma|none>")? {
-                        "napcat" => vec![BotProtocol::NapCat],
-                        "llbot" => vec![BotProtocol::LuckyLilliaBot],
-                        "snowluma" => vec![BotProtocol::SnowLuma],
-                        "none" => Vec::new(),
-                        other => bail!("未知协议端: {other}"),
-                    };
+                plan.bot_protocols = match value(args, idx, "--protocol <napcat|llbot|none>")? {
+                    "napcat" => vec![BotProtocol::NapCat],
+                    "llbot" => vec![BotProtocol::LuckyLilliaBot],
+                    "snowluma" => bail!(
+                        "SnowLuma 不再自动安装；请按官方文档手动部署：{SNOWLUMA_DEPLOY_DOCS}。部署 MaiBot 核心可使用 --protocol none；查看说明可运行 maibot snowluma guide"
+                    ),
+                    "none" => Vec::new(),
+                    other => bail!("未知协议端: {other}"),
+                };
                 idx += 2;
             }
             "--docker" => {
@@ -139,22 +139,8 @@ fn parse_options(plan: &mut InstallPlan, args: &[String]) -> Result<()> {
                 };
                 idx += 2;
             }
-            "--snowluma-swap" => {
-                plan.snowluma_swap_mode = match value(args, idx, "--snowluma-swap <enable|skip>")? {
-                    "enable" => SnowlumaSwapMode::Enable,
-                    "skip" => SnowlumaSwapMode::Skip,
-                    other => bail!("未知 SnowLuma Swap 选项: {other}"),
-                };
-                idx += 2;
-            }
-            "--snowluma-conflict" => {
-                plan.snowluma_conflict_mode =
-                    match value(args, idx, "--snowluma-conflict <recreate|cancel>")? {
-                        "recreate" => SnowlumaConflictMode::Recreate,
-                        "cancel" => SnowlumaConflictMode::Cancel,
-                        other => bail!("未知 SnowLuma 冲突处理选项: {other}"),
-                    };
-                idx += 2;
+            "--snowluma-swap" | "--snowluma-conflict" => {
+                bail!("SnowLuma 自动部署参数已移除；请按官方文档手动部署：{SNOWLUMA_DEPLOY_DOCS}")
             }
             other => bail!("未知安装参数: {other}"),
         }
@@ -206,4 +192,24 @@ fn apply_pip(plan: &mut InstallPlan, pip: &str) {
     plan.pip_index = index;
     plan.pip_host = host;
     plan.uv_index = plan.pip_index.clone();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removed_snowluma_options_fail_before_installation() {
+        for args in [
+            vec!["--protocol", "snowluma"],
+            vec!["--snowluma-swap", "enable"],
+            vec!["--snowluma-conflict", "recreate"],
+        ] {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            let mut plan = InstallPlan::default();
+            let error = parse_options(&mut plan, &args).unwrap_err().to_string();
+            assert!(error.contains(SNOWLUMA_DEPLOY_DOCS), "{error}");
+            assert!(plan.bot_protocols.is_empty());
+        }
+    }
 }
