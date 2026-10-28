@@ -1,10 +1,16 @@
-use crate::{app::App, data, model::DashboardPopup, ui::ActionItem};
-use anyhow::{Result, bail};
+use crate::{
+    access_config::{bind_webui_all_interfaces, webui_binding},
+    app::App,
+    data,
+    model::DashboardPopup,
+    ui::ActionItem,
+};
+use anyhow::{Context, Result, bail};
 use dialoguer::Confirm;
 use dialoguer::console::style;
 use serde_json::Value;
 use std::{fs, path::PathBuf};
-use toml_edit::{Array, DocumentMut, Item, value};
+use toml_edit::DocumentMut;
 
 #[derive(Debug)]
 struct AccessInfoReport {
@@ -127,11 +133,7 @@ impl App {
         if bot_cfg.exists() {
             let doc = fs::read_to_string(&bot_cfg)?;
             let parsed: DocumentMut = doc.parse()?;
-            let host = webui_host_display(&parsed);
-            let port = parsed["webui"]["port"]
-                .as_integer()
-                .unwrap_or(8001)
-                .to_string();
+            let binding = webui_binding(&parsed);
             let token = if webui_json.exists() {
                 let data: Value = serde_json::from_str(&fs::read_to_string(webui_json)?)?;
                 data["access_token"]
@@ -141,17 +143,10 @@ impl App {
             } else {
                 "(未生成，请先启动 MaiBot)".into()
             };
-            let host_display = if host == "127.0.0.1" || host == "localhost" {
-                host
-            } else {
-                cached_public_ip(self, &mut public_ip)
-            };
+            let address = binding.url(|| cached_public_ip(self, &mut public_ip));
             endpoints.push(AccessEndpoint {
                 title: "MaiBot WebUI",
-                fields: vec![
-                    ("地址", format!("http://{host_display}:{port}")),
-                    ("密钥", token),
-                ],
+                fields: vec![("地址", address), ("密钥", token)],
             });
         }
         Ok(AccessInfoReport {
@@ -193,10 +188,8 @@ impl App {
         let bot_cfg = root.join("MaiBot/config/bot_config.toml");
         if bot_cfg.exists() {
             let mut doc: DocumentMut = fs::read_to_string(&bot_cfg)?.parse()?;
-            if doc["webui"].is_none() {
-                doc["webui"] = Item::Table(Default::default());
-            }
-            doc["webui"]["host"] = webui_host_all_interfaces();
+            bind_webui_all_interfaces(&mut doc)
+                .with_context(|| format!("更新 WebUI 监听配置失败: {}", bot_cfg.display()))?;
             fs::write(&bot_cfg, doc.to_string())?;
         }
         Ok(())
@@ -254,29 +247,6 @@ impl App {
     pub(crate) fn modify_adapter_config(&self) -> Result<()> {
         macos_adapter_todo()
     }
-}
-
-fn webui_host_all_interfaces() -> Item {
-    let mut host = Array::default();
-    host.push("0.0.0.0");
-    host.push("::");
-    value(host)
-}
-
-fn webui_host_display(doc: &DocumentMut) -> String {
-    let host = &doc["webui"]["host"];
-    if let Some(value) = host.as_str() {
-        return value.to_string();
-    }
-    if let Some(array) = host.as_array() {
-        return array
-            .iter()
-            .filter_map(|value| value.as_str())
-            .find(|value| *value == "0.0.0.0" || *value == "::")
-            .unwrap_or("127.0.0.1")
-            .to_string();
-    }
-    "0.0.0.0".to_string()
 }
 
 fn cached_public_ip(app: &App, cached: &mut Option<String>) -> String {

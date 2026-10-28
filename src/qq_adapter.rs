@@ -225,6 +225,59 @@ fn set_mode(rule: &mut Table, mode: &str) -> Result<()> {
     Ok(())
 }
 
+fn sync_active_policy_group(doc: &mut DocumentMut, index: usize, chat: &str) -> Result<()> {
+    let rule = doc
+        .get_mut("adapters")
+        .and_then(Item::as_array_of_tables_mut)
+        .and_then(|rules| rules.get_mut(index))
+        .ok_or_else(|| anyhow!("适配器规则不存在"))?;
+    if rule.get("policy_groups").is_none() {
+        return Ok(());
+    }
+    let active = rule
+        .get("active_group")
+        .and_then(Item::as_str)
+        .ok_or_else(|| anyhow!("当前策略分组未设置，请先在 WebUI 选择分组"))?
+        .to_string();
+    let current = ["default_action", "allow_ids", "deny_ids"].map(|key| {
+        (
+            key,
+            rule.get(chat).and_then(|policy| policy.get(key)).cloned(),
+        )
+    });
+    let groups = rule
+        .get_mut("policy_groups")
+        .ok_or_else(|| anyhow!("策略分组不存在"))?;
+    let selected: &mut dyn toml_edit::TableLike = match groups {
+        Item::ArrayOfTables(groups) => groups
+            .iter_mut()
+            .find(|group| group.get("id").and_then(Item::as_str) == Some(active.as_str()))
+            .ok_or_else(|| anyhow!("当前策略分组不存在: {active}"))?,
+        Item::Value(toml_edit::Value::Array(groups)) => groups
+            .iter_mut()
+            .filter_map(toml_edit::Value::as_inline_table_mut)
+            .find(|group| {
+                group.get("id").and_then(toml_edit::Value::as_str) == Some(active.as_str())
+            })
+            .ok_or_else(|| anyhow!("当前策略分组不存在: {active}"))?,
+        _ => bail!("policy_groups 必须是策略分组数组"),
+    };
+    let policy = selected
+        .entry(chat)
+        .or_insert_with(|| value(toml_edit::InlineTable::new()));
+    let policy = policy
+        .as_table_like_mut()
+        .ok_or_else(|| anyhow!("当前分组的 {chat} 规则必须是配置表"))?;
+    for (key, item) in current {
+        if let Some(item) = item {
+            policy.insert(key, item);
+        } else {
+            policy.remove(key);
+        }
+    }
+    Ok(())
+}
+
 impl App {
     pub(crate) fn qq_adapter_dir(&self) -> Result<Option<PathBuf>> {
         let cfg = self.require_config()?;
@@ -331,6 +384,7 @@ impl App {
         let mut doc = read_doc(&path)?;
         let index = target_rule(&mut doc, requested)?;
         set_mode(chat_rule(&mut doc, index, chat)?, mode)?;
+        sync_active_policy_group(&mut doc, index, chat)?;
         save_doc(&path, &doc)
     }
 
@@ -383,6 +437,7 @@ impl App {
                 false,
             )?;
         }
+        sync_active_policy_group(&mut doc, index, chat)?;
         save_doc(&path, &doc)
     }
 
@@ -862,6 +917,104 @@ mod tests {
                 .unwrap()
                 .contains_key("default_action")
         );
+    }
+
+    #[test]
+    fn editing_lists_syncs_only_the_active_group_for_both_group_formats() {
+        for inline in [false, true] {
+            let fixture = Fixture::new();
+            let path = fixture.root.join("MaiBot/config/adapter_policy.toml");
+            let mut content = format!(
+                "[defaults.group]\ndefault_action = \"allow\"\n[[adapters]]\nplugin_id = \"{PLUGIN_ID}\"\naccount_id = \"111\"\nactive_group = \"live\"\n"
+            );
+            if inline {
+                content.push_str("policy_groups = [{id = \"live\", name = \"current\", private = {deny_ids = [\"888\"]}}, {id = \"backup\", group = {allow_ids = [\"777\"]}}]\n");
+            }
+            content.push_str("[adapters.group]\ndefault_action = \"block\"\nallow_ids = [\"123\"]\ndeny_ids = [\"999\"]\n[adapters.private]\ndeny_ids = [\"888\"]\n");
+            if !inline {
+                content.push_str("[[adapters.policy_groups]]\nid = \"live\"\nname = \"current\"\n[adapters.policy_groups.private]\ndeny_ids = [\"888\"]\n[[adapters.policy_groups]]\nid = \"backup\"\n[adapters.policy_groups.group]\nallow_ids = [\"777\"]\n");
+            }
+            fs::write(&path, content).unwrap();
+            let before = fixture.policy();
+            let before_rule = &before["adapters"][0];
+            let backup = before_rule["policy_groups"][1].to_string();
+            let private = before_rule["policy_groups"][0]["private"].to_string();
+            fixture
+                .app
+                .set_adapter_list_mode("group_list_type", "inherit", None)
+                .unwrap();
+            fixture
+                .app
+                .update_adapter_numeric_list("group_allow", "456", true, None)
+                .unwrap();
+            fixture
+                .app
+                .update_adapter_numeric_list("group_deny", "999", false, None)
+                .unwrap();
+            let doc = fixture.policy();
+            let rule = &doc["adapters"][0];
+            let snapshot = &rule["policy_groups"][0]["group"];
+            assert!(snapshot.get("default_action").is_none());
+            assert_eq!(
+                snapshot["allow_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>(),
+                ["123", "456"]
+            );
+            assert!(snapshot["deny_ids"].as_array().unwrap().is_empty());
+            assert_eq!(rule["policy_groups"][1].to_string(), backup);
+            assert_eq!(rule["policy_groups"][0]["private"].to_string(), private);
+            assert_eq!(rule["account_id"].as_str(), Some("111"));
+            assert_eq!(
+                doc["defaults"]["group"]["default_action"].as_str(),
+                Some("allow")
+            );
+            fixture
+                .app
+                .set_adapter_list_mode("group_list_type", "blacklist", None)
+                .unwrap();
+            fixture
+                .app
+                .update_adapter_numeric_list("group_list", "555", true, None)
+                .unwrap();
+            let doc = fixture.policy();
+            let snapshot = &doc["adapters"][0]["policy_groups"][0]["group"];
+            assert_eq!(snapshot["default_action"].as_str(), Some("allow"));
+            assert_eq!(snapshot["deny_ids"][0].as_str(), Some("555"));
+        }
+    }
+
+    #[test]
+    fn invalid_active_policy_group_does_not_write_partial_changes() {
+        for group in [
+            "policy_groups = []\n",
+            "active_group = \"missing\"\npolicy_groups = [{id = \"other\"}]\n",
+            "active_group = \"live\"\npolicy_groups = [{id = \"live\", group = false}]\n",
+        ] {
+            let fixture = Fixture::new();
+            let path = fixture.root.join("MaiBot/config/adapter_policy.toml");
+            let content = format!(
+                "[[adapters]]\nplugin_id = \"{PLUGIN_ID}\"\n{group}[adapters.group]\ndefault_action = \"block\"\nallow_ids = [\"123\"]\n"
+            );
+            fs::write(&path, &content).unwrap();
+            assert!(
+                fixture
+                    .app
+                    .set_adapter_list_mode("group_list_type", "inherit", None)
+                    .is_err()
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), content);
+            assert!(
+                fixture
+                    .app
+                    .update_adapter_numeric_list("group_allow", "456", true, None)
+                    .is_err()
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), content);
+        }
     }
 
     #[test]

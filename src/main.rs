@@ -1,5 +1,6 @@
 #![cfg_attr(any(target_os = "windows", target_os = "macos"), allow(dead_code))]
 
+mod access_config;
 mod cli;
 mod data;
 mod model;
