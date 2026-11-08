@@ -4,12 +4,15 @@ mod access_config;
 mod cli;
 mod data;
 mod model;
+#[cfg(test)]
+mod plugin_contract_tests;
 mod plugin_status;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod qq_adapter;
 mod terminal;
 mod theme;
 mod ui;
+mod workspace;
 
 #[cfg(target_os = "linux")]
 #[path = "linux/access.rs"]
@@ -82,19 +85,22 @@ use app::App;
 use terminal::{install_terminal_cleanup_handler, restore_terminal_state};
 
 fn main() -> Result<()> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if cli::is_help_request(&args) {
         cli::print_help();
         return Ok(());
     }
 
     ensure_supported_platform()?;
+    let bot_id = cli::take_bot_option(&mut args)?;
     let use_tui = args.is_empty() || args.first().is_some_and(|arg| arg == "tui");
     if use_tui {
         install_terminal_cleanup_handler()?;
     }
     let mut app = App::new()?;
+    app.select_bot_id(bot_id);
     let result = if use_tui {
+        app.choose_tui_bot()?;
         app.run()
     } else {
         app.set_cli_mode();

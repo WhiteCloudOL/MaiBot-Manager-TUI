@@ -56,10 +56,7 @@ impl App {
             let actions = [
                 ActionItem::primary("查看访问信息", "显示 WebUI 地址和 token"),
                 ActionItem::normal("初始化访问配置", "绑定 IPv4/IPv6 全地址"),
-                ActionItem::destructive(
-                    "清空数据文件",
-                    "保留 webui.json，清理 MaiBot/data 其余内容",
-                ),
+                ActionItem::destructive("清空数据文件", "清理所选 Bot 的 data，保留宿主登录信息"),
                 ActionItem::back("返回", "回到主菜单"),
             ];
             let choice = self.select_action("选择访问操作", &actions)?;
@@ -118,7 +115,7 @@ impl App {
             }
         }
         if report.endpoints.is_empty() {
-            self.print_hint("未找到 MaiBot/config/bot_config.toml，请先完成安装。");
+            self.print_hint("未找到 MaiBot/host/config.toml，请先完成安装。");
         }
         Ok(())
     }
@@ -128,12 +125,12 @@ impl App {
         let root = PathBuf::from(cfg.mai_path);
         let mut public_ip = None;
         let mut endpoints = Vec::new();
-        let bot_cfg = root.join("MaiBot/config/bot_config.toml");
-        let webui_json = root.join("MaiBot/data/webui.json");
-        if bot_cfg.exists() {
-            let doc = fs::read_to_string(&bot_cfg)?;
+        let host_cfg = root.join("MaiBot/host/config.toml");
+        let webui_json = root.join("MaiBot/host/webui.json");
+        if host_cfg.exists() {
+            let doc = fs::read_to_string(&host_cfg)?;
             let parsed: DocumentMut = doc.parse()?;
-            let binding = webui_binding(&parsed);
+            let binding = webui_binding(&parsed)?;
             let token = if webui_json.exists() {
                 let data: Value = serde_json::from_str(&fs::read_to_string(webui_json)?)?;
                 data["access_token"]
@@ -146,7 +143,19 @@ impl App {
             let address = binding.url(|| cached_public_ip(self, &mut public_ip));
             endpoints.push(AccessEndpoint {
                 title: "MaiBot WebUI",
-                fields: vec![("地址", address), ("密钥", token)],
+                fields: vec![
+                    ("地址", address),
+                    ("密钥", token),
+                    (
+                        "状态",
+                        if binding.enabled {
+                            "已启用"
+                        } else {
+                            "已禁用"
+                        }
+                        .into(),
+                    ),
+                ],
             });
         }
         Ok(AccessInfoReport {
@@ -185,27 +194,24 @@ impl App {
     pub(crate) fn apply_maibot_access_config(&self) -> Result<()> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
-        let bot_cfg = root.join("MaiBot/config/bot_config.toml");
-        if bot_cfg.exists() {
-            let mut doc: DocumentMut = fs::read_to_string(&bot_cfg)?.parse()?;
-            bind_webui_all_interfaces(&mut doc)
-                .with_context(|| format!("更新 WebUI 监听配置失败: {}", bot_cfg.display()))?;
-            fs::write(&bot_cfg, doc.to_string())?;
-        }
+        let host_cfg = root.join("MaiBot/host/config.toml");
+        let mut doc: DocumentMut = fs::read_to_string(&host_cfg)?.parse()?;
+        bind_webui_all_interfaces(&mut doc)
+            .with_context(|| format!("更新 WebUI 监听配置失败: {}", host_cfg.display()))?;
+        fs::write(&host_cfg, doc.to_string())?;
         Ok(())
     }
 
     pub(crate) fn confirm_clear_maibot_data_files(&self) -> Result<()> {
-        let cfg = self.require_config()?;
-        let data_dir = data::maibot_data_dir(&cfg.mai_path);
+        let data_dir = data::maibot_data_dir(&self.bot_dir()?);
         self.clear();
         self.print_header(None);
-        self.print_section("清空数据文件", "保留 webui.json，删除 MaiBot/data 其余内容");
+        self.print_section("清空数据文件", "清理所选 Bot 的 data，保留宿主登录信息");
         self.print_kv("目标目录", &data_dir.display().to_string());
         self.print_hint("此操作会删除知识库缓存、运行数据和子目录，无法由管理器自动恢复。");
         self.print_line();
         if !Confirm::with_theme(&self.theme)
-            .with_prompt("确认清空 MaiBot/data 中除 webui.json 外的所有内容？")
+            .with_prompt("确认清空所选 Bot 的 data（保留 webui.json）？")
             .default(false)
             .interact()?
         {
@@ -217,8 +223,7 @@ impl App {
     }
 
     pub(crate) fn clear_maibot_data_files(&self) -> Result<usize> {
-        let cfg = self.require_config()?;
-        data::clear_maibot_data_dir(&data::maibot_data_dir(&cfg.mai_path))
+        data::clear_maibot_data_dir(&data::maibot_data_dir(&self.bot_dir()?))
     }
 
     pub(crate) fn print_adapter_config(&self) -> Result<()> {

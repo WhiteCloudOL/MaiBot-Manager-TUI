@@ -71,7 +71,7 @@ impl App {
         let run = if py_env == "uv" {
             format!(
                 "{tools_prelude}{pypi_env}where uv >nul 2>nul || (echo [ERROR] uv was not found. Install uv or reinstall MaiBot. & pause & exit /b 1)\r\n\
-             uv run bot.py"
+             uv run --no-sync bot.py"
             )
         } else {
             format!(
@@ -450,7 +450,7 @@ impl App {
 }
 
 /// 仅在用户选定 PyPI 源后写入运行时环境，强制 uv 忽略项目内的索引配置。
-fn pypi_runtime_env(pip_index: &str, pip_host: &str) -> String {
+pub(crate) fn pypi_runtime_env(pip_index: &str, pip_host: &str) -> String {
     if pip_index.trim().is_empty() {
         return String::new();
     }

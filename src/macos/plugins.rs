@@ -31,7 +31,7 @@ impl App {
     fn plugin_context(&self) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf, String)> {
         let cfg = self.require_config()?;
         let root = PathBuf::from(cfg.mai_path);
-        let maibot_dir = root.join("MaiBot");
+        let maibot_dir = self.bot_dir_at(&root)?;
         let plugins_dir = maibot_dir.join("plugins");
         let venv_activate = root.join("venv/bin/activate");
         fs::create_dir_all(&plugins_dir)?;
@@ -75,7 +75,7 @@ impl App {
                 }
             })
             .to_string();
-        let author = manifest["author"]
+        let author = manifest["author"]["name"]
             .as_str()
             .unwrap_or("未知作者")
             .to_string();
@@ -100,7 +100,11 @@ impl App {
     }
 
     fn plugin_backup_path(&self, path: &Path) -> PathBuf {
-        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let parent = path
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or_else(|| Path::new("."))
+            .join("plugin-backups");
         let stem = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -116,6 +120,7 @@ impl App {
 
     fn move_plugin_dir_to_backup(&self, path: &Path) -> Result<PathBuf> {
         let backup = self.plugin_backup_path(path);
+        fs::create_dir_all(backup.parent().unwrap())?;
         fs::rename(path, &backup).with_context(|| {
             format!(
                 "插件目录冲突，无法将 {} 迁移到备份目录 {}",

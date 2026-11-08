@@ -6,7 +6,7 @@ use std::{
 };
 
 pub(crate) fn maibot_data_dir(root: impl AsRef<Path>) -> PathBuf {
-    root.as_ref().join("MaiBot").join("data")
+    root.as_ref().join("data")
 }
 
 pub(crate) fn clear_maibot_data_dir(data_dir: &Path) -> Result<usize> {

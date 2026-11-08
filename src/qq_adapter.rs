@@ -12,7 +12,6 @@ use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, value};
 
 pub(crate) const REPO_NAME: &str = "MaiBot-SnowLuma-Adapter";
 pub(crate) const PLUGIN_ID: &str = "maibot-team.snowluma-adapter";
-const OLD_PLUGIN_ID: &str = "maibot-team.napcat-adapter";
 
 fn read_doc(path: &Path) -> Result<DocumentMut> {
     match fs::read_to_string(path) {
@@ -183,28 +182,6 @@ fn chat_rule<'a>(doc: &'a mut DocumentMut, index: usize, chat: &str) -> Result<&
         .and_then(|a| a.get_mut(index))
         .ok_or_else(|| anyhow!("适配器规则不存在"))?;
     let rule = table(parent, chat)?;
-    // Normalize the legacy host representation before using WebUI's fields.
-    if let Some(mode) = rule
-        .get("list_type")
-        .and_then(Item::as_str)
-        .map(str::to_string)
-    {
-        let (action, key) = match mode.as_str() {
-            "whitelist" => ("block", "allow_ids"),
-            "blacklist" => ("allow", "deny_ids"),
-            _ => bail!("无法转换名单模式: {mode}"),
-        };
-        let mut numbers = ids(rule, key)?;
-        for id in ids(rule, "ids")? {
-            if !numbers.contains(&id) {
-                numbers.push(id);
-            }
-        }
-        set_ids(rule, key, &numbers);
-        rule["default_action"] = value(action);
-        rule.remove("list_type");
-        rule.remove("ids");
-    }
     Ok(rule)
 }
 
@@ -239,7 +216,7 @@ fn sync_active_policy_group(doc: &mut DocumentMut, index: usize, chat: &str) -> 
         .and_then(Item::as_str)
         .ok_or_else(|| anyhow!("当前策略分组未设置，请先在 WebUI 选择分组"))?
         .to_string();
-    let current = ["default_action", "allow_ids", "deny_ids"].map(|key| {
+    let current = ["default_action", "allow_ids", "deny_ids", "disabled_ids"].map(|key| {
         (
             key,
             rule.get(chat).and_then(|policy| policy.get(key)).cloned(),
@@ -280,16 +257,11 @@ fn sync_active_policy_group(doc: &mut DocumentMut, index: usize, chat: &str) -> 
 
 impl App {
     pub(crate) fn qq_adapter_dir(&self) -> Result<Option<PathBuf>> {
-        let cfg = self.require_config()?;
-        self.resolve_plugin_dir_by_id(
-            &PathBuf::from(cfg.mai_path).join("MaiBot/plugins"),
-            PLUGIN_ID,
-        )
+        self.resolve_plugin_dir_by_id(&self.bot_dir()?.join("plugins"), PLUGIN_ID)
     }
 
     fn qq_policy_path(&self) -> Result<PathBuf> {
-        let cfg = self.require_config()?;
-        Ok(PathBuf::from(cfg.mai_path).join("MaiBot/config/adapter_policy.toml"))
+        Ok(self.bot_dir()?.join("config/adapter_policy.toml"))
     }
 
     fn qq_filter_path(&self) -> Result<PathBuf> {
@@ -344,11 +316,12 @@ impl App {
                 };
                 self.print_kv(&format!("{label}模式"), mode);
                 if let Some(t) = typed {
-                    for (key, text) in [("allow_ids", "允许"), ("deny_ids", "拒绝")] {
+                    for (key, text) in [
+                        ("allow_ids", "允许"),
+                        ("deny_ids", "拒绝"),
+                        ("disabled_ids", "停用"),
+                    ] {
                         self.print_kv(&format!("{label}{text}"), &ids(t, key)?.join(", "));
-                    }
-                    if t.contains_key("list_type") {
-                        self.print_hint("此规则使用旧 list_type/ids 格式，编辑时会转换。");
                     }
                 }
             }
@@ -425,6 +398,10 @@ impl App {
             },
         };
         edit_ids(rule, field, input, add)?;
+        // An explicit edit reactivates this entry, matching Host's override editor.
+        if rule.contains_key("disabled_ids") {
+            edit_ids(rule, "disabled_ids", input, false)?;
+        }
         if add {
             edit_ids(
                 rule,
@@ -530,6 +507,7 @@ impl App {
                     self.print_kv_fit("默认动作", mode);
                     self.print_kv_fit("允许名单", &ids(rule, "allow_ids")?.join(", "));
                     self.print_kv_fit("拒绝名单", &ids(rule, "deny_ids")?.join(", "));
+                    self.print_kv_fit("停用条目", &ids(rule, "disabled_ids")?.join(", "));
                 }
                 let actions = if sender_bans {
                     vec!["添加 QQ", "移除 QQ", "返回"]
@@ -599,52 +577,17 @@ impl App {
         plan: &InstallPlan,
         adapter_dir: &Path,
     ) -> Result<()> {
-        migrate_install(&plan.install_path, adapter_dir)
+        configure_install(&self.bot_dir_at(&plan.install_path)?, adapter_dir)
     }
 }
 
-fn migrate_install(root: &Path, adapter_dir: &Path) -> Result<()> {
-    let plugins = root.join("MaiBot/plugins");
+fn configure_install(bot_dir: &Path, adapter_dir: &Path) -> Result<()> {
     let config_path = adapter_dir.join("config.toml");
     let mut config = read_doc(&config_path)?;
-    let mut legacy_dirs = Vec::new();
-    if plugins.exists() {
-        for entry in fs::read_dir(&plugins)? {
-            let path = entry?.path();
-            if !path.is_dir() || path == adapter_dir {
-                continue;
-            }
-            let manifest = path.join("_manifest.json");
-            let old = if manifest.exists() {
-                let data = fs::read_to_string(manifest)
-                    .ok()
-                    .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok());
-                data.as_ref().and_then(|m| m["id"].as_str()) == Some(OLD_PLUGIN_ID)
-            } else {
-                path.file_name().and_then(|s| s.to_str()) == Some("MaiBot-Napcat-Adapter")
-            };
-            if old {
-                legacy_dirs.push(path);
-            }
-        }
-    }
-    legacy_dirs.sort();
-    if config.is_empty() {
-        for path in &legacy_dirs {
-            let old_config = read_doc(&path.join("config.toml"))?;
-            if !old_config.is_empty() {
-                config = old_config;
-                break;
-            }
-        }
-    }
-    let policy_path = root.join("MaiBot/config/adapter_policy.toml");
+    let policy_path = bot_dir.join("config/adapter_policy.toml");
     let fresh_install = config.is_empty() && !policy_path.exists();
     let mut policy = read_doc(&policy_path)?;
-    let original_policy = policy.to_string();
-    migrate_legacy_policy_ids(&mut policy)?;
-    normalize_plugin_config(&mut config)?;
-    migrate_chat_lists(&config, &mut policy)?;
+    policy_indices(&policy)?;
     if fresh_install {
         let index = target_rule(&mut policy, None)?;
         for chat in ["group", "private"] {
@@ -654,7 +597,6 @@ fn migrate_install(root: &Path, adapter_dir: &Path) -> Result<()> {
             set_ids(rule, "deny_ids", &[]);
         }
     }
-    config.remove("chat");
     if config.get("plugin").is_none() {
         table(config.as_table_mut(), "plugin")?["enabled"] = value(true);
     }
@@ -665,174 +607,28 @@ fn migrate_install(root: &Path, adapter_dir: &Path) -> Result<()> {
         client["token"] = value("");
         client["client_type"] = value("auto");
     }
-    // Preserve the complete pre-migration configs outside plugin discovery.
-    let backups = root.join("adapter-backups");
-    if !legacy_dirs.is_empty()
-        || config_path.exists() && fs::read_to_string(&config_path)? != config.to_string()
-        || policy_path.exists() && original_policy != policy.to_string()
-    {
-        fs::create_dir_all(&backups)?;
-        if config_path.exists() {
-            let backup = unused_backup(&backups, "qq-config.toml");
-            fs::copy(&config_path, backup)?;
-        }
-        if policy_path.exists() && original_policy != policy.to_string() {
-            fs::copy(&policy_path, unused_backup(&backups, "adapter_policy.toml"))?;
-        }
+    if fresh_install {
+        save_doc(&policy_path, &policy)?;
     }
-    save_doc(&policy_path, &policy)?;
     save_doc(&config_path, &config)?;
-    for path in legacy_dirs {
-        let name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("napcat-adapter");
-        let backup = unused_backup(&backups, name);
-        fs::rename(&path, &backup)
-            .with_context(|| format!("备份旧适配器失败: {}", path.display()))?;
-        println!("旧 NapCat 适配器已备份: {}", backup.display());
-    }
     println!("统一 QQ 适配器已配置（NapCat / SnowLuma 自动识别）。");
     Ok(())
 }
-
-fn unused_backup(dir: &Path, name: &str) -> PathBuf {
-    for number in 1.. {
-        let path = dir.join(format!("{name}.backup-{number}"));
-        if !path.exists() {
-            return path;
-        }
-    }
-    unreachable!()
-}
-
-fn normalize_plugin_config(config: &mut DocumentMut) -> Result<()> {
-    if config.get("client").is_none() {
-        for name in ["luma_client", "napcat_server"] {
-            if let Some(mut old) = config.remove(name) {
-                let t = old
-                    .as_table_mut()
-                    .ok_or_else(|| anyhow!("{name} 不是配置表"))?;
-                if let Some(host) = t.remove("host") {
-                    t["server"] = host;
-                }
-                t["client_type"] = value("auto");
-                config["client"] = old;
-                break;
-            }
-        }
-    }
-    let chat = config.get("chat").and_then(Item::as_table).cloned();
-    if let Some(chat) = chat {
-        let filters = table(config.as_table_mut(), "filters")?;
-        let mut banned = ids(filters, "ban_user_id")?;
-        for id in ids(&chat, "ban_user_id")? {
-            if !banned.contains(&id) {
-                banned.push(id);
-            }
-        }
-        set_ids(filters, "ban_user_id", &banned);
-        if !filters.contains_key("ban_qq_bot")
-            && let Some(item) = chat.get("ban_qq_bot")
-        {
-            filters["ban_qq_bot"] = item.clone();
-        }
-    }
-    Ok(())
-}
-
-fn migrate_legacy_policy_ids(policy: &mut DocumentMut) -> Result<()> {
-    if let Some(item) = policy.get_mut("adapters") {
-        let adapters = item
-            .as_array_of_tables_mut()
-            .ok_or_else(|| anyhow!("adapters 必须为数组"))?;
-        for rule in adapters.iter_mut() {
-            if rule.get("plugin_id").and_then(Item::as_str) != Some(OLD_PLUGIN_ID) {
-                continue;
-            }
-            rule["plugin_id"] = value(PLUGIN_ID);
-            if let Some(id) = rule
-                .get("adapter_id")
-                .and_then(Item::as_str)
-                .map(str::to_string)
-            {
-                rule["adapter_id"] = value(
-                    id.replace(OLD_PLUGIN_ID, PLUGIN_ID)
-                        .replace("napcat_gateway", "snowluma_gateway"),
-                );
-            }
-            if rule.get("gateway_name").and_then(Item::as_str) == Some("napcat_gateway") {
-                rule["gateway_name"] = value("snowluma_gateway");
-            }
-        }
-    }
-    Ok(())
-}
-
-fn migrate_chat_lists(config: &DocumentMut, policy: &mut DocumentMut) -> Result<()> {
-    let Some(chat) = config.get("chat").and_then(Item::as_table) else {
-        return Ok(());
-    };
-    if !policy_indices(policy)?.is_empty() {
-        println!("保留已有 QQ 专属策略；旧 [chat] 名单保存在适配器备份中，可按需补充。");
-        return Ok(());
-    }
-    let mut rules = Vec::new();
-    for kind in ["group", "private"] {
-        let Some(mode) = chat
-            .get(&format!("{kind}_list_type"))
-            .and_then(Item::as_str)
-        else {
-            continue;
-        };
-        let mut typed = Table::new();
-        set_mode(&mut typed, mode)?;
-        let key = if mode == "whitelist" {
-            "allow_ids"
-        } else {
-            "deny_ids"
-        };
-        set_ids(&mut typed, key, &ids(chat, &format!("{kind}_list"))?);
-        if chat.get("enable_chat_list_filter").and_then(Item::as_bool) == Some(false) {
-            typed["default_action"] = value("allow");
-            set_ids(&mut typed, "allow_ids", &[]);
-            set_ids(&mut typed, "deny_ids", &[]);
-        }
-        rules.push((kind, typed));
-    }
-    if !rules.is_empty() {
-        let index = target_rule(policy, None)?;
-        let rule = policy["adapters"]
-            .as_array_of_tables_mut()
-            .unwrap()
-            .get_mut(index)
-            .unwrap();
-        for (kind, typed) in rules {
-            rule[kind] = Item::Table(typed);
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::AppConfig;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     struct Fixture {
         root: PathBuf,
         app: App,
+        _workspace: crate::workspace::tests::Fixture,
     }
     impl Fixture {
         fn new() -> Self {
-            let stamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let root =
-                std::env::temp_dir().join(format!("maibot-qq-test-{}-{stamp}", std::process::id()));
-            fs::create_dir_all(root.join("MaiBot/config")).unwrap();
+            let workspace = crate::workspace::tests::Fixture::new();
+            let root = workspace.0.clone();
+            workspace.add_bot("test", "bots/test");
             let mut app = App::new().unwrap();
             app.config_path = root.join("manager-config");
             app.save_config(&AppConfig {
@@ -840,12 +636,16 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-            Self { root, app }
+            Self {
+                root,
+                app,
+                _workspace: workspace,
+            }
         }
         fn adapter(&self) -> PathBuf {
             let dir = self
                 .root
-                .join("MaiBot/plugins/maibot-team_snowluma-adapter");
+                .join("MaiBot/bots/test/plugins/maibot-team_snowluma-adapter");
             fs::create_dir_all(&dir).unwrap();
             fs::write(
                 dir.join("_manifest.json"),
@@ -855,7 +655,12 @@ mod tests {
             dir
         }
         fn policy(&self) -> DocumentMut {
-            read_doc(&self.root.join("MaiBot/config/adapter_policy.toml")).unwrap()
+            read_doc(
+                &self
+                    .root
+                    .join("MaiBot/bots/test/config/adapter_policy.toml"),
+            )
+            .unwrap()
         }
     }
     impl Drop for Fixture {
@@ -923,14 +728,16 @@ mod tests {
     fn editing_lists_syncs_only_the_active_group_for_both_group_formats() {
         for inline in [false, true] {
             let fixture = Fixture::new();
-            let path = fixture.root.join("MaiBot/config/adapter_policy.toml");
+            let path = fixture
+                .root
+                .join("MaiBot/bots/test/config/adapter_policy.toml");
             let mut content = format!(
                 "[defaults.group]\ndefault_action = \"allow\"\n[[adapters]]\nplugin_id = \"{PLUGIN_ID}\"\naccount_id = \"111\"\nactive_group = \"live\"\n"
             );
             if inline {
                 content.push_str("policy_groups = [{id = \"live\", name = \"current\", private = {deny_ids = [\"888\"]}}, {id = \"backup\", group = {allow_ids = [\"777\"]}}]\n");
             }
-            content.push_str("[adapters.group]\ndefault_action = \"block\"\nallow_ids = [\"123\"]\ndeny_ids = [\"999\"]\n[adapters.private]\ndeny_ids = [\"888\"]\n");
+            content.push_str("[adapters.group]\ndefault_action = \"block\"\nallow_ids = [\"123\"]\ndeny_ids = [\"999\"]\ndisabled_ids = [\"123\", \"999\", \"456\"]\n[adapters.private]\ndeny_ids = [\"888\"]\n");
             if !inline {
                 content.push_str("[[adapters.policy_groups]]\nid = \"live\"\nname = \"current\"\n[adapters.policy_groups.private]\ndeny_ids = [\"888\"]\n[[adapters.policy_groups]]\nid = \"backup\"\n[adapters.policy_groups.group]\nallow_ids = [\"777\"]\n");
             }
@@ -965,6 +772,9 @@ mod tests {
                 ["123", "456"]
             );
             assert!(snapshot["deny_ids"].as_array().unwrap().is_empty());
+            assert_eq!(snapshot["disabled_ids"][0].as_str(), Some("123"));
+            assert_eq!(snapshot["disabled_ids"].as_array().unwrap().len(), 1);
+            assert_eq!(rule["group"]["disabled_ids"][0].as_str(), Some("123"));
             assert_eq!(rule["policy_groups"][1].to_string(), backup);
             assert_eq!(rule["policy_groups"][0]["private"].to_string(), private);
             assert_eq!(rule["account_id"].as_str(), Some("111"));
@@ -995,7 +805,9 @@ mod tests {
             "active_group = \"live\"\npolicy_groups = [{id = \"live\", group = false}]\n",
         ] {
             let fixture = Fixture::new();
-            let path = fixture.root.join("MaiBot/config/adapter_policy.toml");
+            let path = fixture
+                .root
+                .join("MaiBot/bots/test/config/adapter_policy.toml");
             let content = format!(
                 "[[adapters]]\nplugin_id = \"{PLUGIN_ID}\"\n{group}[adapters.group]\ndefault_action = \"block\"\nallow_ids = [\"123\"]\n"
             );
@@ -1041,7 +853,9 @@ deny_ids = ["456"]
 "#
         );
         fs::write(
-            fixture.root.join("MaiBot/config/adapter_policy.toml"),
+            fixture
+                .root
+                .join("MaiBot/bots/test/config/adapter_policy.toml"),
             &content,
         )
         .unwrap();
@@ -1110,151 +924,20 @@ deny_ids = ["456"]
         assert!(
             !fixture
                 .root
-                .join("MaiBot/config/adapter_policy.toml")
+                .join("MaiBot/bots/test/config/adapter_policy.toml")
                 .exists()
         );
-    }
-
-    #[test]
-    fn installation_migrates_napcat_connection_lists_and_keeps_a_backup() {
-        let fixture = Fixture::new();
-        let dir = fixture.adapter();
-        let old = fixture.root.join("MaiBot/plugins/MaiBot-Napcat-Adapter");
-        fs::create_dir_all(&old).unwrap();
-        fs::write(
-            old.join("_manifest.json"),
-            format!(r#"{{"id":"{OLD_PLUGIN_ID}"}}"#),
-        )
-        .unwrap();
-        fs::write(
-            old.join("config.toml"),
-            r#"[plugin]
-enabled = true
-[napcat_server]
-host = "localhost"
-port = 3002
-token = "test-token"
-[chat]
-group_list_type = "whitelist"
-group_list = [123, 456]
-private_list_type = "blacklist"
-private_list = [789]
-ban_user_id = [111]
-[filters]
-regex_filter_enabled = true
-"#,
-        )
-        .unwrap();
-        migrate_install(&fixture.root, &dir).unwrap();
-        let config = read_doc(&dir.join("config.toml")).unwrap();
-        assert_eq!(config["client"]["server"].as_str(), Some("localhost"));
-        assert_eq!(config["client"]["port"].as_integer(), Some(3002));
-        assert_eq!(config["client"]["token"].as_str(), Some("test-token"));
-        assert_eq!(config["client"]["client_type"].as_str(), Some("auto"));
-        assert_eq!(
-            config["filters"]["regex_filter_enabled"].as_bool(),
-            Some(true)
-        );
-        assert_eq!(
-            ids(config["filters"].as_table().unwrap(), "ban_user_id").unwrap(),
-            ["111"]
-        );
-        let mut policy = fixture.policy();
-        assert_eq!(
-            ids(chat_rule(&mut policy, 0, "group").unwrap(), "allow_ids").unwrap(),
-            ["123", "456"]
-        );
-        assert_eq!(
-            chat_rule(&mut policy, 0, "private").unwrap()["default_action"].as_str(),
-            Some("allow")
-        );
-        assert!(!old.exists());
-        assert!(
-            fixture
-                .root
-                .join("adapter-backups/MaiBot-Napcat-Adapter.backup-1/config.toml")
-                .exists()
-        );
-        let before = config.to_string();
-        migrate_install(&fixture.root, &dir).unwrap();
-        assert_eq!(
-            read_doc(&dir.join("config.toml")).unwrap().to_string(),
-            before
-        );
-        assert_eq!(policy_indices(&fixture.policy()).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn existing_webui_policy_survives_snowluma_config_migration() {
-        let fixture = Fixture::new();
-        let dir = fixture.adapter();
-        let policy = format!(
-            "[[adapters]]\nplugin_id = \"{PLUGIN_ID}\"\naccount_id = \"111\"\n[adapters.group]\nallow_ids = [\"999\"]\n"
-        );
-        fs::write(
-            fixture.root.join("MaiBot/config/adapter_policy.toml"),
-            &policy,
-        )
-        .unwrap();
-        fs::write(dir.join("config.toml"), "[plugin]\nenabled = false\n[luma_client]\nserver = \"127.0.0.1\"\n[chat]\ngroup_list_type = \"whitelist\"\ngroup_list = [123]\n").unwrap();
-        migrate_install(&fixture.root, &dir).unwrap();
-        assert_eq!(fixture.policy().to_string(), policy);
-        assert!(
-            fixture
-                .root
-                .join("adapter-backups/qq-config.toml.backup-1")
-                .exists()
-        );
-        assert_eq!(
-            read_doc(&dir.join("config.toml")).unwrap()["plugin"]["enabled"].as_bool(),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn old_host_format_and_napcat_identity_migrate_without_losing_accounts() {
-        let mut doc: DocumentMut = format!(
-            r#"[[adapters]]
-plugin_id = "{OLD_PLUGIN_ID}"
-adapter_id = "gateway:{OLD_PLUGIN_ID}:napcat_gateway"
-gateway_name = "napcat_gateway"
-account_id = "111"
-[adapters.group]
-list_type = "whitelist"
-ids = [123]
-deny_ids = ["456"]
-"#
-        )
-        .parse()
-        .unwrap();
-        migrate_legacy_policy_ids(&mut doc).unwrap();
-        let index = target_rule(&mut doc, None).unwrap();
-        let group = chat_rule(&mut doc, index, "group").unwrap();
-        assert_eq!(group["default_action"].as_str(), Some("block"));
-        assert_eq!(ids(group, "allow_ids").unwrap(), ["123"]);
-        assert_eq!(ids(group, "deny_ids").unwrap(), ["456"]);
-        assert!(!group.contains_key("list_type"));
-        assert!(!group.contains_key("ids"));
-        let rule = doc["adapters"]
-            .as_array_of_tables()
-            .unwrap()
-            .get(0)
-            .unwrap();
-        assert_eq!(rule["account_id"].as_str(), Some("111"));
-        assert_eq!(
-            rule["adapter_id"].as_str(),
-            Some("gateway:maibot-team.snowluma-adapter:snowluma_gateway")
-        );
-        doc.to_string().parse::<DocumentMut>().unwrap();
     }
 
     #[test]
     fn malformed_policy_is_never_replaced_during_installation() {
         let fixture = Fixture::new();
         let dir = fixture.adapter();
-        let path = fixture.root.join("MaiBot/config/adapter_policy.toml");
+        let path = fixture
+            .root
+            .join("MaiBot/bots/test/config/adapter_policy.toml");
         fs::write(&path, "[[adapters]\n").unwrap();
-        assert!(migrate_install(&fixture.root, &dir).is_err());
+        assert!(configure_install(&fixture.app.bot_dir().unwrap(), &dir).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "[[adapters]\n");
         assert!(!dir.join("config.toml").exists());
     }
@@ -1263,7 +946,7 @@ deny_ids = ["456"]
     fn fresh_install_keeps_empty_whitelists_until_targets_are_configured() {
         let fixture = Fixture::new();
         let dir = fixture.adapter();
-        migrate_install(&fixture.root, &dir).unwrap();
+        configure_install(&fixture.app.bot_dir().unwrap(), &dir).unwrap();
         let mut policy = fixture.policy();
         for chat in ["group", "private"] {
             let rule = chat_rule(&mut policy, 0, chat).unwrap();

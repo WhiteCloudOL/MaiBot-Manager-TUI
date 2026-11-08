@@ -93,6 +93,8 @@ pub(crate) fn print_help() {
 用法:
   maibot                         进入 TUI
   maibot tui                     进入 TUI
+  maibot bots                    列出宿主注册表中的 Bot ID、名称与目录
+  maibot --bot <ID> <命令>        指定插件、名单和数据操作所属的 Bot；单 Bot 自动选择
   maibot help | -h | --help      查看帮助
 
 常用示例:
@@ -220,7 +222,7 @@ MaiBot 核心:
   access show        {access_show_note}
   access init        {access_init_note}
   access init --yes  跳过确认，直接应用访问配置，适合脚本中使用
-  access clear-data  清空 MaiBot/data 下除 webui.json 外的所有内容；默认会询问确认
+  access clear-data  清空所选 Bot/data，保留 webui.json 和宿主登录信息；默认会询问确认
   access clear-data --yes
                     跳过确认直接清理数据文件，适合已确认目标目录的脚本环境
   adapter show       查看 Adapter 群聊、私聊、封禁 QQ 配置
@@ -228,9 +230,11 @@ MaiBot 核心:
   private-mode       设置私聊名单模式，取值 whitelist、blacklist 或 inherit
   *-add/*-remove     原有 group/private 命令按当前模式编辑允许或拒绝名单；默认模式下请明确指定 allow/deny
   --rule <编号>      编辑指定 QQ 账号/网关规则；多条规则时必填，编号由 adapter show 显示
-  allow/deny         显式允许/拒绝名单；添加时自动移出相反名单；切换模式保留已有名单
+  allow/deny         显式允许/拒绝名单；添加时移出相反名单，编辑后恢复该停用条目；同步当前分组
   ban-add/ban-remove 发送者黑名单，写入统一适配器 [filters].ban_user_id
-  策略文件           MaiBot/config/adapter_policy.toml；群聊/私聊保存后无需重启
+  策略文件           所选 Bot/config/adapter_policy.toml；群聊/私聊保存后无需重启
+  WebUI 配置         MaiBot/host/config.toml 的 [webui] hosts/port；令牌为 host/webui.json
+  核心服务           core start/stop/restart 管理宿主及全部 Bot，--bot 不改变此范围
 
 插件:
   maibot plugin list
@@ -241,7 +245,7 @@ MaiBot 核心:
 说明:
   plugin install     克隆或同步插件仓库；会读取 _manifest.json 中的 id，并将 . 替换为 _ 作为最终目录名
   plugin update      拉取已安装插件仓库的最新提交
-  plugin remove      删除 MaiBot/plugins 下对应插件目录
+  plugin remove      删除所选 Bot/plugins 下对应插件目录
 
 配置文件:
   ~/.maibot_config   记录安装目录、Python 环境、PyPI 源、LLBot 路径、安装偏好等

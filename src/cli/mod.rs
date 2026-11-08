@@ -12,6 +12,12 @@ pub(crate) use help::print_help;
 impl App {
     pub(crate) fn run_cli(&mut self, args: &[String]) -> Result<()> {
         match args.first().map(String::as_str) {
+            Some("bots") => {
+                if args.len() != 1 {
+                    bail!("用法: maibot bots");
+                }
+                self.print_bots()
+            }
             Some("install" | "update") => install::run(self, args),
             Some("core") => services::run_core(self, &args[1..]),
             Some("napcat") => services::run_napcat(self, &args[1..]),
@@ -30,6 +36,27 @@ impl App {
             }
         }
     }
+}
+
+pub(crate) fn take_bot_option(args: &mut Vec<String>) -> Result<Option<String>> {
+    let mut id = None;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--bot" {
+            if id.is_some() {
+                bail!("--bot 只能指定一次");
+            }
+            let value = require_arg(args, index + 1, "--bot <Bot ID>")?;
+            if value.is_empty() || value.starts_with('-') {
+                bail!("--bot 需要 Bot ID");
+            }
+            id = Some(value.to_string());
+            args.drain(index..index + 2);
+        } else {
+            index += 1;
+        }
+    }
+    Ok(id)
 }
 
 pub(crate) fn is_help_request(args: &[String]) -> bool {

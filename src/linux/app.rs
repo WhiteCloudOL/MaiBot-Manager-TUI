@@ -19,6 +19,7 @@ use crate::ui::{ActionItem, StatusCard, planner_choices_for_plan};
 use crate::utils::{list_plugins, screen_exists, screen_sessions_exist};
 
 pub(crate) struct App {
+    pub(crate) workspace: RefCell<crate::workspace::WorkspaceSelection>,
     pub(crate) theme: AppTheme,
     pub(crate) config_path: PathBuf,
     pub(crate) cli_mode: bool,
@@ -56,6 +57,7 @@ impl App {
     pub(crate) fn new() -> Result<Self> {
         let home = dirs::home_dir().ok_or_else(|| anyhow!("无法定位 HOME 目录"))?;
         Ok(Self {
+            workspace: RefCell::default(),
             theme: AppTheme::new(),
             config_path: home.join(".maibot_config"),
             cli_mode: false,
@@ -85,7 +87,8 @@ impl App {
         let snowluma_installed = has_config && snowluma_installed(&config.mai_path);
         let llbot_installed = has_config && llbot_installed(&config);
         let plugin_count = if has_config {
-            list_plugins(&root.join("MaiBot").join("plugins"))
+            self.bot_dir_at(&root)
+                .and_then(|bot| list_plugins(&bot.join("plugins")))
                 .map(|items| items.len())
                 .unwrap_or(0)
         } else {
@@ -125,6 +128,7 @@ impl App {
     }
 
     fn invalidate_dashboard_cache(&self) {
+        self.invalidate_bot_cache();
         let mut cache = self.dashboard_cache.borrow_mut();
         cache.snapshot = None;
         cache.snapshot_refreshed_at = None;
@@ -772,9 +776,9 @@ impl App {
                 id: "access-clear-data",
                 icon: "󰆴",
                 title: "清空数据文件".to_string(),
-                subtitle: "保留 webui.json，清理 MaiBot/data".to_string(),
+                subtitle: "清理所选 Bot 的 data".to_string(),
                 badge: "需确认".to_string(),
-                detail: "删除 MaiBot/data 下除 webui.json 外的文件和子目录。".to_string(),
+                detail: "清理所选 Bot 的数据，保留宿主登录信息。".to_string(),
                 kind: StatusKind::Warning,
             },
             DashboardCard {
@@ -819,8 +823,8 @@ impl App {
             }]);
         }
 
-        let plugins_dir = PathBuf::from(&snapshot.config.mai_path)
-            .join("MaiBot")
+        let plugins_dir = self
+            .bot_dir_at(Path::new(&snapshot.config.mai_path))?
             .join("plugins");
         let plugins = list_plugins(&plugins_dir).unwrap_or_default();
         let update_jobs = plugins
@@ -1122,24 +1126,20 @@ impl App {
                             lines.push(format!(
                                 "MaiBot 配置: {}",
                                 PathBuf::from(&cfg.mai_path)
-                                    .join("MaiBot")
-                                    .join("config")
-                                    .join("bot_config.toml")
+                                    .join("MaiBot/host/config.toml")
                                     .display()
                             ));
                             lines.push(format!(
                                 "MaiBot token: {}",
                                 PathBuf::from(&cfg.mai_path)
-                                    .join("MaiBot")
-                                    .join("data")
-                                    .join("webui.json")
+                                    .join("MaiBot/host/webui.json")
                                     .display()
                             ));
                             lines.push("完整汇总可确认 WebUI 地址与 token。".to_string());
                         }
                         "access-init" => {
                             lines.push(
-                                "会把 MaiBot WebUI host 改为 [\"0.0.0.0\", \"::\"]。".to_string(),
+                                "会把 宿主 WebUI hosts 改为 [\"0.0.0.0\", \"::\"]。".to_string(),
                             );
                             lines.push("会同时启用统一 QQ 适配器插件。".to_string());
                             lines.push("执行后需要重启 MaiBot 才会完全生效。".to_string());
@@ -1147,8 +1147,7 @@ impl App {
                         "access-clear-data" => {
                             lines.push(format!(
                                 "目标目录: {}",
-                                PathBuf::from(&cfg.mai_path)
-                                    .join("MaiBot")
+                                self.bot_dir_at(Path::new(&cfg.mai_path))?
                                     .join("data")
                                     .display()
                             ));
@@ -1157,7 +1156,7 @@ impl App {
                         }
                         "adapter" => {
                             lines.push("可维护群聊白名单/黑名单、私聊名单和封禁 QQ。".to_string());
-                            lines.push("聊天策略: MaiBot/config/adapter_policy.toml".to_string());
+                            lines.push("聊天策略: 所选 Bot/config/adapter_policy.toml".to_string());
                             lines.push("发送者黑名单: 统一插件 [filters].ban_user_id".to_string());
                         }
                         _ => {}
@@ -1173,8 +1172,8 @@ impl App {
                 if let Some(card) = selected {
                     lines.push(format!("插件项: {}", card.title));
                     if snapshot.has_config {
-                        let plugins_dir = PathBuf::from(&snapshot.config.mai_path)
-                            .join("MaiBot")
+                        let plugins_dir = self
+                            .bot_dir_at(Path::new(&snapshot.config.mai_path))?
                             .join("plugins");
                         if let Some(dir) =
                             self.find_plugin_dir_by_card_title(&plugins_dir, &card.title)
@@ -1193,8 +1192,7 @@ impl App {
                 if snapshot.has_config {
                     lines.push(format!(
                         "目录: {}",
-                        PathBuf::from(snapshot.config.mai_path)
-                            .join("MaiBot")
+                        self.bot_dir_at(Path::new(&snapshot.config.mai_path))?
                             .join("plugins")
                             .display()
                     ));
@@ -1283,7 +1281,7 @@ impl App {
                         }
                         "access-clear-data" => {
                             actions.push("清理前会弹出确认对话框".to_string());
-                            actions.push("仅保留 MaiBot/data/webui.json".to_string());
+                            actions.push("仅清理所选 Bot 的 data，保留宿主登录信息".to_string());
                         }
                         "adapter" => {
                             actions.push("黑白名单策略编辑会维护群聊与私聊名单".to_string());
@@ -1505,7 +1503,7 @@ impl App {
                                 lines: vec![
                                     format!("状态: {}", card.badge),
                                     card.detail.clone(),
-                                    "会保留 MaiBot/data/webui.json。".to_string(),
+                                    "仅清理所选 Bot 的 data，保留宿主登录信息。".to_string(),
                                     "确认后会删除其余文件和子目录。".to_string(),
                                 ],
                                 actions: vec!["确认清空数据".to_string(), "取消".to_string()],
@@ -1771,7 +1769,7 @@ impl App {
 
     fn manage_plugin_from_dashboard(&self, state: &mut DashboardState) -> Result<()> {
         let cfg = self.require_config()?;
-        let plugins_dir = PathBuf::from(&cfg.mai_path).join("MaiBot").join("plugins");
+        let plugins_dir = self.bot_dir_at(Path::new(&cfg.mai_path))?.join("plugins");
         let cards = self.dashboard_cards(&DashboardTab::Plugins, &state.search_query)?;
         let Some(card) = cards.get(state.selected_for_len(cards.len())) else {
             return Ok(());
@@ -1804,7 +1802,7 @@ impl App {
         action_idx: usize,
     ) -> Result<()> {
         let cfg = self.require_config()?;
-        let plugins_dir = PathBuf::from(&cfg.mai_path).join("MaiBot").join("plugins");
+        let plugins_dir = self.bot_dir_at(Path::new(&cfg.mai_path))?.join("plugins");
         let cards = self.dashboard_cards(&DashboardTab::Plugins, &state.search_query)?;
         let Some(card) = cards.get(state.selected_for_len(cards.len())) else {
             return Ok(());

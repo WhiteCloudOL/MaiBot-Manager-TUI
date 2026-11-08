@@ -64,7 +64,7 @@ impl App {
         let pypi_env = pypi_runtime_env(&pip_index, &pip_host);
         let body = if py_env == "uv" {
             format!(
-                "cd '{}' && {pypi_env}uv run bot.py",
+                "cd '{}' && {pypi_env}uv run --no-sync bot.py",
                 shell_escape(&maibot_dir)
             )
         } else {
@@ -564,7 +564,7 @@ impl App {
 }
 
 /// 运行时的源优先级高于项目配置；UV_NO_CONFIG 会屏蔽 pyproject.toml/uv.toml 的索引。
-fn pypi_runtime_env(pip_index: &str, pip_host: &str) -> String {
+pub(crate) fn pypi_runtime_env(pip_index: &str, pip_host: &str) -> String {
     if pip_index.trim().is_empty() {
         return String::new();
     }

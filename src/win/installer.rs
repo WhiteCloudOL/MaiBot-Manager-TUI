@@ -1,3 +1,4 @@
+use crate::services::pypi_runtime_env;
 use crate::{
     app::App,
     model::*,
@@ -665,16 +666,17 @@ impl App {
             &plan.install_path,
             &repo_url(
                 &github_proxy_or_direct(&plan.github_proxy),
-                "MaiM-with-u/MaiBot",
+                "Mai-with-u/MaiBot",
             ),
             &plan.install_path.join("MaiBot"),
             &plan.maibot_branch,
             plan.git_dirty_mode,
         )?;
+        self.setup_python_env(&plan)?;
+        self.initialize_maibot_workspace(&plan)?;
         if plan.bot_protocols.contains(&BotProtocol::NapCat) {
             self.install_qq_adapter(&plan)?;
         }
-        self.setup_python_env(&plan)?;
         for protocol in &plan.bot_protocols {
             match protocol {
                 BotProtocol::NapCat => self.install_napcat(&plan)?,
@@ -1020,7 +1022,7 @@ impl App {
     }
 
     fn install_qq_adapter(&self, plan: &InstallPlan) -> Result<()> {
-        let plugins_dir = plan.install_path.join("MaiBot").join("plugins");
+        let plugins_dir = self.bot_dir_at(&plan.install_path)?.join("plugins");
         let adapter_dir = self.sync_plugin_repo_with_manifest_dir_at_root(
             &plan.install_path,
             &repo_url(
@@ -1040,21 +1042,14 @@ impl App {
         let maibot_dir = root.join("MaiBot");
         match plan.python_env {
             PythonEnv::Uv => {
-                let index = if plan.uv_index.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        "set UV_INDEX_URL={}\r\nset PIP_INDEX_URL={}\r\n",
-                        plan.uv_index, plan.uv_index
-                    )
-                };
+                let index = pypi_runtime_env(&plan.uv_index, &plan.pip_host);
                 if plan.venv_mode == VenvMode::Recreate && maibot_dir.join(".venv").exists() {
                     self.remove_env_dir_safely(&maibot_dir.join(".venv"), root)?;
                 }
                 self.run_shell(&with_windows_tools_path(
                     root,
                     &format!(
-                        "cd /d {}\r\n{}if not exist .venv uv venv --python 3.14\r\nuv sync",
+                        "cd /d {}\r\n{}if not exist .venv uv venv --python 3.14\r\nuv sync --no-dev",
                         bat_quote(&maibot_dir),
                         index
                     ),
@@ -1071,8 +1066,10 @@ impl App {
                 } else {
                     format!("set PIP_INDEX_URL={}\r\n", plan.pip_index)
                 };
-                self.run_shell(&with_windows_tools_path(root, &format!(
-                    "cd /d {}\r\n\
+                self.run_shell(&with_windows_tools_path(
+                    root,
+                    &format!(
+                        "cd /d {}\r\n\
                      if not exist {} (\r\n\
                      where python >nul 2>nul\r\n\
                      if not errorlevel 1 (\r\n\
@@ -1088,17 +1085,42 @@ impl App {
                      )\r\n\
                      if not exist {} (echo Python 虚拟环境创建失败: {} & exit /b 1)\r\n\
                      {}{} -m pip install --upgrade pip\r\n\
-                     if exist MaiBot\\requirements.txt {} -m pip install -r MaiBot\\requirements.txt",
-                    bat_quote(root),
-                    bat_quote(&python),
-                    bat_quote(&python),
-                    python.display(),
-                    pip_index,
-                    bat_quote(&python),
-                    bat_quote(&python)
-                )))
+                     {} -m pip install -e ./MaiBot",
+                        bat_quote(root),
+                        bat_quote(&python),
+                        bat_quote(&python),
+                        python.display(),
+                        pip_index,
+                        bat_quote(&python),
+                        bat_quote(&python)
+                    ),
+                ))
             }
         }
+    }
+
+    fn initialize_maibot_workspace(&self, plan: &InstallPlan) -> Result<()> {
+        let root = &plan.install_path;
+        self.invalidate_bot_cache();
+        if root.join("MaiBot/host/registry.sqlite3").exists() {
+            crate::workspace::read_bots(&root.join("MaiBot"))?;
+            return Ok(());
+        }
+        let python = if plan.python_env == PythonEnv::Uv {
+            root.join("MaiBot/.venv/Scripts/python.exe")
+        } else {
+            root.join("venv/Scripts/python.exe")
+        };
+        self.run_shell(&with_windows_tools_path(
+            root,
+            &format!(
+                "cd /d {} && {} -m src.cli.tool host list --directory .",
+                bat_quote(&root.join("MaiBot")),
+                bat_quote(&python)
+            ),
+        ))?;
+        self.invalidate_bot_cache();
+        Ok(())
     }
 
     fn remove_env_dir_safely(&self, env_dir: &Path, install_root: &Path) -> Result<()> {

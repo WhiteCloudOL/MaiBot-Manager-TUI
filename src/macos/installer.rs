@@ -1,3 +1,4 @@
+use crate::services::pypi_runtime_env;
 use crate::{
     app::App,
     model::*,
@@ -589,7 +590,7 @@ impl App {
         }
         fs::create_dir_all(&plan.install_path)?;
         self.clone_or_update_repo(
-            &repo_url(&plan.github_proxy, "MaiM-with-u/MaiBot"),
+            &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot"),
             &plan.install_path.join("MaiBot"),
             Some(&plan.maibot_branch),
             plan.install_mode,
@@ -597,6 +598,7 @@ impl App {
             plan.git_dirty_mode,
         )?;
         self.setup_python_env(&plan)?;
+        self.initialize_maibot_workspace(&plan)?;
         self.save_config(&self.plan_to_config(&plan))?;
         println!("macOS 安装 / 更新完成。协议端 NapCat / LLBot 暂未安装。");
         Ok(())
@@ -902,23 +904,11 @@ impl App {
                         self.run_shell(&cmd)?;
                     }
                 }
-                let lock_path = maibot_dir.join("uv.lock");
-                if lock_path.exists() {
-                    fs::remove_file(lock_path)?;
-                }
                 let venv = maibot_dir.join(".venv");
                 if plan.venv_mode == VenvMode::Recreate && venv.exists() {
                     self.remove_env_dir_safely(&venv, root)?;
                 }
-                let index = if plan.uv_index.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        "export UV_INDEX_URL='{}' PIP_INDEX_URL='{}'; ",
-                        shell_escape_raw(&plan.uv_index),
-                        shell_escape_raw(&plan.uv_index)
-                    )
-                };
+                let index = pypi_runtime_env(&plan.uv_index, &plan.pip_host);
                 if !venv.exists() {
                     self.run_shell(&with_macos_tools_path(
                         root,
@@ -931,7 +921,11 @@ impl App {
                 }
                 self.run_shell(&with_macos_tools_path(
                     root,
-                    &format!("cd '{}' && {}uv sync", shell_escape(&maibot_dir), index),
+                    &format!(
+                        "cd '{}' && {}uv sync --no-dev",
+                        shell_escape(&maibot_dir),
+                        index
+                    ),
                 ))?;
             }
             PythonEnv::System => {
@@ -972,13 +966,37 @@ impl App {
                 self.run_shell(&with_macos_tools_path(
                     root,
                     &format!(
-                        "cd '{}' && . venv/bin/activate && {}pip install --upgrade pip && if [ -f MaiBot/requirements.txt ]; then pip install -r MaiBot/requirements.txt; fi",
+                        "cd '{}' && . venv/bin/activate && {}pip install --upgrade pip && pip install -e ./MaiBot",
                         shell_escape(root),
                         pip_prefix
                     ),
                 ))?;
             }
         }
+        Ok(())
+    }
+
+    fn initialize_maibot_workspace(&self, plan: &InstallPlan) -> Result<()> {
+        let root = &plan.install_path;
+        self.invalidate_bot_cache();
+        if root.join("MaiBot/host/registry.sqlite3").exists() {
+            crate::workspace::read_bots(&root.join("MaiBot"))?;
+            return Ok(());
+        }
+        let python = if plan.python_env == PythonEnv::Uv {
+            root.join("MaiBot/.venv/bin/python")
+        } else {
+            root.join("venv/bin/python")
+        };
+        self.run_shell(&with_macos_tools_path(
+            root,
+            &format!(
+                "cd '{}' && '{}' -m src.cli.tool host list --directory .",
+                shell_escape(&root.join("MaiBot")),
+                shell_escape(&python)
+            ),
+        ))?;
+        self.invalidate_bot_cache();
         Ok(())
     }
 

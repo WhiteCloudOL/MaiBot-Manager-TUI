@@ -1,3 +1,4 @@
+use crate::services::pypi_runtime_env;
 use crate::{
     app::App,
     model::*,
@@ -1070,15 +1071,17 @@ impl App {
             self.prepare_docker(&plan)?;
         }
         self.clone_or_update_repo(
-            &repo_url(&plan.github_proxy, "MaiM-with-u/MaiBot"),
+            &repo_url(&plan.github_proxy, "Mai-with-u/MaiBot"),
             &plan.install_path.join("MaiBot"),
             Some(&plan.maibot_branch),
             plan.install_mode,
             true,
             plan.git_dirty_mode,
         )?;
-        let plugins_dir = plan.install_path.join("MaiBot").join("plugins");
+        self.setup_python_env(&plan)?;
+        self.initialize_maibot_workspace(&plan)?;
         if plan.bot_protocols.contains(&BotProtocol::NapCat) {
+            let plugins_dir = self.bot_dir_at(&plan.install_path)?.join("plugins");
             let adapter_dir = self.sync_plugin_repo_with_manifest_dir(
                 &repo_url(
                     &plan.github_proxy,
@@ -1091,7 +1094,6 @@ impl App {
             )?;
             self.finish_qq_adapter_install(&plan, &adapter_dir)?;
         }
-        self.setup_python_env(&plan)?;
         self.save_config(&self.plan_to_config(&plan))?;
         if plan.bot_protocols.contains(&BotProtocol::NapCat) {
             self.install_napcat(&plan)?;
@@ -1378,21 +1380,11 @@ impl App {
                 if !command_exists("uv")? {
                     self.run_shell("curl -LsSf https://astral.sh/uv/install.sh | sh")?;
                 }
-                let lock_path = maibot_dir.join("uv.lock");
-                if lock_path.exists() {
-                    fs::remove_file(lock_path)?;
-                }
                 let venv = maibot_dir.join(".venv");
                 if plan.venv_mode == VenvMode::Recreate && venv.exists() {
                     self.remove_env_dir_safely(&venv, root)?;
                 }
-                let mut prefix = String::new();
-                if !plan.uv_index.is_empty() {
-                    prefix.push_str(&format!(
-                        "export UV_INDEX_URL='{}' PIP_INDEX_URL='{}'; ",
-                        plan.uv_index, plan.uv_index
-                    ));
-                }
+                let prefix = pypi_runtime_env(&plan.uv_index, &plan.pip_host);
                 if !venv.exists() {
                     self.run_shell(&format!(
                         "cd '{}' && {}uv venv --python 3.14",
@@ -1401,7 +1393,7 @@ impl App {
                     ))?;
                 }
                 self.run_shell(&format!(
-                    "cd '{}' && {}uv sync",
+                    "cd '{}' && {}uv sync --no-dev",
                     shell_escape(&maibot_dir),
                     prefix
                 ))?;
@@ -1436,12 +1428,33 @@ impl App {
                     String::new()
                 };
                 self.run_shell(&format!(
-                    "cd '{}' && . venv/bin/activate && {}pip install --upgrade pip && if [ -f MaiBot/requirements.txt ]; then pip install -r MaiBot/requirements.txt; fi",
+                    "cd '{}' && . venv/bin/activate && {}pip install --upgrade pip && pip install -e ./MaiBot",
                     shell_escape(root),
                     pip_prefix
                 ))?;
             }
         }
+        Ok(())
+    }
+
+    fn initialize_maibot_workspace(&self, plan: &InstallPlan) -> Result<()> {
+        let root = &plan.install_path;
+        self.invalidate_bot_cache();
+        if root.join("MaiBot/host/registry.sqlite3").exists() {
+            crate::workspace::read_bots(&root.join("MaiBot"))?;
+            return Ok(());
+        }
+        let python = if plan.python_env == PythonEnv::Uv {
+            root.join("MaiBot/.venv/bin/python")
+        } else {
+            root.join("venv/bin/python")
+        };
+        self.run_shell(&format!(
+            "cd '{}' && '{}' -m src.cli.tool host list --directory .",
+            shell_escape(&root.join("MaiBot")),
+            shell_escape(&python)
+        ))?;
+        self.invalidate_bot_cache();
         Ok(())
     }
 

@@ -17,7 +17,12 @@ pub fn list_plugins(dir: &Path) -> Result<Vec<String>> {
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if path.is_dir() && name != "__pycache__" && name != "data" {
+        if path.is_dir()
+            && !path.is_symlink()
+            && !name.starts_with('.')
+            && !matches!(name.to_ascii_lowercase().as_str(), "__pycache__" | "data")
+            && path.join("_manifest.json").is_file()
+        {
             out.push(name);
         }
     }

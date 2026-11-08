@@ -515,7 +515,10 @@ fn maibot_run_command(
 ) -> String {
     let pypi_env = pypi_runtime_env(pip_index, pip_host);
     if py_env == "uv" {
-        format!("{} {pypi_env}uv run bot.py", macos_tools_prelude(root))
+        format!(
+            "{} {pypi_env}uv run --no-sync bot.py",
+            macos_tools_prelude(root)
+        )
     } else {
         format!(
             "{} {pypi_env}. '{}' && python3 bot.py",
@@ -526,7 +529,7 @@ fn maibot_run_command(
 }
 
 /// 运行时的源优先级高于项目配置；UV_NO_CONFIG 会屏蔽 pyproject.toml/uv.toml 的索引。
-fn pypi_runtime_env(pip_index: &str, pip_host: &str) -> String {
+pub(crate) fn pypi_runtime_env(pip_index: &str, pip_host: &str) -> String {
     if pip_index.trim().is_empty() {
         return String::new();
     }

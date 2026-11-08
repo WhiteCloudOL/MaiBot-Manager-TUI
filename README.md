@@ -428,14 +428,28 @@ maibot snowluma exec                           # 进入已有容器 shell
 
 ### 4. 配置与访问 (Access)
 
+本管理器按 MaiBot **1.4.2** 的宿主工作区管理配置：WebUI 地址位于 `<install>/MaiBot/host/config.toml` 的 `[webui]`，使用 `hosts = ["0.0.0.0", "::"]` 与 `port = 8001`；访问令牌位于同目录的 `webui.json`。访问汇总会读取配置的公开地址及 HTTPS 设置，初始化仅修改监听地址，保留端口与安全设置。
+
+新 Bot 默认位于 `MaiBot/bots/<id>/`。管理器只读宿主注册表来定位 Bot 的配置、插件和数据目录，支持注册在工作区根目录或外部目录的 Bot。单 Bot 自动选择；多 Bot 时，TUI 启动会询问目标，CLI 使用：
+
+```bash
+maibot bots                                    # 查看已登记 Bot 的 ID、名称和目录
+maibot --bot <ID> plugin list                   # 指定插件所属 Bot
+maibot --bot <ID> access adapter show           # 指定黑白名单所属 Bot
+maibot --bot <ID> tui                           # 直接进入该 Bot 的管理界面
+```
+
+`core start/stop/restart` 管理整个宿主及其全部 Bot，`--bot` 用于插件与 Bot 配置操作。安装先同步 Python 依赖，再通过上游命令初始化宿主工作区，最后安装所选 Bot 的适配器；启动使用 `uv run --no-sync bot.py`，插件依赖由宿主管理。
+
+
 ```bash
 maibot access show              # 直接输出配置地址与密钥
 maibot access init              # 绑定 WebUI 到所有 IPv4/IPv6 地址（Linux/Windows 同时启用统一 QQ 适配器，macOS 保留核心配置能力）
 maibot access init --yes        # 跳过交互确认直接应用（适合确信防火墙安全的脚本环境）
-maibot access clear-data        # 清空 MaiBot/data 中除 webui.json 外的所有内容，默认需要确认
+maibot access clear-data        # 清空所选 Bot 的 data，保留 webui.json 与宿主登录信息，默认需要确认
 maibot access clear-data --yes  # 跳过确认直接清理数据文件
 
-# Adapter 黑白名单设置
+# Adapter 黑白名单设置（所选 Bot/config/adapter_policy.toml）
 maibot access adapter show                      # 查看群聊、私聊和封禁 QQ 配置
 maibot access adapter group-mode whitelist      # 设置群聊名单模式：whitelist、blacklist 或 inherit
 maibot access adapter group-add 123456          # 添加群号到群聊列表
@@ -454,10 +468,14 @@ maibot access adapter ban-remove 10001          # 从封禁列表移除 QQ
 
 ```
 
+黑白名单使用 `default_action`、`allow_ids` 和 `deny_ids`；`inherit` 删除当前默认动作并保留例外。WebUI 的停用条目 `disabled_ids` 会保留；显式添加或移除一个号码时恢复该条目，并同步当前策略分组。发送者黑名单使用统一适配器 `[filters].ban_user_id`。
+
 ### 5. 插件管理
 
+插件使用新版 `_manifest.json`，作者读取 `author.name`，目录按插件 ID 中的 `.` 替换为 `_` 命名。目录冲突备份放在 Bot 的 `plugin-backups`，不会被识别成活动插件。
+
 ```bash
-maibot plugin list                             # 列出 MaiBot/plugins 下的插件目录
+maibot plugin list                             # 列出所选 Bot/plugins 下的插件目录
 maibot plugin install username/repo            # 安装/同步插件 (支持完整 URL 或 username/repo，以 _manifest.json 的 id 命名目录)
 maibot plugin update <插件目录名>                # 拉取已安装插件仓库的最新提交
 maibot plugin remove <插件目录名>                # 删除对应插件目录

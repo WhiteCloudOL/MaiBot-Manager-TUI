@@ -27,7 +27,7 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
         "clear-data" => {
             let confirmed = args[1..].iter().any(|arg| arg == "--yes" || arg == "-y")
                 || Confirm::with_theme(&app.theme)
-                    .with_prompt("确认清空 MaiBot/data 中除 webui.json 外的所有内容？")
+                    .with_prompt("确认清空所选 Bot 的 data（保留 webui.json 和宿主登录信息）？")
                     .default(false)
                     .interact()?;
             if !confirmed {
@@ -35,7 +35,7 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
                 return Ok(());
             }
             let removed = app.clear_maibot_data_files()?;
-            println!("已清理 {removed} 个数据条目，保留 webui.json");
+            println!("已清理 {removed} 个数据条目，保留 webui.json 和宿主登录信息");
             Ok(())
         }
         "adapter" => run_adapter(app, &args[1..]),
