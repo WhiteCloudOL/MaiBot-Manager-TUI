@@ -2,7 +2,7 @@
 
 # MaiBot Manager TUI
 
-![MaiBot 1.0.0+](https://img.shields.io/badge/MaiBot-1.0.0+-success.svg)
+![MaiBot 1.4.2](https://img.shields.io/badge/MaiBot-1.4.2-success.svg)
 ![TUI + CLI](https://img.shields.io/badge/Interface-TUI%20%2B%20CLI-blue.svg)
 ![Linux + Windows + macOS](https://img.shields.io/badge/Target-Linux%20%2B%20Windows%20%2B%20macOS-informational.svg)
 ![x86_64 + ARM64](https://img.shields.io/badge/Arch-x86__64%20%2B%20ARM64%20%2B%20Win64%20%2B%20macOS-orange.svg)
@@ -28,6 +28,8 @@
 * **依赖自检**：Linux 自动检测包管理器并补装基础工具；Windows 缺少 Git / uv / Python 时会优先下载便携工具到 MaiBot 安装目录；macOS 缺少 Homebrew 时会调用官方脚本安装，并通过 Homebrew 补齐 Git / uv / Python
 * **配置访问**：集中查看当前平台已支持的 WebUI 地址与密钥；TUI 内使用居中弹窗展示汇总，CLI 直接输出文本；初始化访问配置带二次确认
 * **插件管理**：安装、更新和卸载插件
+
+首次运行 `maibot` 无需提前创建 `~/.maibot_config`，进入「部署与更新」即可开始安装。管理器配置损坏时会报告读取或解析错误，请修复配置后重试。
 
 
 ---
@@ -518,6 +520,12 @@ maibot plugin remove <插件目录名>                # 删除对应插件目录
 ## 第三方许可
 
 本项目自身遵循 [AGPL-3.0](LICENSE)。所管理的 MaiBot、NapCat、LLBot、SnowLuma、QQ 客户端及编译依赖分别遵循各自条款，详见 [第三方许可与使用说明](THIRD_PARTY_NOTICES.md)。
+
+## 本地同步下载站
+
+本机执行 `python scripts/sync_release.py`，即可将最新正式版的四个平台安装包及两个安装脚本同步到已配置的服务器，成功后自动刷新 EdgeOne 对应目录缓存。支持 `--dry-run` 预览和 `--purge-only` 单独刷新目录。
+
+服务器、远端目录、站点与密钥只写入本机环境变量或被 Git 忽略的 `.env.deploy`。配置示例见 [`.env.example`](.env.example)，完整用法见 [同步脚本说明](scripts/README.md)。
 
 ## 🛠️ 维护指南
 

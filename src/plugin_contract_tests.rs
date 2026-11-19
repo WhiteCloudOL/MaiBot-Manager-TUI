@@ -25,7 +25,7 @@ fn plugin_sync_uses_selected_bot_manifest_id_and_preserves_configuration() {
     let f = Fixture::new();
     let first = f.add_bot("one", "bots/one");
     let second = f.add_bot("two", "bots/two");
-    let source = f.0.join("different-repository-name");
+    let source = f.0.join("different-repository's-name");
     fs::create_dir_all(&source).unwrap();
     fs::write(source.join("_manifest.json"), r#"{"manifest_version":2,"id":"example.sample-plugin","name":"Sample","version":"1.0.0","author":{"name":"Author"}}"#).unwrap();
     fs::write(source.join(".gitignore"), "config.toml\n").unwrap();

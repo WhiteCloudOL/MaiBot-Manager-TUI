@@ -31,7 +31,7 @@ struct ReleaseAssetInfo {
 
 impl App {
     pub(crate) fn install_update_flow(&mut self) -> Result<()> {
-        let current = self.load_config().unwrap_or_default();
+        let current = self.load_config_for_setup()?;
         let mut plan = self.build_default_install_plan(&current)?;
         let should_install = self.install_planner(&current, &mut plan)?;
         if should_install {
@@ -930,7 +930,7 @@ impl App {
             self.run_shell(&with_windows_tools_path(
                 root,
                 &format!(
-                    "cd /d {}\r\ngit fetch --all --prune\r\ngit checkout {}\r\ngit pull --ff-only",
+                    "cd /d {} && git fetch --all --prune && git checkout {} && git pull --ff-only",
                     bat_quote(target),
                     bat_arg(branch)
                 ),
@@ -981,7 +981,7 @@ impl App {
             self.run_shell(&with_windows_tools_path(
                 root,
                 &format!(
-                    "cd /d {}\r\ngit reset -- uv.lock\r\ngit checkout -- uv.lock",
+                    "cd /d {} && git reset -- uv.lock && git checkout -- uv.lock",
                     bat_quote(target)
                 ),
             ))?;
@@ -998,7 +998,7 @@ impl App {
             GitDirtyMode::Discard => self.run_shell(&with_windows_tools_path(
                 root,
                 &format!(
-                    "cd /d {}\r\ngit reset --hard HEAD\r\ngit clean -fd",
+                    "cd /d {} && git reset --hard HEAD && git clean -fd",
                     bat_quote(target)
                 ),
             )),
@@ -1049,7 +1049,7 @@ impl App {
                 self.run_shell(&with_windows_tools_path(
                     root,
                     &format!(
-                        "cd /d {}\r\n{}if not exist .venv uv venv --python 3.14\r\nuv sync --no-dev",
+                        "cd /d {} || exit /b 1\r\n{}if not exist .venv (uv venv --python 3.14 || exit /b 1)\r\nuv sync --no-dev",
                         bat_quote(&maibot_dir),
                         index
                     ),
@@ -1069,22 +1069,22 @@ impl App {
                 self.run_shell(&with_windows_tools_path(
                     root,
                     &format!(
-                        "cd /d {}\r\n\
+                        "cd /d {} || exit /b 1\r\n\
                      if not exist {} (\r\n\
                      where python >nul 2>nul\r\n\
                      if not errorlevel 1 (\r\n\
-                     python -m venv venv\r\n\
+                     python -m venv venv || exit /b 1\r\n\
                      ) else (\r\n\
                      where py >nul 2>nul\r\n\
                      if not errorlevel 1 (\r\n\
-                     py -3 -m venv venv\r\n\
+                     py -3 -m venv venv || exit /b 1\r\n\
                      ) else (\r\n\
-                     uv venv --python 3.14 venv\r\n\
+                     uv venv --seed --python 3.14 venv || exit /b 1\r\n\
                      )\r\n\
                      )\r\n\
                      )\r\n\
                      if not exist {} (echo Python 虚拟环境创建失败: {} & exit /b 1)\r\n\
-                     {}{} -m pip install --upgrade pip\r\n\
+                     {}{} -m pip install --upgrade pip || exit /b 1\r\n\
                      {} -m pip install -e ./MaiBot",
                         bat_quote(root),
                         bat_quote(&python),
@@ -1408,5 +1408,64 @@ fn accelerate_github_url(url: &str, proxy: &str) -> String {
         url.to_string()
     } else {
         format!("{}/{}", proxy.trim_end_matches('/'), url)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::tests::Fixture;
+
+    #[test]
+    fn failed_branch_checkout_does_not_report_a_successful_update() {
+        let fixture = Fixture::new();
+        let source = fixture.0.join("source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("file"), "tracked").unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec!["add", "."],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--no-gpg-sign",
+                "-m",
+                "fixture",
+            ],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&source)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let app = App::new().unwrap();
+        let target = fixture.0.join("target");
+        app.clone_or_update_repo(
+            &fixture.0,
+            source.to_str().unwrap(),
+            &target,
+            "main",
+            GitDirtyMode::Cancel,
+        )
+        .unwrap();
+        assert!(
+            app.clone_or_update_repo(
+                &fixture.0,
+                source.to_str().unwrap(),
+                &target,
+                "missing-branch",
+                GitDirtyMode::Cancel
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read_to_string(target.join("file")).unwrap(), "tracked");
     }
 }

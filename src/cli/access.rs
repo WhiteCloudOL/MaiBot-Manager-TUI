@@ -6,12 +6,13 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str).unwrap_or("help") {
         "show" => app.print_access_info(),
         "init" => {
+            let yes = confirmation_flag(&args[1..])?;
             let prompt = if cfg!(target_os = "macos") {
                 "确认将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址？"
             } else {
                 "确认将 MaiBot WebUI 绑定到所有 IPv4/IPv6 地址并启用统一 QQ 适配器？"
             };
-            let confirmed = args[1..].iter().any(|arg| arg == "--yes" || arg == "-y")
+            let confirmed = yes
                 || Confirm::with_theme(&app.theme)
                     .with_prompt(prompt)
                     .default(false)
@@ -25,7 +26,8 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
             Ok(())
         }
         "clear-data" => {
-            let confirmed = args[1..].iter().any(|arg| arg == "--yes" || arg == "-y")
+            let yes = confirmation_flag(&args[1..])?;
+            let confirmed = yes
                 || Confirm::with_theme(&app.theme)
                     .with_prompt("确认清空所选 Bot 的 data（保留 webui.json 和宿主登录信息）？")
                     .default(false)
@@ -45,6 +47,15 @@ pub(super) fn run(app: &App, args: &[String]) -> Result<()> {
         }
         other => bail!("未知 access 命令: {other}"),
     }
+}
+
+fn confirmation_flag(args: &[String]) -> Result<bool> {
+    for argument in args {
+        if !matches!(argument.as_str(), "--yes" | "-y") {
+            bail!("未知参数: {argument}（确认选项为 --yes / -y）");
+        }
+    }
+    Ok(!args.is_empty())
 }
 
 fn run_adapter(app: &App, args: &[String]) -> Result<()> {
@@ -103,4 +114,28 @@ fn run_adapter(app: &App, args: &[String]) -> Result<()> {
 fn update(app: &App, args: &[String], key: &str, add: bool, rule: Option<usize>) -> Result<()> {
     let number = crate::cli::require_arg(args, 1, "<号码>")?;
     app.update_adapter_numeric_list(key, number, add, rule)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn access_actions_reject_unknown_flags_before_confirmation_or_writes() {
+        let app = App::new().unwrap();
+        for command in ["init", "clear-data"] {
+            for flags in [vec!["--yess"], vec!["--yes", "unexpected-bot"]] {
+                let args = std::iter::once(command)
+                    .chain(flags)
+                    .map(String::from)
+                    .collect::<Vec<_>>();
+                assert!(
+                    run(&app, &args)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("未知参数")
+                );
+            }
+        }
+    }
 }

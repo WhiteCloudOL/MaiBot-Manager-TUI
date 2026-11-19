@@ -201,7 +201,7 @@ impl App {
 
 impl App {
     pub(crate) fn install_update_flow(&mut self) -> Result<()> {
-        let current = self.load_config().unwrap_or_default();
+        let current = self.load_config_for_setup()?;
         let mut plan = self.build_default_install_plan(&current)?;
         let should_install = self.install_planner(&current, &mut plan)?;
         if should_install {
@@ -1172,9 +1172,9 @@ impl App {
                 let cmd = format!(
                     "cd '{}' && git fetch --depth 1 '{}' '{}' && git checkout -fB '{}' FETCH_HEAD && git reset --hard FETCH_HEAD",
                     shell_escape(target),
-                    url,
-                    branch,
-                    branch
+                    shell_escape_raw(url),
+                    shell_escape_raw(branch),
+                    shell_escape_raw(branch)
                 );
                 return self.run_shell(&cmd);
             }
@@ -1188,7 +1188,7 @@ impl App {
         let cmd = format!(
             "git clone --depth 1 {}'{}' '{}'",
             branch_part,
-            url,
+            shell_escape_raw(url),
             shell_escape(target)
         );
         self.run_shell(&cmd)

@@ -1,5 +1,6 @@
 //! Shared WebUI settings in MaiBot 1.4.2's host/config.toml.
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
+use std::{fs, io::ErrorKind, path::Path};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -124,11 +125,105 @@ fn set_table_value(doc: &mut DocumentMut, section: &str, key: &str, item: Item) 
     Ok(())
 }
 
+pub(crate) fn apply_access_configs(host: &Path, adapter: Option<&Path>) -> Result<()> {
+    write_access_configs(host, adapter, crate::config::atomic_write)
+}
+
+fn write_access_configs(
+    host: &Path,
+    adapter: Option<&Path>,
+    mut writer: impl FnMut(&Path, &[u8]) -> Result<()>,
+) -> Result<()> {
+    let original_host =
+        fs::read(host).with_context(|| format!("读取宿主配置失败: {}", host.display()))?;
+    let mut host_doc: DocumentMut = std::str::from_utf8(&original_host)?.parse()?;
+    bind_webui_all_interfaces(&mut host_doc)?;
+    webui_binding(&host_doc)?;
+    // Parse and validate both files before changing either one. Bind the public
+    // listener last, and restore the plugin configuration if that write fails.
+    let adapter_update = if let Some(path) = adapter {
+        let original = match fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("读取适配器配置失败"),
+        };
+        let mut document = match original.as_deref() {
+            Some(bytes) => std::str::from_utf8(bytes)?.parse::<DocumentMut>()?,
+            None => DocumentMut::new(),
+        };
+        enable_plugin(&mut document)?;
+        Some((path, original, document.to_string()))
+    } else {
+        None
+    };
+    if let Some((path, _, document)) = &adapter_update {
+        writer(path, document.as_bytes())?;
+    }
+    if let Err(error) = writer(host, host_doc.to_string().as_bytes()) {
+        if let Some((path, original, _)) = adapter_update {
+            let rollback = if let Some(bytes) = original {
+                writer(path, &bytes)
+            } else {
+                fs::remove_file(path).map_err(Into::into)
+            };
+            rollback.with_context(|| {
+                format!("写入宿主配置失败，且适配器配置回滚失败；原始错误: {error:#}")
+            })?;
+        }
+        return Err(error).context("更新宿主监听配置失败");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{app::App, model::AppConfig, workspace::tests::Fixture};
     use std::fs;
+
+    #[test]
+    fn malformed_adapter_cannot_change_the_host_listener() {
+        let fixture = Fixture::new();
+        let host = fixture.0.join("host.toml");
+        let adapter = fixture.0.join("adapter.toml");
+        fs::write(&host, "[webui]\nhosts = [\"127.0.0.1\"]\nport = 8123\n").unwrap();
+        fs::write(&adapter, "[plugin\n").unwrap();
+        let before = fs::read(&host).unwrap();
+        assert!(apply_access_configs(&host, Some(&adapter)).is_err());
+        assert_eq!(fs::read(&host).unwrap(), before);
+        assert_eq!(fs::read_to_string(&adapter).unwrap(), "[plugin\n");
+    }
+
+    #[test]
+    fn host_write_failure_restores_the_original_adapter_configuration() {
+        let fixture = Fixture::new();
+        let host = fixture.0.join("host.toml");
+        let adapter = fixture.0.join("adapter.toml");
+        let original = "[plugin]\nenabled = false\n[client]\nport = 3123\n";
+        fs::write(&host, "[webui]\nhosts = [\"127.0.0.1\"]\n").unwrap();
+        fs::write(&adapter, original).unwrap();
+        assert!(
+            write_access_configs(&host, Some(&adapter), |path, bytes| {
+                if path == host {
+                    anyhow::bail!("simulated write failure");
+                }
+                crate::config::atomic_write(path, bytes)
+            })
+            .is_err()
+        );
+        assert_eq!(fs::read_to_string(&adapter).unwrap(), original);
+        fs::remove_file(&adapter).unwrap();
+        assert!(
+            write_access_configs(&host, Some(&adapter), |path, bytes| {
+                if path == host {
+                    anyhow::bail!("simulated write failure");
+                }
+                crate::config::atomic_write(path, bytes)
+            })
+            .is_err()
+        );
+        assert!(!adapter.exists());
+    }
 
     #[test]
     fn host_schema_defaults_ipv6_tls_and_public_address() {

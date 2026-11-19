@@ -167,7 +167,7 @@ impl App {
         if self.workspace.borrow().bot_id.is_some() {
             return Ok(());
         }
-        let cfg = self.load_config()?;
+        let cfg = self.load_config_for_setup()?;
         if cfg.mai_path.is_empty() {
             return Ok(());
         }

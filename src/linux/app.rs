@@ -167,7 +167,7 @@ impl App {
     pub(crate) fn run(&mut self) -> Result<()> {
         let mut dashboard = DashboardState::default();
         dashboard.focus = DashboardFocus::Sidebar;
-        let current = self.load_config().unwrap_or_default();
+        let current = self.load_config_for_setup()?;
         dashboard.deploy_plan = Some(self.build_default_install_plan(&current)?);
 
         loop {
@@ -196,7 +196,7 @@ impl App {
                         }
                     }
                     DashboardEvent::CommitDeployChoice { field, choice_idx } => {
-                        let current = self.load_config().unwrap_or_default();
+                        let current = self.load_config_for_setup()?;
                         let mut plan = dashboard.deploy_plan.take().unwrap_or_else(|| {
                             self.build_default_install_plan(&current)
                                 .unwrap_or_else(|_| self.build_recommended_defaults())
@@ -216,7 +216,7 @@ impl App {
                         let plan = if let Some(plan) = dashboard.deploy_plan.as_ref() {
                             plan.clone()
                         } else {
-                            let current = self.load_config().unwrap_or_default();
+                            let current = self.load_config_for_setup()?;
                             self.build_default_install_plan(&current)?
                         };
                         self.handle_menu_result(self.run_install(&plan))?;
@@ -256,7 +256,7 @@ impl App {
                 let plan = if let Some(plan) = state.deploy_plan.as_ref() {
                     plan.clone()
                 } else {
-                    let current = self.load_config().unwrap_or_default();
+                    let current = self.load_config_for_setup()?;
                     self.build_default_install_plan(&current)?
                 };
                 filter_cards(self.deploy_cards_from_plan(&plan), &state.search_query)
@@ -581,7 +581,7 @@ impl App {
     }
 
     fn deploy_cards(&self) -> Result<Vec<DashboardCard>> {
-        let current = self.load_config().unwrap_or_default();
+        let current = self.load_config_for_setup()?;
         let plan = self.build_default_install_plan(&current)?;
         Ok(self.deploy_cards_from_plan(&plan))
     }

@@ -17,7 +17,7 @@ pub(super) fn run(app: &mut App, args: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    let current = app.load_config().unwrap_or_default();
+    let current = app.load_config_for_setup()?;
     let mut plan = app.build_default_install_plan(&current)?;
     parse_options(&mut plan, &args[1..])?;
     app.print_header(Some(&plan));

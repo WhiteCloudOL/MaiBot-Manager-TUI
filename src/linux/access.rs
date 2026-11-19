@@ -1,11 +1,11 @@
 use crate::{
-    access_config::{bind_webui_all_interfaces, enable_plugin, webui_binding},
+    access_config::{apply_access_configs, webui_binding},
     app::App,
     data,
     model::DashboardPopup,
     ui::ActionItem,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use dialoguer::Confirm;
 
 use dialoguer::console::style;
@@ -265,24 +265,12 @@ impl App {
     }
 
     pub(crate) fn apply_maibot_access_config(&self) -> Result<()> {
-        let adapter_dir = self.qq_adapter_dir()?;
         let cfg = self.require_config()?;
-        let root = PathBuf::from(cfg.mai_path);
-        let host_cfg = root.join("MaiBot/host/config.toml");
-        let mut doc: DocumentMut = fs::read_to_string(&host_cfg)?.parse()?;
-        bind_webui_all_interfaces(&mut doc)
-            .with_context(|| format!("更新 WebUI 监听配置失败: {}", host_cfg.display()))?;
-        fs::write(&host_cfg, doc.to_string())?;
-        if let Some(adapter_dir) = adapter_dir {
-            let adapter_cfg = adapter_dir.join("config.toml");
-            if adapter_cfg.exists() {
-                let mut doc: DocumentMut = fs::read_to_string(&adapter_cfg)?.parse()?;
-                enable_plugin(&mut doc)
-                    .with_context(|| format!("启用适配器失败: {}", adapter_cfg.display()))?;
-                fs::write(&adapter_cfg, doc.to_string())?;
-            }
-        }
-        Ok(())
+        let host = PathBuf::from(cfg.mai_path).join("MaiBot/host/config.toml");
+        let adapter = self
+            .qq_adapter_dir()?
+            .map(|directory| directory.join("config.toml"));
+        apply_access_configs(&host, adapter.as_deref())
     }
 
     pub(crate) fn confirm_clear_maibot_data_files(&self) -> Result<()> {

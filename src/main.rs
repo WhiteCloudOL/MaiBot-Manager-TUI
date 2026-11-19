@@ -2,10 +2,12 @@
 
 mod access_config;
 mod cli;
+mod config;
 mod data;
 mod model;
 #[cfg(test)]
 mod plugin_contract_tests;
+mod plugin_paths;
 mod plugin_status;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod qq_adapter;

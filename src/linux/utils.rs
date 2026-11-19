@@ -31,8 +31,9 @@ pub fn list_plugins(dir: &Path) -> Result<Vec<String>> {
 }
 
 /// Maps a plugin manifest id to the directory name required by MaiBot.
-pub fn plugin_dir_name(plugin_id: &str) -> String {
-    plugin_id.replace('.', "_")
+pub fn plugin_dir_name(plugin_id: &str) -> Result<String> {
+    crate::plugin_paths::validate_plugin_id(plugin_id)?;
+    Ok(plugin_id.replace('.', "_"))
 }
 
 pub fn normalize_path(input: &str) -> Result<PathBuf> {

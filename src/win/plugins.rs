@@ -1,3 +1,4 @@
+use crate::plugin_paths::{plugin_child, validate_plugin_id};
 use crate::{
     app::App,
     model::InstallMode,
@@ -39,17 +40,24 @@ impl App {
 
     pub(crate) fn plugin_id_from_dir(&self, dir: &Path) -> Result<String> {
         let manifest_path = dir.join("_manifest.json");
+        if manifest_path.is_symlink() {
+            bail!("插件清单不能是符号链接");
+        }
         let manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)
             .with_context(|| format!("解析插件清单失败: {}", manifest_path.display()))?;
-        manifest["id"]
+        let id = manifest["id"]
             .as_str()
-            .map(str::to_string)
-            .filter(|id| !id.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("插件清单缺少有效 id: {}", manifest_path.display()))
+            .map(str::trim)
+            .ok_or_else(|| anyhow::anyhow!("插件清单缺少有效 id"))?;
+        validate_plugin_id(id)?;
+        Ok(id.to_string())
     }
 
     pub(crate) fn read_plugin_summary(&self, dir: &Path) -> Result<PluginSummary> {
         let manifest_path = dir.join("_manifest.json");
+        if manifest_path.is_symlink() {
+            bail!("插件清单不能是符号链接");
+        }
         let manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)
             .with_context(|| format!("解析插件清单失败: {}", manifest_path.display()))?;
         let id = manifest["id"]
@@ -97,29 +105,21 @@ impl App {
         plugins_dir: &Path,
         plugin_id: &str,
     ) -> Result<Option<PathBuf>> {
-        let preferred = plugins_dir.join(plugin_dir_name(plugin_id));
+        validate_plugin_id(plugin_id)?;
+        let preferred = plugin_child(plugins_dir, &plugin_dir_name(plugin_id)?)?;
         if preferred.exists() {
+            if self.plugin_id_from_dir(&preferred)? != plugin_id {
+                bail!("目标目录中的插件 id 与所选插件不符");
+            }
             return Ok(Some(preferred));
         }
-        if !plugins_dir.exists() {
-            return Ok(None);
-        }
-        for entry in fs::read_dir(plugins_dir)? {
-            let path = entry?.path();
-            if path.is_dir() && self.plugin_id_from_dir(&path).ok().as_deref() == Some(plugin_id) {
+        for name in list_plugins(plugins_dir)? {
+            let path = plugin_child(plugins_dir, &name)?;
+            if self.plugin_id_from_dir(&path).ok().as_deref() == Some(plugin_id) {
                 return Ok(Some(path));
             }
         }
         Ok(None)
-    }
-
-    pub(crate) fn require_plugin_dir_by_id(
-        &self,
-        plugins_dir: &Path,
-        plugin_id: &str,
-    ) -> Result<PathBuf> {
-        self.resolve_plugin_dir_by_id(plugins_dir, plugin_id)?
-            .ok_or_else(|| anyhow::anyhow!("未找到插件目录: {plugin_id}"))
     }
 
     fn clone_or_update_plugin(&self, root: &Path, url: &str, target: &Path) -> Result<()> {
@@ -182,12 +182,13 @@ impl App {
         _mode: InstallMode,
     ) -> Result<PathBuf> {
         fs::create_dir_all(plugins_dir)?;
-        let repo_path = plugins_dir.join(repo_name);
+        let repo_path = plugin_child(plugins_dir, repo_name)?;
         let mut target = repo_path.clone();
 
         if repo_path.exists() {
             let plugin_id = self.plugin_id_from_dir(&repo_path)?;
-            let canonical = plugins_dir.join(plugin_dir_name(&plugin_id));
+            let canonical = plugin_child(plugins_dir, &plugin_dir_name(&plugin_id)?)?;
+            self.verify_plugin_destination(&canonical, &plugin_id)?;
             if canonical != repo_path {
                 if canonical.exists() {
                     self.move_plugin_dir_to_backup(&repo_path)?;
@@ -208,12 +209,14 @@ impl App {
         let target_existed_before = target.exists();
         self.clone_or_update_plugin(root, url, &target)?;
         let plugin_id = self.plugin_id_from_dir(&target)?;
-        let canonical = plugins_dir.join(plugin_dir_name(&plugin_id));
+        let canonical = plugin_child(plugins_dir, &plugin_dir_name(&plugin_id)?)?;
+        self.verify_plugin_destination(&canonical, &plugin_id)?;
         if canonical == target {
             return Ok(canonical);
         }
 
-        let legacy_canonical = plugins_dir.join(&plugin_id);
+        let legacy_canonical = plugin_child(plugins_dir, &plugin_id)?;
+        self.verify_plugin_destination(&legacy_canonical, &plugin_id)?;
         if legacy_canonical != canonical && legacy_canonical != target && legacy_canonical.exists()
         {
             if target_existed_before {
@@ -295,16 +298,7 @@ impl App {
 
     pub(crate) fn update_plugin(&self, name: &str) -> Result<()> {
         let (root, _, plugins_dir, _) = self.plugin_context()?;
-        let path = self
-            .require_plugin_dir_by_id(&plugins_dir, name)
-            .or_else(|_| {
-                let path = plugins_dir.join(name);
-                if path.exists() {
-                    Ok(path)
-                } else {
-                    bail!("插件目录不存在: {name}")
-                }
-            })?;
+        let path = self.plugin_action_path(&plugins_dir, name)?;
         if !path.join(".git").exists() {
             bail!("插件不是 Git 仓库，无法自动更新: {}", path.display());
         }
@@ -315,10 +309,7 @@ impl App {
 
     pub(crate) fn remove_plugin(&self, name: &str) -> Result<()> {
         let (_, _, plugins_dir, _) = self.plugin_context()?;
-        let path = plugins_dir.join(name);
-        if !path.exists() {
-            bail!("插件目录不存在: {name}");
-        }
+        let path = self.plugin_action_path(&plugins_dir, name)?;
         fs::remove_dir_all(path)?;
         Ok(())
     }
